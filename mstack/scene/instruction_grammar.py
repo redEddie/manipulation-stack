@@ -1,0 +1,995 @@
+"""통일 instruction 문법 — scene 에서 생성·검증.
+
+정본 규격 (2026-08-24 사용자 확정):
+
+    Pick-and-place:
+        pick up the {OBJECT} [QUALIFIER] and place it {RELATION} the {TARGET}
+        RELATION 은 목적지 모양으로 정해진다 (2026-09-07 사용자 확정):
+            오목한 그릇 (small_bowl, bowl, large_bowl) -> inside
+            평평한 것 (tray; 나중에 plate 도 여기)          -> on
+            drawer                                        -> on top of
+        그릇은 오목한 안쪽 공간으로 물체가 들어가므로 목적지가
+        그릇이면 언제나 inside 다. on 은 "림에 걸친다" 는 모호함을
+        주므로 평평한 면에만 쓴다 (수집 사진으로 확인: 같은 크기 그릇
+        두 개도 포개져서 위 그릇이 아래 그릇 안으로 완전히 들어간다).
+    Drag (들지 않고 끌기):
+        drag the {OBJECT} [QUALIFIER] next to the {TARGET}
+    Drawer:
+        open the top drawer / close the top drawer
+    QUALIFIER (동일 외형이 여럿일 때만, OBJECT 바로 뒤):
+        farthest from the {REFERENCE} | closest to the {REFERENCE}
+        | to the left of the {REFERENCE} | to the right of the {REFERENCE}
+
+- 넣기는 **inside** 로 통일한다 — 'place it in the ...' 는 오류로 안내.
+- 지칭은 "the {색} {명사}" (색 어순은 small bowl 앞뒤 모두 허용). 명사는
+  NOUN_MAP 이 정본이고, 문법에 없는 category 는 매핑 추가가 필수다.
+- QUALIFIER 가 붙으면 그 (색, 종류)가 scene 에 여러 개여도 된다 — 그게
+  qualifier 의 존재 이유다. 없으면 유일해야 한다.
+
+lint 는 기존 계획 파일의 "bowl" 약칭도 받아들여 하위호환을 유지한다.
+2026-08-31 의 15cm 'bowl' category 신설 이후 "the {색} bowl" 은 인벤토리로
+해소한다: 그 색이 bowl category 소품의 색이면 bowl, 아니면 legacy 대로
+large_bowl (selftest 가 두 category 의 색 겹침을 금지해 모호성을 차단한다).
+커트러리는 2026-08-31 부터 색 없는 단일 번들("the cutlery")로 지칭한다 --
+색 지칭("the pink cutlery")은 옛 계획/데이터 하위호환으로 lint 만 받는다.
+
+커트러리 전용 동사 (2026-08-31 사용자 확정):
+    Tidy (여러 낱개를 반복 운반해 정리):
+        tidy the cutlery into the {TARGET}   TARGET ∈ 그릇들 | wooden tray | drawer
+
+집합 지칭 동사 (2026-08-31 사용자 확정):
+    Stack (같은 것 여러 개를 포개기):
+        stack all the {색} {복수명사}        (같은 (색, category) 2개 이상일 때만)
+동일 외형이 여럿이면 개별 지칭("the pink striped bowl")은 모호하지만, 집합
+전체를 부르는 문장은 모호하지 않다 -- 그래서 똑같은 그릇 2개는 예비품으로
+빼둘 것이 아니라 stack 과제의 재료가 된다. QUALIFIER 로 하나를 콕 집는
+문법과 상호 보완이다 (저건 '어느 하나', 이건 '전부').
+더미(pile)를 옮기는 동작은 단일 픽앤플레이스와 운동 구조가 달라서, 같은
+"pick up" 동사·스킬로 두면 학습 시 작업 구분이 안 된다. 그래서 커트러리는
+pick/drag 문장에서 빠지고(tidy 만 생성) 스킬도 tidy-into 로 따로 집계된다.
+기존 수집분의 "pick up the {색} cutlery ..." 는 lint 하위호환으로만 남는다.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from functools import lru_cache
+from typing import Optional
+
+from mstack.scene.props import Prop
+from mstack.scene.scene_format import SceneMetadata
+
+
+@lru_cache(maxsize=1)
+def _known_colors() -> frozenset:
+    """인벤토리(configs/scenes/props.yaml)의 색 집합 -- 색 토큰 검증용.
+
+    md 없이 부르는 계획 파일 lint 모드에서도 "the zzz qqq cup" 같은 임의
+    문자열이 색으로 통과하지 않게 하고, "the small bowl" 이 색="small" 인
+    large_bowl 로 오분류되는 것도 막는다 (small 은 색이 아니다)."""
+    from mstack.scene.props import props_by_id
+    return frozenset(p.color for p in props_by_id().values())
+
+
+#: 색인지 사물인지 애매한 색 이름은 "-colored" 를 붙여 쓴다 (2026-09-07
+#: 사용자 확정): pistachio 는 견과·모양으로도 읽히므로 정본 지칭은
+#: "the large pistachio-colored bowl" 이다. blue 같은 기본 색에는 붙이지
+#: 않는다.
+_COLORED_SUFFIX = {"pistachio"}
+
+
+def _color_word(color: str) -> str:
+    """문장에 넣는 색 단어 -- 모호한 이름에는 -colored 를 붙인다."""
+    return f"{color}-colored" if color in _COLORED_SUFFIX else color
+
+
+def _color_token(raw: str) -> Optional[str]:
+    """지칭 구의 색 문자열을 인벤토리 색으로 정규화한다.
+
+    _COLORED_SUFFIX 의 색은 "-colored" 형태만 인정한다 -- "pistachio" 단독은
+    모양인지 색인지 애매해서 새 문장을 lint 가 받지 않게 한다.
+    """
+    if raw in _known_colors() and raw not in _COLORED_SUFFIX:
+        return raw
+    suffix = "-colored"
+    if raw.endswith(suffix):
+        base = raw[: -len(suffix)]
+        if base in _COLORED_SUFFIX and base in _known_colors():
+            return base
+    return None
+
+# category -> 사람 문법의 명사구. 새 category 는 여기 추가 후 사용.
+NOUN_MAP = {
+    "cup": "cup",
+    "small_bowl": "small bowl",
+    # 크기 3단계 (2026-08-31 사용자 확정): small_bowl 12cm / bowl 15cm /
+    # large_bowl 20.5cm. 이 범위 밖은 기능성 그릇으로 별도 category 를 만든다.
+    "bowl": "bowl",
+    "large_bowl": "large bowl",
+    "drawer": "drawer",
+    # 커트러리 (2026-08-31 사용자 확정): 낱개 18종을 은퇴시키고 혼색 번들
+    # 하나로 등록, drawer/tray 처럼 색 없이 "the cutlery" 로 지칭한다.
+    # (2026-08-27 의 색 지칭 방식은 옛 계획/데이터 하위호환으로 lint 만 받는다.)
+    "cutlery": "cutlery",
+    # 'wooden tray' (2026-08-27 사용자 결정): 재질 수식이 시각 grounding 에
+    # 유리하고, tray 수집분이 아직 없어 일관성 부채도 없다. lint 는 짧은
+    # 'the tray' 도 계속 받는다 (_TRAY_PHRASES).
+    "tray": "wooden tray",
+}
+
+# 문법상 "the top drawer" 도 drawer 를 지칭
+_DRAWER_PHRASES = {"drawer", "top drawer"}
+# "the tray" / "the wooden tray" 모두 트레이 지칭
+_TRAY_PHRASES = {"tray", "wooden tray"}
+# "the cutlery" / "the plastic cutlery" 모두 커트러리 번들 지칭
+_CUTLERY_PHRASES = {"cutlery", "plastic cutlery"}
+
+# 색 없이 지칭하는 category ('the drawer', 'the tray', 'the cutlery').
+# drawer/tray 는 단일 개체라서, cutlery 는 어질러진 더미 전체가 한 대상이라서.
+_NO_COLOR_CATS = {"drawer", "tray", "cutlery"}
+
+# 들어 옮길 수 있는 것 (pick up 대상). bowl(15cm)은 림 파지 가능
+# (2026-08-31 실기 확인). cutlery 는 더미라 pick/drag 가 아니라 tidy 동사
+# 전용 (2026-08-31 사용자 확정 -- 모듈 docstring 참고).
+_PICKABLE = {"cup", "small_bowl", "bowl"}
+#: 추천기(scene_diversity)가 쓰는 공개 이름 -- "씬에 최소 한 종류" 제약의 정본.
+PICKABLE_CATS = _PICKABLE
+# 끌 수 있는 것 (drag 대상 -- 들지 않으므로 큰 그릇도 가능)
+_DRAGGABLE = {"cup", "small_bowl", "bowl", "large_bowl"}
+# inside 목적지 (오목한 그릇)
+_BOWL_CATS = {"small_bowl", "bowl", "large_bowl"}
+# 'on' 목적지 = 평평한 것 (트레이) 뿐이다. 그릇은 오목해서 물체가 림에
+# 걸치지 않고 안으로 들어가므로 목적지가 그릇이면 언제나 inside 다
+# (2026-09-07 사용자 확정). 나중에 plate(접시) category 가 인벤토리에
+# 들어오면 tray 와 같은 취급으로 여기에 추가하면 된다.
+_ON_CATS = {"tray"}
+# drawer 안('inside the drawer')에 넣을 수 있는 것 -- 커트러리만. tidy 전환
+# 이후 새 문장은 안 만들지만, 기존 수집분의 "pick up the {색} cutlery and
+# place it inside the drawer" 를 lint 가 계속 받기 위한 하위호환 집합.
+# (컵/그릇은 서랍 높이에 안 들어간다; 2026-08-27 사용자 확정 범위)
+_DRAWER_INSIDE_OBJS = {"cutlery"}
+# next to 목적지 (탁상 위 아무 물체). 어질러진 커트러리 더미는 위치 기준이
+# 못 되므로 제외.
+_BESIDE_CATS = {"cup", "small_bowl", "bowl", "large_bowl", "tray"}
+# tidy 목적지 (담을 수 있는 것): 그릇들 + 트레이 + 서랍
+_TIDY_TARGETS = _BOWL_CATS | {"tray", "drawer"}
+# 포갤 수 있는 것 (stack 대상) -- 컵·그릇은 서로 겹쳐 쌓인다. 커트러리(더미),
+# 트레이·서랍(고정물)은 제외.
+_STACKABLE = _BOWL_CATS | {"cup"}
+#: 추천기가 "같은 색 2개를 넣어도 되는 category" 판단에 쓰는 공개 이름.
+STACKABLE_CATS = _STACKABLE
+
+# 집합 지칭용 복수 명사구. stack 문장은 개별 지칭이 아니라 이걸 쓴다.
+PLURAL_MAP = {
+    "cup": "cups",
+    "small_bowl": "small bowls",
+    "bowl": "bowls",
+    "large_bowl": "large bowls",
+}
+# 파싱은 긴 것부터 -- "small bowls" 가 "bowls" 에 잡아먹히지 않게.
+_PLURAL_ORDER = sorted(PLURAL_MAP.items(), key=lambda kv: -len(kv[1]))
+
+# QUALIFIER 문구 (OBJECT 바로 뒤, 필요할 때만)
+_QUALIFIERS = ("farthest from", "closest to", "to the left of", "to the right of")
+_QUAL_RE = "|".join(re.escape(q) for q in _QUALIFIERS)
+
+# lint 용 object phrase 파싱 패턴. 앞쪽에 색/부가 수식이 올 수 있다.
+_PARSE_PATTERNS = [
+    # small bowl 의 두 어순. "the small {색} bowl" 이 정본이다 (영어의
+    # 형용사 순서에서 크기가 색보다 앞). 뒤집힌 쪽은 옛 수집분용이다.
+    (re.compile(r"^the\s+small\s+(.+?)\s+bowl$"), "small_bowl"),
+    (re.compile(r"^the\s+(.+?)\s+small\s+bowl$"), "small_bowl"),
+    # large bowl -- 두 어순. "the large {색} bowl" 이 정본이고(크기가 색보다
+    # 앞), "the {색} large bowl" 은 2026-09-07 이전 수집분 때문에 남긴다.
+    (re.compile(r"^the\s+large\s+(.+?)\s+bowl$"), "large_bowl"),
+    (re.compile(r"^the\s+(.+?)\s+large\s+bowl$"), "large_bowl"),
+    # "the {색} bowl": bowl(15cm) 소품의 색으로만 해소한다. large_bowl 약칭은
+    # 폐지 (2026-09-07 사용자 확정) -- large 그릇은 지칭에 반드시 크기
+    # ("large")를 넣는다. 에피소드에 약칭으로 기록된 것이 0건이라 읽기
+    # 하위호환도 필요 없다.
+    (re.compile(r"^the\s+(.+?)\s+bowl$"), "bowl"),
+    # cup
+    (re.compile(r"^the\s+(.+?)\s+cup$"), "cup"),
+    # legacy: 색 지칭 커트러리 ("the pink cutlery") -- 옛 계획/데이터
+    # 하위호환. 새 문장은 색 없이 "the cutlery" (_CUTLERY_PHRASES).
+    (re.compile(r"^the\s+(.+?)\s+cutlery$"), "cutlery"),
+]
+
+
+def _bowl_category_colors() -> frozenset:
+    """bowl(15cm) category 소품의 색 집합 -- "the {색} bowl" 해소용."""
+    from mstack.scene.props import props_by_id
+    return frozenset(
+        p.color for p in props_by_id().values() if p.category == "bowl"
+    )
+
+
+def _parse_object_phrase(phrase: str) -> Optional[tuple[str, str]]:
+    """"the blue cup" -> ("blue", "cup"), "the small green bowl" 등도 파싱.
+
+    drawer 는 색 생략. "the {색} bowl" 은 bowl(15cm) 만 가리킨다 --
+    large_bowl 은 크기 지칭이 필수다 (2026-09-07).
+    """
+    phrase = phrase.strip().lower()
+    if not phrase.startswith("the "):
+        return None
+    rest = phrase[4:].strip()
+    if rest in _DRAWER_PHRASES:
+        return ("", "drawer")
+    if rest in _TRAY_PHRASES:
+        return ("", "tray")
+    if rest in _CUTLERY_PHRASES:
+        return ("", "cutlery")
+    for pat, cat in _PARSE_PATTERNS:
+        m = pat.match(phrase)
+        if m:
+            # 색 토큰은 인벤토리의 실제 색만 인정한다. 아니면 다음 패턴으로 --
+            # "the small green bowl" 은 2번 패턴(색 green)으로, "the small bowl"
+            # 은 어느 패턴에서도 유효한 색이 없어 파싱 실패가 된다.
+            color = _color_token(m.group(1).strip())
+            if color is None:
+                continue
+            if cat == "bowl" and color not in _bowl_category_colors():
+                continue
+            return (color, cat)
+    return None
+
+
+def _parse_group_phrase(phrase: str) -> Optional[tuple[str, str]]:
+    """집합 지칭 "the pink striped bowls" -> ("pink striped", "bowl").
+
+    개별 지칭(_parse_object_phrase)과 달리 복수 명사구를 받는다. "bowls" 는
+    개별 지칭과 같은 규칙으로 bowl(15cm) 색만 해소한다 -- large_bowl 은
+    "the {색} large bowls" 처럼 크기 지칭이 필수다 (2026-09-07).
+    """
+    phrase = phrase.strip().lower()
+    if not phrase.startswith("the "):
+        return None
+    rest = phrase[4:].strip()
+    for cat, plural in _PLURAL_ORDER:
+        if rest.endswith(" " + plural):
+            color = _color_token(rest[: -(len(plural) + 1)].strip())
+            if color is None:
+                continue
+            if cat == "bowl" and color not in _bowl_category_colors():
+                continue
+            return (color, cat)
+    return None
+
+
+def _count(color: str, category: str, md: SceneMetadata,
+           props: dict[str, Prop]) -> int:
+    return sum(
+        1 for oid in md.objects
+        if oid in props
+        and props[oid].category == category
+        and props[oid].color == color
+    )
+
+
+def _is_unique(color: str, category: str, md: SceneMetadata,
+               props: dict[str, Prop]) -> bool:
+    """scene 안에서 (color, category) 가 정확히 하나인가."""
+    return _count(color, category, md, props) == 1
+
+
+def _reference(color: str, category: str, md: SceneMetadata,
+              props: dict[str, Prop]) -> Optional[str]:
+    """유일하면 "the {color} {noun}" 를 반환, 아니면 None. drawer 는 색 생략."""
+    if category not in NOUN_MAP:
+        raise ValueError(f"instruction_grammar NOUN_MAP 에 {category!r} 가 없다")
+    if category in _NO_COLOR_CATS:
+        # drawer/tray 는 단일 개체, cutlery 는 더미 전체가 한 대상 -- 색 생략.
+        return f"the {NOUN_MAP[category]}"
+    if not _is_unique(color, category, md, props):
+        return None
+    return f"the {_with_color(color, category)}"
+
+
+#: 크기 형용사를 앞에 두는 category. 영어의 형용사 순서가
+#: opinion → **size** → quality → shape → age → **color** → origin →
+#: material → purpose 라서, "small blue bowl" 이 맞고 "blue small bowl" 은
+#: 어순이 뒤집힌 것이다 (2026-09-07 사용자 지적).
+#:
+#: 파서는 두 어순을 다 받는다 -- 2026-09-07 이전에 수집된 819개가 뒤집힌
+#: 어순이라, 읽는 쪽을 좁히면 그것들을 못 읽는다. **만드는 쪽만** 맞는
+#: 어순을 낸다. 뒤집힌 것은 scene_repair 의 닥터가 따로 진단한다.
+_SIZE_FIRST = {"small_bowl": ("small", "bowl"),
+               "large_bowl": ("large", "bowl")}
+
+
+def _with_color(color: str, category: str) -> str:
+    """"{크기} {색} {명사}" -- 크기가 색보다 앞이다."""
+    word = _color_word(color)
+    size = _SIZE_FIRST.get(category)
+    if size is None:
+        return f"{word} {NOUN_MAP[category]}"
+    return f"{size[0]} {word} {size[1]}"
+
+
+def _zone(md: SceneMetadata, oid: str) -> Optional[tuple]:
+    spec = (md.layout or {}).get("placements", {}).get(oid)
+    if not spec:
+        return None
+    z = spec["zone"] if isinstance(spec, dict) else spec
+    return (int(z[0]), int(z[1]))
+
+
+def _margin(qual: str, zones: dict, anchor_zone: tuple) -> "tuple[str, float]":
+    """한정어가 후보 중 딱 하나를 집으면 (그 oid, 벌어진 정도), 아니면 ("", 0).
+
+    벌어진 정도는 1등과 2등의 차다. 이것으로 정본을 고른다 -- 아슬아슬하게
+    구분되는 지칭은 물체가 몇 cm만 움직여도 뒤집히고, 사람 눈에도 애매하다.
+
+    거리는 유클리드다. 맨해튼이면 S007 의 두 파란 컵이 노란 그릇에서 같은
+    거리라 아무것도 못 집는데, 보면 분명히 하나가 더 멀다.
+    """
+    if qual in ("farthest from", "closest to"):
+        d = sorted(((math.dist(z, anchor_zone), o) for o, z in zones.items()),
+                   reverse=(qual == "farthest from"))
+        if len(d) < 2 or d[0][0] == d[1][0]:
+            return "", 0.0
+        return d[0][1], abs(d[0][0] - d[1][0])
+    # 왼쪽/오른쪽은 열로 본다 ([0,0] 이 왼쪽 위라 열이 클수록 오른쪽).
+    col = anchor_zone[1]
+    hit = [(o, z) for o, z in zones.items()
+           if (z[1] < col if qual == "to the left of" else z[1] > col)]
+    if len(hit) != 1:
+        return "", 0.0
+    return hit[0][0], abs(hit[0][1][1] - col)
+
+
+def _qualified_reference(color: str, category: str, oid: str,
+                         md: SceneMetadata,
+                         props: dict[str, Prop]) -> Optional[str]:
+    """동일 외형이 여럿일 때 이 하나를 콕 집는 **정본 지칭 하나**.
+
+    쓸 수 있는 것을 다 만들지 않는다. S007(파란 컵 2개)에서 다 만들었더니
+    문장이 14개에서 128개가 됐고, 같은 컵이 이름을 셋씩 갖는 바람에 그
+    이름들끼리 조합되기까지 했다 ("drag the blue cup closest to the white cup
+    next to the white cup"). 물체 하나에 이름 하나여야 고르는 화면도, 계획
+    파일도 읽힌다.
+
+    고르는 기준은 **가장 크게 벌어진 것**이다 -- 아슬아슬한 구분은 물체가
+    조금만 움직여도 뒤집힌다. 같으면 _QUALIFIERS 순서, 그다음 objects 순서로
+    끊어 결정적으로 만든다.
+    """
+    group = [o for o in md.objects
+             if o in props and props[o].color == color
+             and props[o].category == category]
+    if len(group) < 2:
+        return None
+    zones = {o: _zone(md, o) for o in group}
+    if any(z is None for z in zones.values()):
+        return None
+
+    best = None          # (-margin, 한정어 순번, 기준점 순번, 구)
+    for a_idx, anchor_oid in enumerate(md.objects):
+        if anchor_oid in group or anchor_oid not in props:
+            continue
+        ap = props[anchor_oid]
+        anchor = _reference(ap.color, ap.category, md, props)
+        az = _zone(md, anchor_oid)
+        if anchor is None or az is None:
+            continue
+        for q_idx, qual in enumerate(_QUALIFIERS):
+            who, margin = _margin(qual, zones, az)
+            if who != oid:
+                continue
+            key = (-margin, q_idx, a_idx,
+                   f"the {_with_color(color, category)} {qual} {anchor}")
+            if best is None or key < best:
+                best = key
+    return None if best is None else best[3]
+
+
+def resolve_reference(phrase: str, md: SceneMetadata,
+                       props: dict[str, Prop]) -> Optional[str]:
+    """지칭 구가 가리키는 **물체 하나의 oid**. 못 정하면 None.
+
+    글자가 아니라 물체로 대조해야 하는 자리가 있다. "the blue cup farthest
+    from the yellow bowl" 과 "the blue cup farthest from the white cup" 은
+    글자는 다르지만 S007 에서는 같은 컵이다 -- 화면이 글자로만 맞춰 보면
+    "없는 지칭" 으로 보고 엉뚱한 컵을 기본값으로 켠다 (2026-09-07 에 실제로
+    그랬다: 확인만 눌렀으면 가리키는 물체가 조용히 바뀌었다).
+    """
+    text = phrase.strip()
+    head, qual, anchor_phrase = text, "", ""
+    for q in _QUALIFIERS:
+        mark = f" {q} "
+        if mark in text:
+            head, _sep, anchor_phrase = text.partition(mark)
+            qual = q
+            break
+    parsed = _parse_object_phrase(head)
+    if parsed is None:
+        return None
+    color, category = parsed
+    group = [o for o in md.objects
+             if o in props and props[o].color == color
+             and props[o].category == category]
+    if len(group) == 1:
+        return group[0]
+    if not group or not qual:
+        return None
+    anchor_oid = resolve_reference(anchor_phrase, md, props)
+    if anchor_oid is None:
+        return None
+    az = _zone(md, anchor_oid)
+    zones = {o: _zone(md, o) for o in group}
+    if az is None or any(z is None for z in zones.values()):
+        return None
+    who, _margin_ = _margin(qual, zones, az)
+    return who or None
+
+
+def enumerate_instructions(md: SceneMetadata, props: dict[str, Prop]) -> list[str]:
+    """scene 에서 문법에 맞는 instruction 문장을 결정적으로 모두 생성.
+
+    동일 외형이 여럿이면 **한정어로 하나씩 콕 집어** 생성한다 (2026-09-07).
+    전에는 그런 물체가 들어가는 문장을 통째로 안 만들었는데, 그러면 S007
+    (파란 컵 2개)에서 만들 수 있는 문장이 "stack all the blue cups" 하나뿐이
+    되어 닥터가 그 scene 의 문장을 고칠 수 없었다. 한정어는 lint 가 이미
+    받고 있었고, 만드는 쪽만 없었다.
+
+    한정어는 **배치로 실제 구분되는 것만** 만든다 -- _qualified_references
+    참고.
+    """
+    by_cat: dict[str, list[tuple[str, str]]] = {}  # category -> [(color, oid), ...]
+    for oid in md.objects:
+        p = props.get(oid)
+        if p is None:
+            continue
+        by_cat.setdefault(p.category, []).append((p.color, oid))
+
+    def refs(cats: set[str]) -> list[tuple[str, str]]:
+        """지칭 가능한 **(지칭 구, oid)** 목록.
+
+        유일하면 한 개("the white cup"), 동일 외형이 여럿이면 한정어로 하나씩
+        콕 집는 구들이 대신 들어온다 -- 그런 scene 에서도 pick/drag 문장이
+        나온다 (2026-09-07: S007 은 파란 컵이 둘이라 stack 문장 하나밖에
+        못 만들었고, 그래서 닥터가 그 scene 의 문장을 고칠 수 없었다).
+        """
+        out = []
+        for cat in sorted(cats):
+            for color, oid in by_cat.get(cat, []):
+                phrase = _reference(color, cat, md, props)
+                if phrase is not None:
+                    out.append((phrase, oid))
+                else:
+                    q = _qualified_reference(color, cat, oid, md, props)
+                    if q is not None:
+                        out.append((q, oid))
+        return out
+
+    sentences: set[str] = set()
+
+    # 1) pick up {obj} and place it inside {bowl}
+    # 목적지가 그릇이면 언제나 inside 다 (2026-09-07 사용자 확정 -- 그릇은
+    # 오목해서 물체가 안으로 들어간다). on 문장은 만들지 않는다.
+    for o, ooid in refs(_PICKABLE):
+        for b, boid in refs(_BOWL_CATS):
+            if ooid == boid or o == b:
+                continue
+            sentences.add(f"pick up {o} and place it inside {b}")
+
+    # 2) pick up {obj} and place it on top of the drawer
+    if "drawer" in by_cat:
+        for o, _oid in refs(_PICKABLE):
+            sentences.add(f"pick up {o} and place it on top of the drawer")
+
+    # 2b) (2026-08-31 폐지) "pick up {cutlery} ... inside the drawer" 는 더
+    # 이상 생성하지 않는다 -- 커트러리는 tidy 전용(2d), drawer 목적지도
+    # tidy 가 담당. _DRAWER_INSIDE_OBJS 는 옛 문장 lint 하위호환용으로만 남음.
+
+    # 2c) pick up {obj} and place it on the wooden tray
+    if "tray" in by_cat:
+        for o, _oid in refs(_PICKABLE):
+            sentences.add(
+                f"pick up {o} and place it on the {NOUN_MAP['tray']}")
+
+    # 2d) tidy the cutlery into {container} -- 커트러리 전용 동사. 더미를
+    # 반복 운반하는 동작이라 pick/drag 와 스킬(tidy-into)부터 분리된다.
+    if "cutlery" in by_cat:
+        for t, _oid in refs(_TIDY_TARGETS):
+            sentences.add(f"tidy the cutlery into {t}")
+
+    # 3) pick up {obj} and place it next to {obj2}
+    objs = refs(_PICKABLE)
+    besides = refs(_BESIDE_CATS)
+    for o1, oid1 in objs:
+        for o2, oid2 in besides:
+            # 색 없는 지칭(cutlery 더미)은 낱개 소품이 여럿이어도 같은 구가
+            # 된다 -- "the cutlery next to the cutlery" 방지.
+            if oid1 == oid2 or o1 == o2:
+                continue
+            sentences.add(f"pick up {o1} and place it next to {o2}")
+
+    # 4) drag {obj} next to {obj2} -- 들지 않고 끌기 (큰 그릇 포함)
+    for o1, oid1 in refs(_DRAGGABLE):
+        for o2, oid2 in besides:
+            if oid1 == oid2 or o1 == o2:
+                continue
+            sentences.add(f"drag {o1} next to {o2}")
+
+    # 5) open/close the top drawer
+    if "drawer" in by_cat:
+        sentences.add("open the top drawer")
+        sentences.add("close the top drawer")
+
+    # 6) stack all the {색} {복수} -- 동일 외형이 2개 이상일 때만. 개별
+    # 지칭이 모호해 위 문장들에서 빠진 바로 그 물체들이 여기서 재료가 된다.
+    for cat in sorted(_STACKABLE):
+        for color in sorted({c for c, _ in by_cat.get(cat, [])}):
+            if _count(color, cat, md, props) >= 2:
+                sentences.add(f"stack all the {_color_word(color)} {PLURAL_MAP[cat]}")
+
+    return sorted(sentences)
+
+
+# ---- 정본 문장 정규식 --------------------------------------------------------
+# OBJECT 뒤에 선택적 QUALIFIER, 그 뒤 관계. 관계 alternation 은 긴 것 먼저
+# ("on top of" 가 "on" 에 잡아먹히지 않게).
+_PICK_RE = re.compile(
+    r"^pick up the (?P<obj>.+?)"
+    rf"(?: (?P<qual>(?:{_QUAL_RE}) the .+?))?"
+    r" and place it (?P<rel>on top of|inside|next to|on) the (?P<tgt>.+)$"
+)
+_DRAG_RE = re.compile(
+    r"^drag the (?P<obj>.+?)"
+    rf"(?: (?P<qual>(?:{_QUAL_RE}) the .+?))?"
+    r" next to the (?P<tgt>.+)$"
+)
+# 커트러리 정리 (2026-08-31): QUALIFIER 없음 -- 더미 전체가 한 대상이다.
+_TIDY_RE = re.compile(r"^tidy the (?P<obj>.+?) into the (?P<tgt>.+)$")
+# 집합 쌓기 (2026-08-31): QUALIFIER 없음 -- 'all' 이 이미 전부를 뜻한다.
+_STACK_RE = re.compile(r"^stack all (?P<grp>the .+)$")
+
+
+#: 문법이 표현할 수 있는 스킬(동사×관계) 전집합 — skill_of() 의 치역.
+#: scene 추천의 지시문 단계(mstack.scene.skill_stats)가 "실행 가능한 스킬 중
+#: 누적 수집횟수가 가장 적은 것 우선" 을 판단할 때의 단위다.
+#: tidy-into 는 반복 운반(더미 정리), stack-all 은 같은 것 여러 개를 포개기
+#: -- 둘 다 pick 계열과 운동 구조가 달라 별도 스킬로 집계한다
+#: (2026-08-31 사용자 결정).
+SKILLS = ("pick-on", "pick-inside", "pick-next_to", "pick-on_top_of",
+          "drag-next_to", "tidy-into", "stack-all",
+          "drawer-open", "drawer-close")
+
+
+def skill_of(sentence: str) -> Optional[str]:
+    """문장을 스킬(동사×관계)로 분류한다. 정본 문법이 아니면 None.
+
+    물체 색·종류는 스킬이 아니다 — "pick up the blue cup and place it on
+    the white bowl" 과 "... pink small bowl ..." 은 같은 pick-on 스킬이다.
+    legacy 따옴표 감싸기는 벗겨서 판정한다 (v0 파일 대조용)."""
+    s = sentence.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        s = s[1:-1].strip()
+    if s == "open the top drawer":
+        return "drawer-open"
+    if s == "close the top drawer":
+        return "drawer-close"
+    m = _PICK_RE.match(s)
+    if m is not None:
+        return "pick-" + m.group("rel").replace(" ", "_")
+    if _DRAG_RE.match(s) is not None:
+        return "drag-next_to"
+    if _TIDY_RE.match(s) is not None:
+        return "tidy-into"
+    if _STACK_RE.match(s) is not None:
+        return "stack-all"
+    return None
+
+
+def _parse_qualifier(qual: str) -> Optional[tuple[str, str]]:
+    """"farthest from the yellow bowl" -> ("farthest from", "the yellow bowl")."""
+    for q in _QUALIFIERS:
+        if qual.startswith(q + " "):
+            return q, qual[len(q) + 1:]
+    return None
+
+
+def lint(sentence: str, md: Optional[SceneMetadata] = None,
+         props: Optional[dict[str, Prop]] = None, *,
+         strict_relation: bool = True) -> Optional[str]:
+    """문장이 정본 문법을 따르는지 검증.
+
+    md 가 주어지면 scene 에서 지칭 유일성·존재까지 검사한다. 주어지지 않으면
+    템플릿/어휘만 검사한다(계획 파일 하위호환용). QUALIFIER 가 붙은 지칭은
+    유일하지 않아도 되지만 최소 1개는 존재해야 하고, REFERENCE 는 유일해야
+    한다.
+
+    strict_relation=False 면 목적지가 그릇인 on 문장("place it on the
+    {그릇}")도 통과시킨다. 2026-09-07 의 "그릇 목적지 on 금지" 규칙 이전에
+    수집된 데이터(240 에피소드)와 계획 파일에 그런 문장이 남아 있어서,
+    그것들을 읽어 검증하는 자리(load_plan 등)가 깨지지 않게 하는
+    하위호환 스위치다. 기존 데이터의 전수 수정이 끝나면 이 인자와 함께
+    제거하면 된다.
+    """
+    sentence = sentence.strip()
+    if not sentence:
+        return "빈 문장"
+    if sentence.endswith("."):
+        return "문장 끝 마침표 금지"
+
+    def _has_cat(cat: str) -> Optional[str]:
+        if md is not None and props is not None and not any(
+                props.get(o, Prop("", "", "", "")).category == cat
+                for o in md.objects):
+            return f"{NOUN_MAP.get(cat, cat)} 가 scene 에 없음"
+        return None
+
+    def _check_ref(phrase: str, role: str, allowed: set[str],
+                   qualified: bool = False) -> "tuple[str, str] | str":
+        """지칭 구를 파싱·검증. 성공 시 (color, category), 실패 시 오류 문자열."""
+        parsed = _parse_object_phrase(f"the {phrase}" if not phrase.startswith("the")
+                                      else phrase)
+        if parsed is None:
+            return f"{role} 지칭 파싱 실패: {phrase!r}"
+        color, cat = parsed
+        if cat in _NO_COLOR_CATS:
+            if cat not in allowed:
+                return f"{role} 에 {cat} 불가"
+            err = _has_cat(cat)
+            return err if err else (color, cat)
+        if cat not in allowed:
+            return f"{role} category 불가: {cat!r}"
+        if md is not None and props is not None:
+            n = _count(color, cat, md, props)
+            if n == 0:
+                return f"{role} 대상이 scene 에 없음: the {color} {NOUN_MAP[cat]}"
+            if n > 1 and not qualified:
+                return (f"모호한 {role} 지칭: the {color} {NOUN_MAP[cat]} "
+                        "(QUALIFIER 필요: farthest from / closest to / "
+                        "to the left of / to the right of)")
+        return (color, cat)
+
+    # open / close
+    if sentence in {"open the top drawer", "close the top drawer"}:
+        return _has_cat("drawer")
+
+    # 'in' 오사용을 콕 집어 안내 (inside 로 통일 -- 2026-08-24 결정)
+    if re.search(r"\bplace it in the\b", sentence):
+        return "'place it in' 대신 'place it inside' (inside 로 통일)"
+    if re.match(r"^put the ", sentence):
+        return ("'put the X inside the Y' 대신 정본 "
+                "'pick up the X and place it inside the Y'")
+    if " that is " in sentence:
+        return "QUALIFIER 는 'that is' 없이 붙인다 (예: the blue cup farthest from ...)"
+
+    # stack: 집합 지칭 (2026-08-31). 개별 지칭이 아니라 복수 명사구를 받고,
+    # 같은 (색, category) 가 2개 이상이어야 성립한다 -- 1개면 포갤 짝이 없다.
+    st = _STACK_RE.match(sentence)
+    if st is not None:
+        parsed = _parse_group_phrase(st.group("grp"))
+        if parsed is None:
+            return f"stack 집합 지칭 파싱 실패: {st.group('grp')!r} (복수형이 필요)"
+        color, cat = parsed
+        if cat not in _STACKABLE:
+            return f"{NOUN_MAP[cat]} 는 포갤 수 없다"
+        if md is not None and props is not None:
+            n = _count(color, cat, md, props)
+            if n == 0:
+                return f"stack 대상이 scene 에 없음: the {color} {PLURAL_MAP[cat]}"
+            if n < 2:
+                return (f"stack 은 같은 물체가 2개 이상일 때만 성립한다 "
+                        f"(the {color} {NOUN_MAP[cat]} 는 1개)")
+        return None
+
+    # tidy: 커트러리 전용 (2026-08-31). QUALIFIER 없음.
+    t = _TIDY_RE.match(sentence)
+    if t is not None:
+        obj = _check_ref(t.group("obj"), "tidy", {"cutlery"})
+        if isinstance(obj, str):
+            return obj
+        tgt_parsed = _check_ref(t.group("tgt"), "tidy-into", _TIDY_TARGETS)
+        if isinstance(tgt_parsed, str):
+            return tgt_parsed
+        return None
+
+    m = _PICK_RE.match(sentence)
+    d = _DRAG_RE.match(sentence) if m is None else None
+    if m is None and d is None:
+        return "통일 문법 템플릿에 맞지 않음"
+
+    # cutlery 는 tidy 전용이지만 기존 수집분/계획의 색 지칭 문장("the pink
+    # cutlery")은 lint 하위호환으로 계속 받는다 -- 색 없는 새 지칭("the
+    # cutlery")이 pick/drag 에 오면 아래에서 tidy 로 안내한다.
+    if m is not None:
+        obj_phrase, qual, rel, tgt = (m.group("obj"), m.group("qual"),
+                                      m.group("rel"), m.group("tgt"))
+        obj_allowed = _PICKABLE | {"cutlery"}
+        # "on" 은 평평한 것(tray)만 -- 그릇 목적지는 옛 겹침 집합
+        # (_ON_CATS 가 그릇을 포함하던 시절) 문장의 하위호환 검증을 위해
+        # 파싱 단계에서는 받고, 아래에서 strict 여부로 판정한다.
+        tgt_allowed = {"on": _BOWL_CATS | {"tray"},
+                       "inside": _BOWL_CATS | {"drawer"},
+                       "next to": _BESIDE_CATS | {"cutlery"},
+                       "on top of": {"drawer"}}[rel]
+        verb_role = ("pick", f"place-{rel}")
+    else:
+        obj_phrase, qual, tgt = d.group("obj"), d.group("qual"), d.group("tgt")
+        rel = "next to"
+        obj_allowed = _DRAGGABLE | {"cutlery"}
+        tgt_allowed = _BESIDE_CATS | {"cutlery"}
+        verb_role = ("drag", "next-to")
+
+    obj = _check_ref(obj_phrase, verb_role[0], obj_allowed, qualified=bool(qual))
+    if isinstance(obj, str):
+        return obj
+    if obj == ("", "cutlery"):
+        return ("커트러리 더미는 pick/drag 가 아니라 "
+                "'tidy the cutlery into the ...' 를 쓴다 (2026-08-31)")
+    if qual:
+        parsed_q = _parse_qualifier(qual)
+        if parsed_q is None:
+            return f"QUALIFIER 파싱 실패: {qual!r}"
+        ref = _check_ref(parsed_q[1][4:], "reference",
+                         set(NOUN_MAP) | {"drawer"})
+        if isinstance(ref, str):
+            return ref
+    tgt_parsed = _check_ref(tgt, verb_role[1], tgt_allowed)
+    if isinstance(tgt_parsed, str):
+        return tgt_parsed
+    if tgt_parsed == ("", "cutlery"):
+        return "어질러진 커트러리 더미는 위치 기준(next to)으로 못 쓴다"
+    # 그릇 목적지 on 금지 (2026-09-07 사용자 확정) -- 그릇은 오목해서 물체가
+    # 안으로 들어가므로 inside 가 맞다. strict_relation=False 면 옛 수집분/
+    # 계획 문장을 계속 통과시킨다 (하위호환 -- docstring 참고).
+    if rel == "on" and tgt_parsed[1] in _BOWL_CATS and strict_relation:
+        return (f"the {tgt} 은 오목한 그릇이다 -- 'place it inside' 가 맞다 "
+                "(on 은 트레이·접시처럼 평평한 것에만)")
+    if rel == "inside" and tgt_parsed[1] == "drawer" \
+            and obj[1] not in _DRAWER_INSIDE_OBJS:
+        return ("drawer 안에는 커트러리만 넣는다 -- "
+                f"{NOUN_MAP[obj[1]]} 는 'on top of the drawer' 를 쓰세요")
+    if obj == tgt_parsed:
+        return f"{verb_role[1]} 대상이 {verb_role[0]} 대상과 같음"
+    return None
+
+
+def selftest() -> None:
+    """문법 생성/검증 스스로를 검증한다."""
+    from mstack.scene.props import props_by_id
+
+    props = props_by_id()
+
+    # blue cup + white small bowl + drawer
+    md1 = SceneMetadata(
+        scene_id="S000",
+        objects=["OBJ-CUP-BLU-01", "OBJ-BOWLS-WHT-01", "OBJ-DRAWER-01"],
+        layout={
+            "grid": [3, 3],
+            "placements": {
+                "OBJ-CUP-BLU-01": {"zone": [0, 0]},
+                "OBJ-BOWLS-WHT-01": {"zone": [0, 1]},
+                "OBJ-DRAWER-01": {"zone": [0, 2]},
+            },
+        },
+    )
+    s1 = enumerate_instructions(md1, props)
+    # 그릇 목적지는 inside 뿐이다 (2026-09-07 -- 그릇은 오목해서 물체가 안으로
+    # 들어간다). on 문장은 생성하지 않는다.
+    assert "pick up the blue cup and place it inside the small white bowl" in s1
+    assert not any("place it on the small white bowl" in x for x in s1)
+    assert "pick up the blue cup and place it on top of the drawer" in s1
+    assert "drag the blue cup next to the small white bowl" in s1
+    assert "open the top drawer" in s1
+    assert lint("pick up the blue cup and place it inside the small white bowl", md1, props) is None
+    assert lint("drag the blue cup next to the small white bowl", md1, props) is None
+    assert lint("pick up the blue cup and place it on the blue bowl", md1, props) is not None
+    # 그릇 목적지 on 은 strict 에서 거부 + inside 안내
+    err = lint("pick up the blue cup and place it on the small white bowl", md1, props)
+    assert err is not None and "inside" in err, err
+    # 하위호환: 옛 수집분/계획 문장 검증용으로 strict_relation=False 면 통과
+    assert lint("pick up the blue cup and place it on the small white bowl",
+                md1, props, strict_relation=False) is None
+
+    # 정본 위반 안내 -- put / in / that is / 마침표
+    assert "inside" in lint("pick up the blue cup and place it in the white bowl")
+    assert "정본" in lint("put the blue cup inside the white bowl")
+    assert "that is" in lint(
+        "pick up the blue cup that is farthest from the yellow bowl and place it on the yellow bowl")
+    assert "마침표" in lint("open the top drawer.")
+
+    # QUALIFIER: 템플릿만 검사(md 없이)
+    assert lint("pick up the blue cup farthest from the large yellow bowl "
+                "and place it inside the large yellow bowl") is None
+    assert lint("drag the blue cup closest to the large white bowl next to the white cup") is None
+    assert lint("pick up the blue cup nearest the bowl and place it on the bowl") is not None
+
+    # 두 개의 흰 컵 -> qualifier 없으면 모호, 있으면 허용
+    md2 = SceneMetadata(
+        scene_id="S001",
+        objects=["OBJ-CUP-WHT-01", "OBJ-CUP-WHT-02", "OBJ-BOWLS-BLU-01"],
+        layout={
+            "grid": [3, 3],
+            "placements": {
+                "OBJ-CUP-WHT-01": {"zone": [0, 0]},
+                "OBJ-CUP-WHT-02": {"zone": [0, 1]},
+                "OBJ-BOWLS-BLU-01": {"zone": [0, 2]},
+            },
+        },
+    )
+    s2 = enumerate_instructions(md2, props)
+    # 맨 지칭("the white cup" 뒤에 한정어 없음)은 여전히 생성되지 않는다.
+    # 한정어가 붙은 것은 2026-09-07 부터 생성된다 -- 그래야 동일 외형이
+    # 여럿인 scene 에서도 문장을 만들 수 있다.
+    _bare = re.compile(r"the white cup\b(?!s)(?! (?:" + _QUAL_RE + "))")
+    assert not any(_bare.search(x) for x in s2), [x for x in s2 if _bare.search(x)]
+    assert any("the white cup farthest from the small blue bowl" in x
+               for x in s2), s2
+    assert "stack all the white cups" in s2
+    err = lint("pick up the white cup and place it on the small blue bowl", md2, props)
+    assert err is not None and "QUALIFIER" in err, err
+    assert lint("pick up the white cup farthest from the small blue bowl "
+                "and place it inside the small blue bowl", md2, props) is None
+    # drag: 큰 그릇도 끌 수 있다 (크기 지칭 필수 -- 2026-09-07)
+    assert lint("drag the large white bowl next to the blue cup") is None
+
+    # large_bowl 약칭 폐지 (2026-09-07): "the {색} bowl" 은 large 그릇을
+    # 가리키지 못한다 -- 크기 지칭이 빠진 지칭은 lint 가 거부한다.
+    assert lint("pick up the blue cup and place it inside the white bowl") is not None
+    assert lint("pick up the small pink bowl and place it inside the white bowl") is not None
+    assert lint("pick up the blue cup and place it inside the large white bowl") is None
+    assert lint("pick up the small green bowl and place it inside the large yellow bowl") is None
+    # 옛 겹침 집합 문장("on the {그릇}")은 strict 에서 거부, 하위호환 모드만 통과
+    err = lint("pick up the blue cup and place it on the large white bowl")
+    assert err is not None and "inside" in err, err
+    assert lint("pick up the blue cup and place it on the large white bowl",
+                strict_relation=False) is None
+
+    # 색 토큰 검증 -- 인벤토리에 없는 색/색 아닌 수식어는 파싱 실패
+    assert lint("pick up the zzz qqq cup and place it on the wwww bowl") is not None
+    assert _parse_object_phrase("the small bowl") is None      # small 은 색이 아님
+    assert _parse_object_phrase("the large bowl") is None
+    assert _parse_object_phrase("the small green bowl") == ("green", "small_bowl")
+
+    # 목적지 drawer 존재 검사 (md 제공 시)
+    err = lint("pick up the small blue bowl and place it on top of the drawer",
+               md2, props)
+    assert err is not None and "drawer" in err, err
+
+    # 커트러리 번들 (2026-08-31): 색 없이 "the cutlery" 로 지칭
+    md4 = SceneMetadata(
+        scene_id="S004",
+        objects=["OBJ-CUTLERY-SET-01", "OBJ-TRAY-01", "OBJ-DRAWER-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-CUTLERY-SET-01": {"zone": [0, 0]},
+            "OBJ-TRAY-01": {"zone": [0, 1]},
+            "OBJ-DRAWER-01": {"zone": [0, 2]}}})
+    s4 = enumerate_instructions(md4, props)
+    # tidy 전용 동사 (2026-08-31): 더미 정리는 pick 과 스킬부터 분리
+    assert "tidy the cutlery into the wooden tray" in s4
+    assert "tidy the cutlery into the drawer" in s4
+    assert not any(x.startswith("pick up the cutlery") for x in s4)
+    assert not any("drag the cutlery" in x for x in s4)
+    assert not any("mixed" in x for x in s4)   # 인벤토리 색(mixed)은 문장에 안 나온다
+    assert lint("tidy the cutlery into the wooden tray", md4, props) is None
+    # "the plastic cutlery" / 짧은 "the tray" 지칭도 lint 는 허용
+    assert lint("tidy the plastic cutlery into the tray", md4, props) is None
+    assert lint("tidy the cutlery into the drawer", md4, props) is None
+    # 색 없는 커트러리를 pick 에 쓰면 tidy 로 안내
+    err = lint("pick up the cutlery and place it on the wooden tray", md4, props)
+    assert err is not None and "tidy" in err, err
+    # 커트러리 없는 씬에서 tidy -> 오류
+    err = lint("tidy the cutlery into the wooden tray", md1, props)
+    assert err is not None
+    # tidy 목적지는 담을 수 있는 것만 (컵 불가)
+    err = lint("tidy the cutlery into the blue cup", md4, props)
+    assert err is not None
+    # 컵은 drawer 안에 못 넣는다 (2026-08-27 확정 범위: 커트러리만)
+    err = lint("pick up the blue cup and place it inside the drawer", md1, props)
+    assert err is not None and "커트러리" in err, err
+    # 은퇴한 낱개 커트러리가 든 옛 scene: 색 지칭 pick 문장은 lint 만
+    # 허용(하위호환), 새로 생성되는 문장은 tidy 뿐이다.
+    md5 = SceneMetadata(
+        scene_id="S005",
+        objects=["OBJ-SPOON-PNK-01", "OBJ-FORK-PNK-01", "OBJ-TRAY-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-SPOON-PNK-01": {"zone": [0, 0]},
+            "OBJ-FORK-PNK-01": {"zone": [1, 0]},
+            "OBJ-TRAY-01": {"zone": [0, 1]}}})
+    s5 = enumerate_instructions(md5, props)
+    assert not any("pink cutlery" in x for x in s5)
+    assert "tidy the cutlery into the wooden tray" in s5
+    assert not any(x.startswith("pick up the cutlery") for x in s5)
+    assert lint("pick up the pink cutlery and place it on the wooden tray",
+                md5, props) is None   # legacy 색 지칭
+    assert lint("drag the pink cutlery next to the wooden tray",
+                md5, props) is None   # legacy drag 도 하위호환
+    # tray 없는 씬에서 tray 목적지 -> 오류
+    err = lint("pick up the blue cup and place it on the tray", md1, props)
+    assert err is not None and "tray" in err, err
+    # tidy 는 별도 스킬로 분류된다
+    assert skill_of("tidy the cutlery into the wooden tray") == "tidy-into"
+    assert skill_of("tidy the cutlery into the blue japanese bowl") == "tidy-into"
+    assert all(skill_of(s) in SKILLS for s in s4)
+
+    # 집합 지칭 stack (2026-08-31): 동일 외형 2개는 예비품이 아니라 재료다.
+    md7 = SceneMetadata(
+        scene_id="S007",
+        objects=["OBJ-BOWLM-PNKSTR-01", "OBJ-BOWLM-PNKSTR-02", "OBJ-CUP-RED-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-BOWLM-PNKSTR-01": {"zone": [0, 0]},
+            "OBJ-BOWLM-PNKSTR-02": {"zone": [1, 0]},
+            "OBJ-CUP-RED-01": {"zone": [0, 1]}}})
+    s7 = enumerate_instructions(md7, props)
+    assert "stack all the pink striped bowls" in s7
+    # 맨 지칭은 여전히 모호 -> 생성 안 됨. 한정어가 붙은 것은 생성된다
+    # (2026-09-07) -- 두 그릇이 빨간 컵에서 서로 다른 거리라 구분된다.
+    _bare7 = re.compile(r"the pink striped bowl\b(?!s)(?! (?:" + _QUAL_RE + "))")
+    assert not any(_bare7.search(x) for x in s7), [x for x in s7 if _bare7.search(x)]
+    assert any("the pink striped bowl closest to the red cup" in x
+               for x in s7), s7
+    assert lint("stack all the pink striped bowls", md7, props) is None
+    assert skill_of("stack all the pink striped bowls") == "stack-all"
+    assert all(skill_of(s) in SKILLS for s in s7)
+    # 1개뿐이면 stack 불가 (포갤 짝이 없다)
+    err = lint("stack all the red cups", md7, props)
+    assert err is not None and "2개 이상" in err, err
+    # 없는 대상 / 못 포개는 것 / 단수형
+    assert lint("stack all the pink striped bowls", md1, props) is not None
+    assert lint("stack all the cutlery", md4, props) is not None
+    assert lint("stack all the pink striped bowl", md7, props) is not None
+    # 파싱: 복수 어순 -- large_bowl 도 크기 지칭 필수 (2026-09-07)
+    assert _parse_group_phrase("the pink striped bowls") == ("pink striped", "bowl")
+    assert _parse_group_phrase("the white large bowls") == ("white", "large_bowl")
+    assert _parse_group_phrase("the white bowls") is None      # 약칭 폐지
+    assert _parse_group_phrase("the blue cups") == ("blue", "cup")
+    assert _parse_group_phrase("the blue cup") is None      # 단수는 집합 지칭이 아니다
+
+    # bowl(15cm) category (2026-08-31): 색 토큰이 여러 단어여도 동작한다.
+    assert _parse_object_phrase("the blue japanese bowl") == ("blue japanese", "bowl")
+    assert _parse_object_phrase("the pink striped bowl") == ("pink striped", "bowl")
+    assert _parse_object_phrase("the white bowl") is None   # large 약칭 폐지
+
+    # 모호한 색 이름은 "-colored" 가 필수 (2026-09-07 사용자 확정):
+    # pistachio 단독은 모양인지 색인지 애매하다.
+    assert _with_color("pistachio", "large_bowl") == "large pistachio-colored bowl"
+    assert _with_color("blue", "large_bowl") == "large blue bowl"
+    assert _parse_object_phrase(
+        "the large pistachio-colored bowl") == ("pistachio", "large_bowl")
+    assert _parse_object_phrase("the large pistachio bowl") is None
+    assert _parse_object_phrase("the pistachio-colored bowl") is None  # 크기 필수
+    assert lint("drag the large pistachio-colored bowl next to the blue cup") is None
+    assert lint("drag the large pistachio bowl next to the blue cup") is not None
+    md6 = SceneMetadata(
+        scene_id="S006",
+        objects=["OBJ-BOWLM-JPN-01", "OBJ-CUP-RED-01", "OBJ-BOWLL-WHT-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-BOWLM-JPN-01": {"zone": [0, 0]},
+            "OBJ-CUP-RED-01": {"zone": [0, 1]},
+            "OBJ-BOWLL-WHT-01": {"zone": [0, 2]}}})
+    s6 = enumerate_instructions(md6, props)
+    assert "pick up the red cup and place it inside the blue japanese bowl" in s6
+    # bowl 은 pickable (림 파지 -- 2026-08-31 실기 확인). 그릇->그릇도 inside 뿐.
+    assert "pick up the blue japanese bowl and place it inside the large white bowl" in s6
+    assert not any("place it on the large white bowl" in x for x in s6)
+    assert lint("pick up the red cup and place it inside the blue japanese bowl",
+                md6, props) is None
+    assert lint("drag the blue japanese bowl next to the large white bowl",
+                md6, props) is None
+    assert skill_of("pick up the red cup and place it inside the blue japanese bowl") == "pick-inside"
+
+    # 결정성
+    assert enumerate_instructions(md1, props) == enumerate_instructions(md1, props)
+
+    # 스킬 분류 -- 색·종류가 달라도 같은 스킬, 정본 아니면 None
+    assert skill_of("pick up the blue cup and place it on the white bowl") == "pick-on"
+    assert skill_of("pick up the small pink bowl and place it on the white bowl") == "pick-on"
+    assert skill_of("pick up the blue cup and place it inside the small white bowl") == "pick-inside"
+    assert skill_of("pick up the blue cup and place it on top of the drawer") == "pick-on_top_of"
+    assert skill_of("pick up the blue cup and place it next to the white bowl") == "pick-next_to"
+    assert skill_of("drag the blue cup next to the small white bowl") == "drag-next_to"
+    assert skill_of("open the top drawer") == "drawer-open"
+    assert skill_of('"close the top drawer"') == "drawer-close"   # legacy 따옴표
+    assert skill_of("put the cup somewhere") is None
+    assert all(skill_of(s) in SKILLS for s in s1)   # 생성 문장은 전부 분류 가능
+    print("instruction_grammar selftest 통과")
+
+
+if __name__ == "__main__":
+    selftest()

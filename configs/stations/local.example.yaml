@@ -1,0 +1,37 @@
+# 로컬 덮어쓰기 예시 -- `<스테이션 이름>.local.yaml` 로 복사해서 쓴다.
+#
+#     cp configs/stations/local.example.yaml configs/stations/knu-eng7.local.yaml
+#
+# git 이 무시한다 (.gitignore: configs/stations/*.local.yaml). 이 저장소는
+# 공개라, 이 셋업이 어느 기계인지 드러내는 값은 커밋하지 않는다. 구조와
+# 측정값(크롭 오프셋처럼 다시 재려면 품이 드는 것)은 옆의 <이름>.yaml 에
+# 커밋되어 있고, 이 파일이 그 위에 겹쳐진다 -- 매핑은 키 단위로 재귀
+# 병합되므로, 바꿀 값만 적으면 된다 (mstack/config/station.py 의 _deep_merge).
+#
+# 부수 효과 하나: 이 파일은 무시되므로 고쳐도 작업 트리가 더러워지지 않는다.
+# 아이콘이 실행 전에 도는 git pull --ff-only 가 건너뛰어지지 않는다는 뜻이다.
+
+robot:
+  # FCI 주소. Franka 출고 기본값은 172.16.0.2.
+  ip: "172.16.0.2"
+
+cameras:
+  # RealSense 시리얼. `python scripts/check/check_cameras.py` 로 확인한다.
+  # 폴백일 뿐이며, 어느 실물이 꽂혔는지의 정본은 데이터셋의
+  # dataset-identity.json 이다.
+  cam1:
+    serial: ""
+  cam2:
+    serial: ""
+
+policy:
+  # VLA 추론 서버. 환경변수 MSTACK_POLICY_SERVER 가 이 값을 이긴다.
+  url: ""
+
+# 아래는 코드가 읽지 않는 순수 기록이다. 하드웨어를 바꿨을 때 사람이 손으로
+# 고치면 되고, 지금 값은 Desk 웹 UI > Dashboard 에서 언제든 볼 수 있다.
+info:
+  robot:
+    control_serial: ""
+    arm_serial: ""
+    registered_to: ""

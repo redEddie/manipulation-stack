@@ -1,0 +1,772 @@
+"""Collection control for WorkspaceWindow: connect, record, save, judge, gate, reset."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import numpy as np
+from PyQt6.QtCore import QProcess, QTimer
+from PyQt6.QtWidgets import QMessageBox
+
+from mstack.comm.zmq_core.robot_node import probe_observation
+from mstack.config.station import load_station
+from mstack.data.collection_history import now_iso
+from mstack.gui.i18n import tr
+from mstack.collect.worker import (
+    CONTROL_DEAD_MARK,
+    CollectionWorker,
+    GATE_RAD,
+    WorkerConfig,
+)
+from mstack.scene.scene_format import count_by_slot, read_scene_metadata, scene_filename
+from apps.workspace.features.collection.header import set_header_state
+from apps.workspace.features.collection.page import set_live_keys
+from apps.workspace.models import _new_stats
+from apps.workspace.shared.tabs import show_center_tab
+
+
+class CollectionOps:
+    """Collection control: connect, record, save, judge, gate, reset."""
+
+    def __init__(self, win) -> None:
+        self.win = win
+        #: 빠른 재개가 노드를 기다리는 마감 시각 (None = 안 기다리는 중).
+        self._quick_deadline = None
+
+    # ------------------------------------------------------------------ control
+    def cmd(self, name: str, *args) -> None:
+        if self.win.worker is None:
+            self.win.log("[제어] 아직 연결되지 않았습니다.")
+            return
+        getattr(self.win.worker, name)(*args)
+
+    def save(self, success: bool) -> None:
+        """Episode end -- the success flag is remembered for stats."""
+        if self.win.worker is None:
+            self.win.log("[제어] 아직 연결되지 않았습니다.")
+            return
+        self.win.session.pending_success = success
+        self.win.worker.cmd_save_episode(success)
+
+    def toggle_last_verdict(self) -> None:
+        """Flips the success flag of the episode that was just saved."""
+        if self.win.worker is None or self.win.session.no_dataset_session:
+            return
+        if self.win.session.last_saved_name is None:
+            # 저장이 아직 백그라운드에서 돌고 있어 이름을 모른다. 의사만 적어
+            # 두고 episode_saved가 오면 그때 반영한다.
+            self.win.session.pending_verdict_toggle = not self.win.session.pending_verdict_toggle
+            self.win.log("[판정] 저장이 끝나면 직전 에피소드 판정을 뒤집습니다."
+                     if self.win.session.pending_verdict_toggle else "[판정] 뒤집기를 취소했습니다.")
+            self.win._refresh_verdict_label()
+            return
+        self.win.session.last_saved_success = not self.win.session.last_saved_success
+        self.win.worker.cmd_set_episode_success(self.win.session.last_saved_name, self.win.session.last_saved_success)
+        self.win.stats_ops.bump("success", 1 if self.win.session.last_saved_success else -1)
+        self.win.stats_ops.bump("failed", -1 if self.win.session.last_saved_success else 1)
+        self.win._refresh_verdict_label()
+        self.win.stats_ops.refresh_stats()
+
+    # --------------------------------------------------------------- session UI
+    def set_running(self, running: bool) -> None:
+        savable = running and not self.win.session.no_dataset_session
+        # 에피소드 한 바퀴 버튼은 이제 툴바 고정 구획에만 있다 (2026-09-06:
+        # 좌측 Control 상자 제거 -- 같은 이름의 같은 동작이 두 벌이었다).
+        # 여는 조건은 그대로다.
+        for key in ("discard", "home", "match", "skip"):
+            self.win.tb_actions[key].setEnabled(running)
+        for key in ("save", "savefail"):
+            self.win.tb_actions[key].setEnabled(savable)
+        self.win.tb_actions["connect"].setEnabled(not running)
+        # 빠른 재개는 Connect 와 같은 조건이다 -- 그 끝이 Connect 라서.
+        # 노드를 기다리는 중이면 _quick_connect_when_ready 가 다시 잠근다.
+        self.win.tb_actions["quick"].setEnabled(not running)
+        self.win.tb_actions["disconnect"].setEnabled(running)
+        if not running:
+            self.win.session.gate_ok = None
+        # Start(기록 시작)는 게이트 자세 조건까지 본다 -- 아래 헬퍼가 전담.
+        self.update_start_controls(running)
+        self.win.instr_next_btn.setEnabled(running)
+        self.win.instr_tree.setEnabled(running)
+        self.win.no_dataset_check.setEnabled(not running)
+        self.win.task_box.setEnabled(not running and not self.win.no_dataset_check.isChecked())
+        # Configure 는 "세션 전 준비" 화면이다 (2026-09-06). 세션이 시작되면
+        # 준비 상자들은 어차피 전부 비활성이라 손댈 수 없으므로 감춘다 --
+        # 회색으로 남겨 두면 읽을 것만 늘고 아래 것들이 스크롤 밖으로 밀린다.
+        # 세션 중에도 손댈 수 있는 것(로봇 노드·카메라)은 그대로 둔다.
+        self.win.task_box.setVisible(not running)
+        self.win.session_box.setVisible(not running)
+        self.win.leader_box.setVisible(not running)
+        if not running:
+            self.win.gate_box.setVisible(False)
+        for w in (self.win.lang_edit, self.win.root_edit, self.win.agent_combo,
+                  self.win.wrist_combo, self.win.reset_pose_combo,
+                  self.win.grip_combo, self.win.eplen_edit, self.win.resetwait_edit):
+            w.setEnabled(not running)
+        # 툴바 토글 -- Connect 시점에 읽히는 값이라 세션 중에는 잠근다.
+        for act in (self.win.wall_check, self.win.match_check):
+            act.setEnabled(not running)
+        # 크롭 정렬은 에피소드 attrs 에 Connect 시점 스냅샷으로 찍히므로,
+        # 세션 중에 움직이면 가이드와 기록이 어긋난다. 잠근다.
+        for w in self.win._crop_widgets:
+            w.setEnabled(not running)
+        self.win.camera_ops.update_preview_btn()
+        # scene 세션에서만 지시문 목록 노출 (legacy 는 파일 하나 = task 하나)
+        self.win.instr_box.setVisible(running and self.win.session.scene_session)
+        if not running:
+            self.win.now_hint.setText(tr("연결하면 여기에 다음 할 일이 나옵니다."))
+            set_live_keys(self.win, "idle")
+        self.win.lights["robot"].set("ok" if running else "off",
+                                 tr("연결됨") if running else tr("끊김"))
+        if not running:
+            # 세션이 끝나면 리더 상태를 알 수 없다 (벽이 세션과 함께 산다).
+            self.win.lights["leader"].set("off", "-")
+
+    def update_start_controls(self, running: "bool | None" = None) -> None:
+        """툴바의 Start Teleop 은 게이트 상태에선 자세가 맞아야만 열린다.
+
+        자동 정렬이 켜져 있어도 같다 -- 정렬은 리더가 범위(GATE_RAD) 안에
+        들어와야 발동하므로, 그 전에 시작을 눌러도 워커가 거부만 한다.
+        버튼을 잠가서 '왜 안 되는지'를 누르기 전에 보이게 한다.
+        """
+        if running is None:
+            running = self.win.worker is not None
+        # _gate_ok 는 게이트 진입 직후 None("아직 모름") 일 수 있다 -- setEnabled 는
+        # bool 만 받으므로 여기서 확정한다.
+        ok = bool(running and (self.win.session.current_state != "gate" or self.win.session.gate_ok))
+        act = getattr(self.win, "tb_actions", {}).get("record")
+        if act is not None:
+            act.setEnabled(ok)
+
+    # ------------------------------------------------------------------ slot counter
+    def refresh_instruction(self) -> None:
+        """현재 (scene, instruction) 의 누계만 갱신한다 -- scene 파일 하나.
+
+        지시문 **목록**은 함께 갱신한다 -- 저장할 때마다 그 줄의 카운트가
+        올라야 하고, 세션 중에는 saver 캐시로 세므로 파일을 열지 않는다.
+
+        데이터셋 전체 진행률 표(Plan 탭)는 여기서 부르지 않는다. 잠깐 그렇게
+        했다가 되돌렸다: 이 함수는 저장·삭제·연결마다 불리는데 그 표는 계획의
+        모든 scene 파일을 연다. 데이터셋 16개 파일 기준 저장 한 번에 543ms 씩
+        메인 스레드가 멈췄다 (2026-09-04 실측). 그 표는 ② Configure 에 들어올
+        때(_set_activity)와 새로고침 버튼에서만 갱신한다.
+        """
+        self._refresh_instruction()
+        self.win.scene_planning.refresh_instruction_list()
+
+    def _refresh_instruction(self) -> None:
+        """현재 (scene, instruction) 의 수집 누계/계획 target 상시 표시 (#38).
+
+        GUI 를 켠 순간 누계가 아니라 HDF5 실측이다 -- GUI 재시작·에피소드
+        삭제·재판정이 전부 그대로 반영된다. 정본은 count_by_slot (usable =
+        quality_status success) 이고, 세션 중엔 파일이 잠겨 있으므로 saver 가
+        본내준 에피소드 캐시로 같은 규칙으로 센다 (ScenePlanningOps.
+        session_instruction_counts). 계획에 그 slot 이 없으면 target 없이 누계만
+        보여준다 (0/0 이나 7/None 은 안 낸다). HDF5 를 열기 때문에 이 함수는
+        scene/slot 선택·저장·삭제·세션 시작/종료 시점에만 부른다.
+        """
+        label = getattr(self.win, "instr_counter", None)
+        if label is None:
+            return  # 창 초기화 중 -- Configure 페이지가 Collect 보다 먼저 만들어진다
+        plan = self.win.scene_planning.current_plan()
+        if self.win.session.scene_session and self.win.worker is not None:
+            # 세션 중: 파일은 saver 가 h5py 로 잠그고 있으므로 다시 열지 않고
+            # 캐시로 센다. 현재 slot 은 워커가 받은 최신 값 (cmd_set_slot).
+            sid = self.win.scene_ops.session_scene_id()
+            iid = (getattr(self.win.worker, "_slot_instruction_id", "")
+                   or getattr(self.win.worker.cfg, "instruction_id", ""))
+            counts = self.win.scene_planning.session_instruction_counts()
+        else:
+            sid = self.win.scene_combo.currentData()
+            iid = self.win.scene_iid_edit.text().strip()
+            counts = {}
+            if sid is not None:
+                path = Path(self.win.root_edit.text().strip() or ".") / scene_filename(sid)
+                if path.exists():
+                    try:
+                        counts = count_by_slot(path)
+                    except BlockingIOError:
+                        # 다른 프로세스가 파일을 쓰는 중 -- 카운터를 비우고
+                        # 넘어간다 (scene/ops.py on_scene_selected 와 같은 처리).
+                        label.setText("")
+                        return
+                    except Exception:  # noqa: BLE001 -- GUI 는 죽지 않는다
+                        label.setText("")
+                        return
+        if not sid:
+            label.setText(tr("—"))
+            label.setStyleSheet("color:#888;")
+            return
+        usable = counts.get(iid, {}).get("usable", 0) if iid else 0
+        target = None
+        if plan is not None and iid:
+            for s in plan.slots_for(sid):
+                if s.instruction_id == iid:
+                    target = s.target
+                    break
+        sentence = getattr(self.win, "instr_sentence", None)
+        if sentence is not None:
+            if self.win.session.scene_session and self.win.worker is not None:
+                text = getattr(self.win.worker, "_slot_instruction", "") \
+                    or getattr(self.win.worker.cfg, "language_instruction", "")
+            else:
+                text = self.win.lang_edit.text().strip()
+            sentence.setText(text)
+        head = f"{sid} · {iid}" if iid else str(sid)
+        if target is not None:
+            # 목표 도달은 초록. 초과(11/10)도 그대로 -- 숫자는 정확히.
+            label.setText(f"{head} · {usable}/{target}")
+            label.setStyleSheet(
+                "color:#2ecc71;" if usable >= target else "color:#888;")
+        else:
+            label.setText(f"{head} · {usable}")
+            label.setStyleSheet("color:#888;")
+        self._refresh_header(sid, iid, usable, target)
+
+    def _refresh_header(self, sid, iid, usable, target) -> None:
+        """카메라 위 HUD 에 같은 숫자를 크게 -- 숫자는 위에서 이미 정했다."""
+        if getattr(self.win, "hud_counter", None) is None:
+            return
+        self.win.hud_counter.setText(
+            f"{usable} / {target}" if target is not None else str(usable))
+        self.win.hud_counter.setStyleSheet(
+            "color:#7bed9f;" if target is not None and usable >= target
+            else "color:#fff;")
+        self.win.hud_slot.setText(f"{sid} · {iid}" if iid else str(sid or ""))
+        # 지시문: 세션 중이면 워커가 쥔 것, 아니면 Configure 에서 고른 것.
+        if self.win.session.scene_session and self.win.worker is not None:
+            instr = getattr(self.win.worker, "_slot_instruction", "")
+        else:
+            instr = self.win.lang_edit.text().strip()
+        self.win.hud_instruction.setText(instr or tr("(지시문 없음)"))
+
+    # -------------------------------------------------------------- 빠른 재개
+    #: 빠른 재개가 노드를 기다려 주는 시간(초). FCI 연결 + 첫 read_once 는
+    #: 보통 5~10초인데, Desk 에서 잠금이 걸려 있으면 영영 안 온다.
+    QUICK_NODE_WAIT_S = 40.0
+
+    def on_quick_start(self) -> None:
+        """설정을 데이터에서 알아서 고르고 바로 연결까지 간다 (2026-09-06).
+
+        노드가 반사로 죽으면 조작자는 매번 같은 일을 손으로 반복했다 --
+        노드를 다시 띄우고, scene 을 고르고, slot 을 고르고, Connect.
+        고르는 규칙 자체는 늘 같았다(가장 최근 scene · 가장 낮은 미완 slot),
+        그래서 규칙을 코드에 두고 버튼 하나로 만든다.
+
+        고르지 **못하는** 경우에는 멈추고 이유를 말한다. 첫 scene 을 만드는
+        것이나 계획에 없는 새 문장을 쓰는 것은 사람의 판단이고, 그것까지
+        추측하면 엉뚱한 파일이 조용히 생긴다.
+        """
+        if self.win.worker is not None:
+            self.win.log("[빠른 재개] 이미 세션이 실행 중입니다.")
+            return
+        sid, iid, instr, note = self.win.scene_planning.pick_resume_slot()
+        if sid is None:
+            QMessageBox.information(self.win, tr("빠른 재개"), note)
+            self.win.log(f"[빠른 재개] 고를 수 없음 — {note}")
+            return
+        if self.win.no_dataset_check.isChecked():
+            # 연습 모드로 두면 파일을 안 만든다 -- 이어 찍으러 누른 버튼이
+            # 아무것도 안 남기는 것이 가장 나쁜 결과다.
+            self.win.no_dataset_check.setChecked(False)
+            self.win.log("[빠른 재개] 연습 모드를 껐습니다 (이어 찍기).")
+        if not self._select_scene(sid):
+            QMessageBox.warning(self.win, tr("빠른 재개"),
+                                tr("scene {s} 을 목록에서 찾지 못했습니다.").format(s=sid))
+            return
+        if not self._select_slot(iid, instr):
+            QMessageBox.warning(self.win, tr("빠른 재개"),
+                                tr("지시문 {i} 을 지시문 목록에서 찾지 못했습니다.").format(i=iid))
+            return
+        self.win.log(f"[빠른 재개] {sid} · {note} — {instr}")
+        self._quick_deadline = time.monotonic() + self.QUICK_NODE_WAIT_S
+        if not self._node_ready():
+            self.win.log("[빠른 재개] 로봇 노드가 응답하지 않습니다 — 띄웁니다.")
+            self.win.system.on_start_node()
+            if self.win.procs.node_process is None:
+                # 노드를 띄울 수 없다 (GELLO_NO_ROBOT_NODE=1 등). 40초를
+                # 기다려 봐야 달라질 것이 없으므로 바로 말한다.
+                self._quick_deadline = None
+                QMessageBox.warning(self.win, tr("빠른 재개"),
+                                    tr("로봇 노드를 띄울 수 없습니다 — 로그를 확인하세요."))
+                return
+        self._quick_connect_when_ready()
+
+    def _select_scene(self, sid: str) -> bool:
+        combo = self.win.scene_combo
+        for _try in range(2):
+            for i in range(combo.count()):
+                if combo.itemData(i) == sid:
+                    combo.setCurrentIndex(i)   # on_scene_selected 가 slot 목록을 다시 채운다
+                    return True
+            # 목록이 낡았을 수 있다 (다른 창에서 파일이 생겼다든지)
+            self.win.scene_ops.refresh_scene_combo()
+        return False
+
+    def _select_slot(self, iid: str, instr: str) -> bool:
+        """시작 지시문을 그 값으로 맞춘다.
+
+        고르는 장치(드롭다운)는 없어졌으므로 값을 직접 쓴다 -- 그 값은
+        pick_resume_slot 이 계획에서 뽑은 것이라 계획 밖일 수 없다.
+        """
+        self.win.scene_iid_edit.setText(iid)
+        self.win.lang_edit.setText(instr)
+        self.win.scene_planning.refresh_start_instruction()
+        return True
+
+    def _node_ready(self) -> bool:
+        """노드가 요청을 받을 준비가 됐나.
+
+        stdout 표시가 정본이고(우리가 띄운 노드), 그 줄을 못 본 노드
+        (마법사에게서 이어받았거나 터미널에서 손으로 띄운 것)는 짧은 관측
+        요청으로 보충한다. 250ms 는 창이 멈춘 것으로 보이지 않을 만큼 짧고,
+        떠 있는 노드가 답하기에는 충분하다.
+        """
+        if self.win.procs.node_ready:
+            return True
+        proc = self.win.procs.node_process
+        if proc is not None and proc.state() == QProcess.ProcessState.NotRunning:
+            return False
+        # proc is None 이어도 물어본다 -- 터미널에서 손으로 띄운 노드가 있을
+        # 수 있고, Connect 는 그 경우를 이미 지원한다. 여기서만 막으면
+        # 빠른 재개가 그 워크플로에서 쓸모없어진다.
+        node = load_station().node
+        try:
+            probe_observation(node.host, int(node.port), timeout_ms=250)
+        except Exception:  # noqa: BLE001 -- 아직 안 떴다: 정상 경로
+            return False
+        self.win.procs.node_ready = True
+        return True
+
+    def _quick_connect_when_ready(self) -> None:
+        """노드가 응답할 때까지 기다렸다가 연결한다 (창은 계속 움직인다).
+
+        여기서 block 하지 않는 이유는 on_connect 의 미리보기 대기와 같다 --
+        멈춘 창은 조작자가 무엇을 기다리는지 알 수 없게 만든다.
+        """
+        if self._quick_deadline is None or self.win.worker is not None:
+            return
+        act = self.win.tb_actions.get("quick")
+        if self._node_ready():
+            self._quick_deadline = None
+            if act is not None:
+                act.setEnabled(True)
+            self.win.statusBar().clearMessage()
+            self.win.log("[빠른 재개] 노드 준비 완료 — 연결합니다.")
+            self.on_connect()
+            return
+        if time.monotonic() > self._quick_deadline:
+            self._quick_deadline = None
+            if act is not None:
+                act.setEnabled(True)
+            self.win.statusBar().clearMessage()
+            self.win._alert(tr("빠른 재개"),
+                            tr("로봇 노드가 {s:.0f}초 안에 응답하지 않았습니다.\n\n"
+                               "FR3 Desk 에서 잠금이 풀려 있고 FCI 가 켜져 있는지 "
+                               "확인한 뒤 다시 누르세요. 노드 로그는 Log 탭에 "
+                               "있습니다.").format(s=self.QUICK_NODE_WAIT_S))
+            return
+        if act is not None:
+            act.setEnabled(False)
+        self.win.statusBar().showMessage(
+            tr("빠른 재개 — 로봇 노드를 기다리는 중... (준비되면 자동으로 연결합니다)"),
+            1000)
+        QTimer.singleShot(500, self._quick_connect_when_ready)
+
+    # ------------------------------------------------------------------ connect
+    def on_connect(self) -> None:
+        if self.win.worker is not None:
+            self.win.log("[연결] 이미 세션이 실행 중입니다.")
+            return
+        no_dataset = self.win.no_dataset_check.isChecked()
+        scene_on = not no_dataset  # scene-v1 이 유일한 수집 방식 (legacy 제거)
+        lang = self.win.lang_edit.text().strip()
+        # scene 설정 검증은 _scene_config_from_ui 가, 파일 생성/이어찍기 판정은
+        # SceneWriter 가 한다 (파일명은 scene_id 에서 나오므로 이름 중복 검사
+        # 자체가 없다).
+        scene_meta = None
+        scene_sid = None
+        scene_resume = False
+        if scene_on:
+            scene_meta, scene_sid, scene_resume, err = self.win.scene_ops.scene_config_from_ui()
+            if err is not None:
+                QMessageBox.warning(self.win, tr("Scene 설정"), err)
+                return
+            task = scene_meta.scene_id if scene_meta is not None else scene_sid
+        else:
+            # 연습 모드: writer 에 닿지 않지만 WorkerConfig 라벨용 이름은 필요.
+            task = "practice"
+        resume = False  # legacy 이어찍기 제거 -- scene 은 scene_resume 이 담당
+        agent, wrist = self.win.camera_ops.combo_serial(self.win.agent_combo), self.win.camera_ops.combo_serial(self.win.wrist_combo)
+        if not agent or not wrist:
+            QMessageBox.warning(self.win, tr("카메라 선택 필요"),
+                                tr("Agent / Wrist 카메라를 모두 선택하세요."))
+            return
+        if agent == wrist:
+            QMessageBox.warning(self.win, tr("카메라 중복"),
+                                tr("Agent와 Wrist에 같은 카메라가 선택되었습니다."))
+            return
+        # 노드가 죽었거나 다른 구성으로 떠 있으면 여기서 맞춘다. worker 는
+        # 장치를 직접 열지 않으므로(노드 구독) 이게 유일한 카메라 준비 단계다.
+        if self.win.cameras.camera_node_user_stopped:
+            # 수동 종료 상태에서 몰래 되살리면 외부 프로그램(VLA)이 쥔
+            # 카메라를 노드가 빼앗으려 든다 -- 명시적 재시작을 요구한다.
+            QMessageBox.warning(self.win, tr("카메라 노드 종료 상태"),
+                                tr("카메라 노드가 수동으로 종료되어 있습니다 "
+                                   "(외부 프로그램용 카메라 해제).\n"
+                                   "Process 메뉴 > 카메라 노드 재시작 후 다시 "
+                                   "연결하세요."))
+            return
+        self.win.camera_ops.ensure_camera_node()
+        try:
+            ep_len = float(self.win.eplen_edit.text())
+            reset_wait = float(self.win.resetwait_edit.text())
+        except ValueError:
+            QMessageBox.warning(self.win, tr("입력 오류"), tr("길이/대기는 숫자여야 합니다."))
+            return
+
+        # 미리보기는 이제 세션 나이 살아 둔다 (2026-09-01). 예전에는 여기서
+        # 껐다 -- worker 가 카메라 장치를 직접 열고 있었고, RealSense 파이프라인을
+        # 두 번 열 수 없어서였다. 2026-08-25 3-프로세스 분리 이후로는 장치를
+        # 카메라 노드가 독점하고 미리보기도 worker 도 그냥 ZMQ 구독자다
+        # (PUB/SUB 는 팬아웃이라 경쟁이 없다). 끄면 오히려 게이트 중 화면이
+        # 노드 속도(30 fps)에서 수집 루프 속도로 떨어지고, 게이지가 그 프레임
+        # 뒤에 줄을 서서 같이 느려졌다.
+        #
+        # depth(포인트클라우드)는 사정이 다르다 -- 그건 여전히 장치를 직접
+        # 여는 경로라 여기서 놓아야 한다.
+        self.win.depth_ops.stop_cloud(restore_previews=False)
+        if self.win.camera_ops.previews_busy():
+            if self.win._connect_wait_since is None:
+                self.win._connect_wait_since = time.monotonic()
+                self.win.log("[카메라] 미리보기 정리를 기다리는 중 -- 정리되면 자동으로 연결합니다.")
+            waited = time.monotonic() - self.win._connect_wait_since
+            if waited < 12.0:
+                self.win.tb_actions["connect"].setEnabled(False)
+                self.win.stats_ops.connect_progress(waited)
+                QTimer.singleShot(200, self.win.collection.on_connect)
+                return
+            self.win._connect_wait_since = None
+            self.win.tb_actions["connect"].setEnabled(True)
+            self.win.statusBar().clearMessage()
+            self.win._alert(tr("카메라 해제 지연"),
+                        tr("미리보기가 카메라를 12초 넘게 붙잡고 있습니다.\n\n"
+                           "Camera 메뉴 > 미리보기 중지 후 다시 시도하세요. 계속되면 "
+                           "USB 케이블을 다시 꽂아야 합니다 -- 손목 D405는 USB 2 링크라 "
+                           "접촉이 나쁘면 이렇게 됩니다."))
+            return
+        self.win._connect_wait_since = None
+        self.win.statusBar().clearMessage()
+        cfg = WorkerConfig(
+            task_name=task,
+            language_instruction=lang or task.replace("_", " "),
+            data_root=self.win.root_edit.text().strip(),
+            grip=self.win.grip_combo.currentText(),
+            reset_pose=self.win.reset_pose_combo.currentText(),
+            max_episode_seconds=ep_len,
+            reset_wait_seconds=reset_wait,
+            enable_wall=self.win.wall_check.isChecked(),
+            auto_match_pose=self.win.match_check.isChecked(),
+            resume=resume,
+            no_dataset=no_dataset,
+            scene_metadata=scene_meta,
+            scene_id=scene_sid,
+            scene_resume=scene_resume,
+            session_version=self.win.schema_version,
+            instruction_id=(self.win.scene_iid_edit.text().strip() if scene_on else ""),
+            collector=(self.win.collector_edit.text().strip() if scene_on else ""),
+            agent_camera_serial=agent,
+            wrist_camera_serial=wrist,
+            schema=self.win.schema,
+            # 스냅샷(깊은 복사): 세션 중 슬라이더가 잠기긴 하지만, 기록될 값이
+            # GUI 상태와 얽혀 있지 않아야 한다.
+            crop_params={r: dict(v) for r, v in self.win.cameras.crop_params.items()},
+        )
+        for key, value in (("language", lang),
+                           ("data_root", cfg.data_root),
+                           ("agent_serial", agent), ("wrist_serial", wrist),
+                           ("collector", cfg.collector),
+                           ("instruction_id", cfg.instruction_id)):
+            if value:
+                self.win._recents.add(key, value)
+        # scene 세션 표시 + Collect 페이지 slot 패널 초기값
+        self.win.session.scene_session = scene_on
+        if scene_on:
+            # 지시문 칸(ID/문장)은 없어졌다 -- 목록이 그 자리다. 세션이
+            # 시작하면 목록을 채우고 현재 줄을 표시한다.
+            self.win.scene_planning.refresh_instruction_list()
+            # 오른쪽 배치도 -- 이어찍기는 metadata 가 파일에만 있으므로 워커가
+            # 파일을 쥐기 전인 지금 읽어 둔다.
+            md = scene_meta
+            if md is None and scene_sid:
+                try:
+                    md = read_scene_metadata(
+                        Path(cfg.data_root) / scene_filename(scene_sid))
+                except Exception:  # noqa: BLE001
+                    md = None
+            self.win.scene_ops.set_right_scene(md, scene_sid)
+        else:
+            self.win.scene_ops.set_right_scene(None)
+
+        w = CollectionWorker(cfg)
+        self.win.session.no_dataset_session = no_dataset
+        # The right panel's serials were only filled by _restart_previews, so
+        # they blanked out for the whole session -- exactly when knowing which
+        # camera is which matters most.
+        self.win.right_fields["cam_agent"].setText(agent)
+        self.win.right_fields["cam_wrist"].setText(wrist)
+        self.win.lights["camera"].set("ok", tr("세션"))
+        self.win.ep_progress.setMaximum(max(1, int(ep_len * cfg.fps)))
+        self.win._connect_worker(w)
+        self.set_running(True)
+        self.win._set_activity("collect")
+        if no_dataset:
+            self.win.log("[연결] 연습 모드 — 파일을 만들지 않습니다. 저장은 버려집니다.")
+        else:
+            self.win.log(f"[연결] 세션 시작: task={task!r}")
+        w.start()
+
+    def on_disconnect(self) -> None:
+        if self.win.worker is None:
+            return
+        self.win.log("[연결] 세션 종료를 요청했습니다...")
+        self.win.worker.cmd_quit()
+
+    # ----------------------------------------------------------------- worker slots
+    def on_state(self, state: str) -> None:
+        if state == "recording" and self.win.session.current_state != "recording":
+            # 표시는 에피소드 단위다. 새 기록이 시작되면 항상 성공에서 출발한다.
+            # 직전 에피소드 판정은 이 시점부터 더 이상 뒤집을 수 없다 -- 리셋
+            # 구간이 끝났고, 이제 '직전'이 무엇인지 헷갈릴 수 있다.
+            self.win.session.last_saved_name = None
+            self.win.session.pending_verdict_toggle = False
+            self.win.verdict_label.setText("")
+        if state == "gate" and self.win.session.current_state != "gate":
+            # 새 게이트: 첫 gate_status 가 올 때까지 시작을 잠근다. None 은
+            # '아직 모름' -- _on_gate 가 변화가 있을 때만 그리므로, 여기서
+            # False 로 두면 첫 상태가 False 일 때 라벨이 안 갱신된다.
+            self.win.session.gate_ok = None
+        self.win.session.current_state = state
+        self.update_start_controls()
+        # 상태 **이름**은 HUD 띠가 배경색과 함께 말한다 -- 왼쪽에 같은 글자를
+        # 또 두지 않는다 (2026-09-06). 왼쪽이 맡는 것은 "그래서 지금 무엇을
+        # 하라"는 한국어 안내와, 지금 살아 있는 키다.
+        set_header_state(self.win, state)
+        self.win.now_hint.setText(self.win.SHORTCUT_HINTS.get(state, ""))
+        set_live_keys(self.win, state)
+        # 델타 바가 살아 있는 상태에서만 보여 준다 -- 그 밖에서는 갱신되지
+        # 않아 낡은 값이 남는다.
+        self.win.gate_box.setVisible(state == "gate")
+        # 단계와 기록 여부는 헤더 띠가 말한다 (배경색 + 상태 글자). 상태바와
+        # 우측 패널에 같은 것을 또 적지 않는다 (2026-09-06).
+
+    #: 리더암 벽의 match_state -> (표시등 색, 문구). 정렬 보조가 과부하로
+    #: 포기한 blocked 만 빨강이다 -- 나머지는 정상 진행 단계다.
+    LEADER_LIGHTS = {
+        "idle": ("ok", "대기"),
+        "armed": ("ok", "정렬 준비"),
+        "pulling": ("busy", "정렬 중"),
+        "done": ("ok", "정렬됨"),
+        "blocked": ("bad", "과부하로 정렬 포기"),
+    }
+
+    def on_leader_state(self, state: str) -> None:
+        """리더암 벽 상태를 상태바에 옮긴다 (worker.leader_state)."""
+        color, text = self.LEADER_LIGHTS.get(state, ("off", state or "-"))
+        self.win.lights["leader"].set(color, tr(text))
+
+    def on_gate(self, leader, follower, all_ok) -> None:
+        if leader is None or follower is None:
+            return
+        d = np.asarray(leader, dtype=float) - np.asarray(follower, dtype=float)
+        for i, bar in enumerate(self.win.delta_bars):
+            if i < len(d):
+                bar.update_delta(float(d[i]), GATE_RAD)
+        # 아래는 전부 all_ok 가 '바뀔 때만' 의미가 있는 일이다. 게이트는
+        # 초당 45번 오는데, 매번 라벨 텍스트·스타일시트를 다시 쓰고 버튼
+        # 활성 상태를 재계산하면 -- setStyleSheet 은 Qt 가 스타일을 통째로
+        # 다시 파싱하게 만드는 호출이다 -- GUI 스레드가 그 뒤에 밀려 바가
+        # 손을 늦게 따라온다. 워커는 45 Hz 로 멀쩡히 본내고 있었다 (실측
+        # 0.7~2.6 ms/틱), 병목은 이쪽이었다 (2026-09-01).
+        if all_ok != self.win.session.gate_ok:
+            self.win.session.gate_ok = all_ok
+            self.win.gate_label.setText(tr("자세 일치 — 시작 가능") if all_ok
+                                    else tr("리더를 팔로워 자세에 맞추세요"))
+            self.win.gate_label.setStyleSheet(
+                "color:#2ecc71;" if all_ok else "color:#e67e22;")
+            # 정렬 버튼은 자세와 무관하게 열린다 (2026-09-01) -- 아래
+            # _set_running 이 세션 단위로 켜고 끈다. 잠기는 것은 '텔레옵
+            # 시작' 쪽뿐이다.
+            self.update_start_controls()
+            if self.win.session.current_state == "gate":
+                self.win.now_hint.setText(
+                    tr("자세가 맞았습니다 — Space 로 시작하세요") if all_ok
+                    else tr("리더를 팔로워 자세에 맞추세요 (Enter: 자동 정렬)"))
+
+    def on_pose_match(self, err, done) -> None:
+        self.win.gate_label.setText(
+            tr("자동 정렬 완료") if done else tr("자동 정렬 중... 오차 {e:.3f} rad").format(e=err))
+
+    def on_progress(self, n_frames, seconds) -> None:
+        self.win.ep_progress.setValue(n_frames)
+        self.win.right_fields["frames"].setText(f"{n_frames} ({seconds:.1f}s)")
+
+    def on_saved(self, name, n_frames) -> None:
+        self.win.stats_ops.bump("saved")
+        self.win.stats_ops.bump("frames", n_frames)
+        if self.win.session.pending_success is not None:
+            self.win.stats_ops.bump("success" if self.win.session.pending_success else "failed")
+            self.win.session.pending_success = None
+        self.win.session.last_saved_name = name
+        if self.win.session.pending_success is not None:
+            self.win.session.last_saved_success = self.win.session.pending_success
+        if self.win.session.pending_verdict_toggle:
+            # 저장 전에 눌러 둔 뒤집기를 이제 반영한다.
+            self.win.session.pending_verdict_toggle = False
+            self.win.session.last_saved_success = not self.win.session.last_saved_success
+            self.win.worker.cmd_set_episode_success(name, self.win.session.last_saved_success)
+        self.win._refresh_verdict_label()
+        self.win.log(f"[저장] {name} ({n_frames} frames)")
+        self.win.right_fields["episode"].setText(name)
+        self.win.dataset_ops.update_dataset_panel()
+        self.win.stats_ops.refresh_stats()
+        # 방금 찍은 것이 분석에 빠져 있다고 표시만 해 둔다. 실제 스캔은
+        # 세션이 끝난 뒤에 돈다 -- 기록 중인 파일은 saver 가 쥐고 있어서
+        # 지금 읽으면 그 파일만 통째로 빠진 통계가 나온다
+        # (StatsOps.auto_refresh_analysis).
+        self.win.stats_ops.mark_stats_stale()
+        self.refresh_instruction()
+
+    def on_save_status(self, text: str) -> None:
+        """Background-save progress. Empty string means idle."""
+        self.win.save_status_label.setText(text)
+        self.win.save_status_label.setStyleSheet(
+            "color:#f39c12;" if text else "color:#888;")
+
+    def on_node_status(self, ok, why: str = "") -> None:
+        """로봇 노드 응답 여부를 상태표시등에 반영한다.
+
+        ``why`` 는 워커가 잡은 예외 그대로다 -- 반사의 이름이 그 안에 있다.
+        점 위에 얹어 두면 로그를 거슬러 올라가지 않고도 "왜 빨간가"에 답이
+        된다 (2026-09-06 조작자 지적: 로그에 반사 종류가 안 보였다).
+
+        on_discarded 와 같이 Phase 4-8 에서 창에서 지워지고 옮겨지지 않았다
+        (2026-09-04 복구). 노드가 처음 응답할 때 죽었을 것이다.
+        """
+        light = self.win.lights["node"]
+        if ok:
+            light.set("ok", tr("정상"))
+            light.setToolTip("")
+            return
+        # 제어 루프가 죽은 것과 프로세스가 없는 것은 다른 사건이라 다르게
+        # 적는다 -- 고치는 방법이 다르다 (worker._node_down_hint 와 같은 기준).
+        dead = CONTROL_DEAD_MARK in why
+        light.set("bad", tr("제어 루프 다운") if dead else tr("응답 없음"))
+        light.setToolTip(why or tr("이유 불명 — Log 탭의 [노드] 줄을 보세요"))
+
+    def on_discarded(self, n_frames) -> None:
+        """폐기된 테이크. 저장하지 않으므로 통계에만 남긴다.
+
+        Phase 4-8 이 창에서 이 메서드를 지우면서 여기로 옮기지 않아, 조작자가
+        테이크를 버릴 때마다 AttributeError 로 죽었다 (2026-09-04 복구).
+        """
+        self.win.stats_ops.bump("discarded")
+        self.win.log(f"[버림] {n_frames} frames")
+        self.win.stats_ops.refresh_stats()
+
+    def on_countdown(self, seconds) -> None:
+        # 자동 진행이 없어졌으므로 카운트다운이 아니라 경과 시간이다.
+        self.win.now_hint.setText(
+            tr("물체를 제자리에 놓으세요 — {s:.0f}초 경과. Enter: 계속").format(s=seconds))
+
+    def on_fatal(self, msg) -> None:
+        self.win.log(f"[치명적 오류] {msg}")
+        # 서보 과토크 보호(overload 0x20 등 hardware error)로 죽은 세션은
+        # GUI 재시작이 아니라 서보 Reboot 으로만 복구된다 -- 그 툴이 있는
+        # 위치를 오류 대화상자에서 바로 알려준다 (#37B).
+        if "hardware error" in msg:
+            msg += tr("\n\n서보가 토크 과부하로 잠겼습니다. 세션을 종료한 뒤 "
+                      "Process > 리더암 토크 과부하 잠금 해제 를 실행하세요.")
+        self.win._alert(tr("오류"), msg, QMessageBox.Icon.Critical)
+
+    def on_connected(self, n_episodes, path) -> None:
+        # 세션이 붙었다 = 노드가 살아 응답했다 (연결 검증이 노드 경유).
+        self.win.lights["node"].set("ok", tr("정상"))
+        # 연결되면 카메라 화면으로 따라간다. 버튼을 누른 시점이 아니라 여기인
+        # 이유는, 연결이 미리보기 정리를 기다리거나 실패할 수 있기 때문이다 --
+        # 그때 Live 로 옮겨두면 아무것도 안 나오는 탭을 보게 된다.
+        show_center_tab(self.win, "live")
+        # 기록 외 단계에서는 worker 가 카메라를 읽지 않으므로(게이지를 빠르게
+        # 유지하기 위해 -- _emit_gate_status 참고) 미리보기가 그 구간의 유일한
+        # 영상 공급원이다. 꺼져 있으면 자세를 맞추는 동안 화면이 빈다.
+        if not (self.win.agent_preview or self.win.wrist_preview):
+            self.win.camera_ops.restart_previews()
+        # 이번 task 카운터는 여기서 0 으로 돌아간다(누적은 그대로). 연습 모드도
+        # 마찬가지다 -- NullTaskWriter 도 저장을 받아 넘기므로 카운터는 움직인다.
+        self.win.session.counters = _new_stats()
+        # 이력 한 줄의 시작 시각. counters["t0"] 와 같은 순간이지만 그쪽은
+        # monotonic 이라 사람이 읽을 수 없다 (collection_history).
+        self.win.session.started_iso = now_iso()
+        self.win.session.history_written = False
+        self.refresh_instruction()
+        if self.win.session.no_dataset_session:
+            # NullTaskWriter has no real path; claiming one here would make the
+            # dataset tree think a file is locked by this session.
+            self.win.dataset_ops.update_dataset_panel()
+            self.win.log("[연결] 연습 모드로 연결되었습니다.")
+            return
+        self.win.session.active_file_path = Path(path)
+        self.win.session.episodes_at_connect = int(n_episodes)
+        # 직전 세션에서 삭제가 실패해 남았을 수 있는 대기 건수를 청산 --
+        # 새 세션의 첫 목록 갱신이 엉뚱한 무효화를 하지 않게.
+        self.win._pending_scene_deletes = 0
+        if self.win.session.scene_session:
+            self.win.scene_planning.refresh_instruction_list()
+        self.win.dataset_ops.update_dataset_panel()
+        self.win.log(f"[연결] 파일: {path} (기존 {n_episodes}개 에피소드)")
+        self.win.dataset_ops.refresh_dataset_tree()
+
+    def on_worker_finished(self, worker=None) -> None:
+        """워커 run()이 어떤 경로로든 끝나면 세션을 해제한다.
+
+        정상 종료(요약 후), 연결 실패 조기 return, 예외 -- 전부 여기로 온다.
+        summary보다 늦게 도착하므로(둘 다 큐잉, run() 안에서 summary가 먼저
+        emit) 로그 순서도 자연스럽다.
+        """
+        if worker is not None and self.win.worker is not worker:
+            # 이미 다른 세션이 시작된 뒤 도착한 옛 워커의 신호 -- 무시.
+            #
+            # 예전에는 self.sender() 로 보낸 쪽을 알아냈다. 그건 QObject 의
+            # 메서드라, 이 메서드가 창에서 평범한 Ops 클래스로 옮겨온 뒤로는
+            # AttributeError 로 죽었다 (2026-09-04, 세션 종료가 안 됨).
+            # 연결할 때 그 워커를 인자로 묶어 넘기는 쪽이 명시적이고, 클래스가
+            # QObject 인지에 기대지 않는다.
+            return
+        # worker 를 놓기 **전에** 이력을 남긴다 -- 이 세션이 무슨 scene 을
+        # 찍었는지는 worker 가 들고 있다. 연습 모드(파일 없음)는 남기지
+        # 않는다: 저장 카운터가 0 이라 record_session 이 알아서 건너뛴다.
+        self.win.stats_ops.record_session()
+        self.win.worker = None
+        self.win.session.no_dataset_session = False
+        self.win.session.active_file_path = None
+        self.win.session.active_episode_cache = None
+        was_scene = self.win.session.scene_session
+        self.win.session.scene_session = False
+        self.win.scene_ops.set_right_scene(None)
+        self.win.collection.set_running(False)
+        self.win.dataset_ops.refresh_dataset_tree()
+        self.refresh_instruction()
+        if was_scene:
+            # 세션이 만든/키운 scene 파일이 목록·slot 현황에 반영되게.
+            self.win.scene_ops.refresh_scene_combo()
+        self.win.camera_ops.restart_previews()
+        # 세션 중에는 기록 중인 파일을 열 수 없어 미뤄 둔 재분석을 지금 돈다
+        # (파일이 풀렸다). 보고 있는 화면이 아니면 auto_ 쪽이 건너뛴다.
+        self.win.stats_ops.auto_refresh_analysis()
+        if self.win.cameras.depth_consumer is not None:
+            # 세션 동안 Depth/Point Cloud 탭에 머물러 있었다면 스트림을 다시
+            # 올린다 (세션 중엔 안난만 보였다). 미리보기가 뜨는 시간을 준다.
+            QTimer.singleShot(600, lambda: (
+                self.win.depth_ops.start_cloud() if self.win.worker is None
+                and self.win.cameras.depth_consumer is not None else None))

@@ -1,0 +1,16 @@
+# Robot node only (scripts/launch/launch_nodes.py and the scripts/ CLIs).
+# Install into the interpreter that has pylibfranka (here: ~/pylibfranka-venv, py3.10).
+#
+# pylibfranka itself is not installable from PyPI for this project — build it
+# from source with patches/pylibfranka-0.21-gil-release.diff first.
+# See patches/README.md.
+#
+# keep each item alphabetical
+
+dynamixel-sdk
+numpy
+pyrealsense2
+PyYAML
+pyzmq
+termcolor
+tyro

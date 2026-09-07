@@ -1,0 +1,124 @@
+# 스테이션 설정 -- 이 물리적 셋업이 무엇인가.
+#
+# 다른 스테이션을 추가하려면 이 파일을 복사해서 configs/stations/<이름>.yaml 로
+# 두고 GELLO_STATION=<이름> 으로 고른다. 기본값은 knu-eng7.
+# 읽는 코드는 mstack/config/station.py.
+#
+# 여기 넣는 것: 하드웨어를 바꾸지 않는 한 변하지 않는 값.
+# 여기 넣지 않는 것:
+#   - 무엇을 저장할지          -> ~/libero_gui_logs/dataset_schema.json
+#   - 슬라이더로 튜닝하는 크롭 -> ~/libero_gui_logs/crop_params.json (아래는 초기값)
+#   - 리더암 조인트 오프셋/부호 -> mstack/agents/gello_agent.py PORT_CONFIG_MAP
+#     (USB 시리얼로 키가 잡힌 장치 지문 테이블이라 스테이션이 아니라 장치에 속한다)
+
+name: knu-eng7
+description: KNU 공대 7호관 FR3 + GELLO 수집 스테이션
+
+robot:
+  kind: fr3
+  # FCI 주소이지 정책 서버 주소가 아니다. 이 기계의 실제 값은
+  # knu-eng7.local.yaml (git 미추적) 에 있다. Franka 출고 기본값은
+  # 172.16.0.2 이고, 바꾸지 않았다면 그대로 적으면 된다.
+  ip: ""
+  reset_pose: libero      # mstack/robots/franka_fr3.py FR3_RESET_POSES
+
+node:
+  # launch_nodes.py 가 여는 ZMQ REP 소켓. GUI 워커가 REQ 로 붙는다.
+  host: 127.0.0.1
+  port: 6001
+  # pylibfranka 는 이 venv 에만 있다. GUI 를 돌리는 인터프리터(lerobot-venv)로는
+  # 노드를 띄울 수 없어서 경로를 따로 들고 있어야 한다.
+  python: ~/pylibfranka-venv/bin/python
+
+leader:
+  # null = /dev/serial/by-id 에서 FTDI 장치를 자동 탐색 (지금까지의 동작).
+  # 여러 리더암이 동시에 꽂히면 아래를 명시한다. FR3 빌드는
+  #   /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTBIN516-if00-port0
+  port: null
+
+cameras:
+  # 키는 cam id (화면에서 부르는 이름), role 은 기록에 남는 이름이다.
+  # serial 은 폴백일 뿐 -- 실제 바인딩의 정본은 데이터셋의
+  # dataset-identity.json 이다 (2026-09-05 3층 분리).
+  cam1:
+    role: agent
+    serial: ""            # knu-eng7.local.yaml
+    model: D455
+    width: 640
+    height: 480
+    fps: 30
+  cam2:
+    role: wrist
+    serial: ""            # knu-eng7.local.yaml
+    model: D405
+    width: 640
+    height: 480
+    fps: 30
+    # D405 는 640x480 에서 30fps 가 상한이다. 60 을 넣으면 librealsense 가
+    # 스트림 설정을 거부하고, 그게 "device busy" ConnectionError 로 나온다.
+
+crop:
+  # 정사각 크롭 초기값. GUI Layout 패널에서 조정한 값은 crop_params.json 에
+  # 저장되어 이걸 덮어쓰고, 실제 사용된 값은 에피소드마다 HDF5
+  # attrs["crop_params"] 로 남는다.
+  agent:
+    zoom: 1.2
+    x: 0
+    y: 0
+  wrist:
+    zoom: 1.0
+    # D405 의 RGB 는 좌측 이미저에서 나오고 베이스라인이 18.2mm 라, 프레임
+    # 한가운데를 크롭하면 손가락이 왼쪽으로 치우친다. +31px @640 은 에피소드
+    # 첫 프레임 247장의 핑거 패드 위치를 연결성분으로 검출해 잰 값이고
+    # (+16.61px @256, sigma 1.88), fx*d/Z 로도 교차 확인했다.
+    x: 31
+    y: 0
+
+policy:
+  # VLA 정책 추론 서버 (apps/fr3_policy_client.py 가 붙는 곳). 로봇이 아니라
+  # 체크포인트를 들고 도는 GPU 머신이다. 이 저장소는 공개라 기관 호스트를
+  # 적어 두지 않는다 -- 각자 자기 것을 여기 적거나 환경변수로 넘긴다:
+  #   MSTACK_POLICY_SERVER=http://<host>:<port>
+  # 또는 python apps/fr3_policy_client.py --server http://<host>:<port>
+  url: ""
+
+recording:
+  # 텔레옵/기록 루프 주파수(Hz). 카메라 fps 와 다르다 -- 카메라는 30fps 로
+  # 자유 실행되고 루프가 20Hz 로 최신 프레임만 집어간다.
+  fps: 20
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 아래는 기록용이다. mstack/config/station.py 는 이 블록을 **읽지 않는다**.
+#
+# 위쪽 값들은 코드가 읽어서 하드웨어를 구성하므로 틀리면 즉시 고장난다 --
+# 그래서 썩지 않는다. 아래 값들은 아무도 읽지 않아서 틀려도 티가 안 나므로,
+# 설정이 아니라 문서로 둔다. 하드웨어를 바꿨을 때 사람이 손으로 고치면 되고,
+# 지금 값이 궁금하면 언제든 실측할 수 있다:
+#
+#   Franka        : Desk 웹 UI > Dashboard
+#   카메라/링크    : python scripts/check/check_cameras.py
+#   파이썬 패키지  : pip show pylibfranka / pyrealsense2
+#
+# 기록 시점 2026-08-07.
+info:
+  robot:
+    model: Franka Research 3
+    system_image: "5.10.0"          # Desk > Control > System image
+    control_hw_version: 4
+    arm_hw_version: 1
+    hand: Franka Hand
+    # 일련번호·네트워크·등록 계정은 knu-eng7.local.yaml 에 있다 (git 미추적).
+
+  leader:
+    model: GELLO (FR3 build)
+    servos: XL330-M288-T x 8        # 7 관절 + 그리퍼 트리거
+    calibrated: 2026-07-15          # mstack/agents/gello_agent.py PORT_CONFIG_MAP
+
+  firmware:
+    agent_camera: "5.13.0.55"       # D455
+    wrist_camera: "5.17.0.10"       # D405
+
+  client:
+    pylibfranka: "0.21.2"           # FCI 프로토콜 v10. GIL-release 패치 소스 빌드
+    pyrealsense2: "2.56.5.9235"

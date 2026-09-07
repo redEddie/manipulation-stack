@@ -1,0 +1,29 @@
+# GUI, library, tests, conversion — everything except the robot node.
+# Install into the interpreter that runs apps/ (here: ~/lerobot-venv, py3.13).
+#
+# NOT here, on purpose:
+#   pylibfranka  — must be built from source with patches/pylibfranka-0.21-gil-release.diff.
+#                  The PyPI wheels never release the GIL, which aborts the 1 kHz
+#                  control loop. It belongs to the robot-node interpreter only
+#                  (here: ~/pylibfranka-venv). See patches/README.md.
+#   tyro         — needed by the robot node and the scripts/ CLIs, which run in
+#                  that same separate interpreter. Install it there.
+#
+# keep each item alphabetical
+
+dynamixel-sdk
+h5py
+huggingface_hub
+lerobot
+numpy
+opencv-python
+ortools
+pandas
+Pillow
+PyQt6
+pyrealsense2
+PyYAML
+pyzmq
+requests
+setuptools
+termcolor

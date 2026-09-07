@@ -1,0 +1,87 @@
+# 소품 인벤토리 -- scene metadata 의 objects/distractors 에 들어가는
+# instance ID 의 정본. 읽는 코드는 mstack/scene/props.py.
+#
+# 규칙 (Notion 프로토콜 §3):
+#   - 물리적 instance 마다 안정적인 ID. 같은 색 두 개(파란 컵 x2, 하얀 컵 x2)를
+#     구분하는 것이 이 파일의 존재 이유다.
+#   - ID 는 소품 바닥면 라벨과 일치해야 한다 (카메라에 안 잡히는 곳에 부착).
+#   - 교체 시 원칙은 같은 ID 유지. 학습 이미지에서 육안으로 구분되는 차이
+#     (색·광택·인쇄·변형)가 생겼을 때만 새 ID 를 발급하고, 옛 ID 는 retired 로
+#     표시한다 -- 삭제하면 기존 scene metadata 가 고아가 된다.
+#   - 3D 프린트/구매로 소품이 늘면 여기에 항목을 추가한다.
+#   - tall: true 는 "뒤 물체를 가리고 팔 경로를 막는 키 큰 소품"이다
+#     (2026-09-06). 배치 규칙 occludes_behind / robot_clearance 가 이 플래그로
+#     대상을 고르므로, 키 큰 소품을 추가하면 규칙 수정 없이 자동 적용된다.
+#
+# ID 형식: OBJ-<종류>-<색>-<번호>
+#   작은 그릇과 큰 멜라민 그릇은 색이 겹치므로(yellow/white/blue) 종류 토큰으로
+#   구분한다: BOWLS = small 12cm bowl, BOWLL = large 20.5cm bowl, BOWLM = 15cm bowl.
+
+version: 1
+
+props:
+  # 플라스틱 컵 -- 동일 색 중복이 있어 instance 구분이 필수인 유일한 분류
+  - {id: OBJ-CUP-WHT-01, category: cup, color: white, material: plastic}
+  - {id: OBJ-CUP-WHT-02, category: cup, color: white, material: plastic}
+  - {id: OBJ-CUP-BLU-01, category: cup, color: blue, material: plastic}
+  - {id: OBJ-CUP-BLU-02, category: cup, color: blue, material: plastic}
+  - {id: OBJ-CUP-RED-01, category: cup, color: red, material: plastic}
+  - {id: OBJ-CUP-RED-02, category: cup, color: red, material: plastic}
+
+  # 종이컵 -- 등록만 했다가 한 번도 안 쓰고 뺐다 (2026-08-18).
+  # retired 는 "데이터에 한 번이라도 쓰인 ID" 에만 필요하다(기존 metadata 해석용).
+  # 한 번도 안 쓰인 ID 는 이렇게 지우고, 나중에 실제로 추가하는 물건이 -01 부터
+  # 번호를 받는다. (retired 표기 예시는 아래 주석 한 줄만 참고)
+  # - {id: OBJ-CUP-PPR-01, category: cup, color: white, material: paper, retired: true}
+
+  # 작은 그릇 6색
+  - {id: OBJ-BOWLS-GRY-01, category: small_bowl, color: gray, material: plastic}
+  - {id: OBJ-BOWLS-WHT-01, category: small_bowl, color: white, material: plastic}
+  - {id: OBJ-BOWLS-BLU-01, category: small_bowl, color: blue, material: plastic}
+  - {id: OBJ-BOWLS-PNK-01, category: small_bowl, color: pink, material: plastic}
+  - {id: OBJ-BOWLS-YEL-01, category: small_bowl, color: yellow, material: plastic}
+  - {id: OBJ-BOWLS-GRN-01, category: small_bowl, color: green, material: plastic}
+
+  # 큰 그릇 (멜라민) 4색 -- 크기 variation 용
+  # cotton-candy melamine bowl 20.5cm ("코튼캔디멜라민볼 20.5cm")
+  - {id: OBJ-BOWLL-YEL-01, category: large_bowl, color: yellow, material: melamine}
+  - {id: OBJ-BOWLL-WHT-01, category: large_bowl, color: white, material: melamine}
+  - {id: OBJ-BOWLL-BLU-01, category: large_bowl, color: blue, material: melamine}
+  - {id: OBJ-BOWLL-PIS-01, category: large_bowl, color: pistachio, material: melamine}  # TH melamine salad bowl 20.5cm; 우유 탄 피스타치오 -- green 은 실물보다 진하게 읽혀 2026-09-07 개명 (수집 이력 없음)
+
+  # 15cm melamine bowls
+  - {id: OBJ-BOWLM-JPN-01, category: bowl, color: blue japanese, material: melamine}  # Japanese wave-pattern melamine bowl, normal size
+  - {id: OBJ-BOWLM-PNKSTR-01, category: bowl, color: pink striped, material: melamine}  # pink stripe melamine bowl 15cm; identical pair -- only one may appear in a scene, the other is a spare
+  - {id: OBJ-BOWLM-PNKSTR-02, category: bowl, color: pink striped, material: melamine}  # spare for OBJ-BOWLM-PNKSTR-01
+
+  # 미니 3단 서랍장 -- articulated. top/middle/bottom 이 모두 실재.
+  # LIBERO 의 cabinet 어휘를 가져오지 않는다 (§5): 이건 탁자 위 소형 서랍장이다.
+  # 몸체 검정 + 서랍 앞면 회색 3칸. color 는 지배색(몸체)만 적는다 -- 문장에서
+  # 부르는 이름('the black drawer')과 일치, 추천기 색 거리에도 단색으로 들어간다.
+  - {id: OBJ-DRAWER-01, category: drawer, color: black, material: plastic, tall: true}
+
+  # 나무 트레이 -- 단일 개체라 drawer 처럼 색 없이 지칭한다 ('the tray').
+  # color 는 추천기 색 거리용 지배색만 적는다.
+  - {id: OBJ-TRAY-01, category: tray, color: brown, material: wood}
+
+  # Cutlery bundle (2026-08-31): the 18 individual pieces below are retired and
+  # replaced by one mixed-color set. Reference without color as "the cutlery".
+  - {id: OBJ-CUTLERY-SET-01, category: cutlery, color: mixed, material: plastic}
+  - {id: OBJ-SPOON-WHT-01, category: cutlery, color: white, material: plastic, retired: true}
+  - {id: OBJ-SPOON-GRY-01, category: cutlery, color: gray, material: plastic, retired: true}
+  - {id: OBJ-SPOON-PNK-01, category: cutlery, color: pink, material: plastic, retired: true}
+  - {id: OBJ-SPOON-YEL-01, category: cutlery, color: yellow, material: plastic, retired: true}
+  - {id: OBJ-SPOON-GRN-01, category: cutlery, color: green, material: plastic, retired: true}
+  - {id: OBJ-SPOON-BLU-01, category: cutlery, color: blue, material: plastic, retired: true}
+  - {id: OBJ-FORK-WHT-01, category: cutlery, color: white, material: plastic, retired: true}
+  - {id: OBJ-FORK-GRY-01, category: cutlery, color: gray, material: plastic, retired: true}
+  - {id: OBJ-FORK-PNK-01, category: cutlery, color: pink, material: plastic, retired: true}
+  - {id: OBJ-FORK-YEL-01, category: cutlery, color: yellow, material: plastic, retired: true}
+  - {id: OBJ-FORK-GRN-01, category: cutlery, color: green, material: plastic, retired: true}
+  - {id: OBJ-FORK-BLU-01, category: cutlery, color: blue, material: plastic, retired: true}
+  - {id: OBJ-KNIFE-WHT-01, category: cutlery, color: white, material: plastic, retired: true}
+  - {id: OBJ-KNIFE-GRY-01, category: cutlery, color: gray, material: plastic, retired: true}
+  - {id: OBJ-KNIFE-PNK-01, category: cutlery, color: pink, material: plastic, retired: true}
+  - {id: OBJ-KNIFE-YEL-01, category: cutlery, color: yellow, material: plastic, retired: true}
+  - {id: OBJ-KNIFE-GRN-01, category: cutlery, color: green, material: plastic, retired: true}
+  - {id: OBJ-KNIFE-BLU-01, category: cutlery, color: blue, material: plastic, retired: true}

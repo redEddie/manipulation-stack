@@ -1,0 +1,459 @@
+"""scene 구성 규칙 로더/검사기 -- configs/scenes/scene_rules.yaml 이 정본이다.
+
+규칙은 두 종류로 나뉜다 -- 물체 구성(compose)과 배치(placement). 사람이 고른
+조합의 배치만 추천하는 경로처럼 "배치로 고칠 수 있는 위반"만 봐야 하는 곳이
+있어 :func:`violations_by_section` 으로 나눠 읽는다.
+
+사용처:
+  1) 추천 후보 필터(rejection)
+  2) NewSceneDialog 검증(사람이 만든 배치도 같은 규칙으로 lint, 경고만)
+  3) scripts/check/check_scene_file.py 선택 검사
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
+
+from mstack.scene.props import Prop
+from mstack.scene.scene_format import SceneMetadata
+
+RULES_PATH = Path(__file__).resolve().parents[2] / "configs" / "scenes" / "scene_rules.yaml"
+
+
+_KNOWN_RULES = {"no_lookalike_pair", "color_diverse", "ban_zones",
+                "pair_if_present", "object_count",
+                "occludes_behind", "robot_clearance"}
+
+#: rule 이름 -> 반드시 있어야 하는 필드. 없으면 로드 시 오류다 -- 규칙이
+#: 기하를 스스로 선언하지 않으면 코드가 방향을 추측하게 된다.
+_REQUIRED_FIELDS = {
+    "occludes_behind": ("camera_row",),
+    "robot_clearance": ("robot_row",),
+    "object_count": ("min", "max"),
+}
+
+
+def stack_pair_categories(rules_data: Optional[dict] = None) -> set:
+    """동일 외형 쌍이 허용되는 category 집합 (no_lookalike_pair 의 stack 예외).
+
+    추천기(scene_diversity)가 "같은 색 2개를 넣어도 되는가" 를 판단할 때
+    쓴다 -- 규칙 YAML 이 정본이고, 코드에 목록을 중복시키지 않는다.
+    """
+    data = rules_data if rules_data is not None else _default_rules()
+    out: set = set()
+    for entry in data.get("compose", []) or []:
+        if entry.get("rule") == "no_lookalike_pair" \
+                and int(entry.get("max_stack_pairs", 0)) > 0:
+            out |= set(entry.get("stack_pair_categories", []) or [])
+    return out
+
+
+def _validate_rules(data: dict, path: "str | Path" = RULES_PATH) -> None:
+    """data 의 rule 이름을 검증한다. 알 수 없는 이름이면 ValueError."""
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: 규칙 파일은 dict 여야 한다")
+    for section in ("compose", "placement"):
+        for entry in data.get(section, []) or []:
+            rule = entry.get("rule")
+            if rule not in _KNOWN_RULES:
+                raise ValueError(
+                    f"{path}: 알 수 없는 rule 이름 {rule!r} -- "
+                    f"구현 후 known 집합에 추가하거나 yaml 을 고치세요"
+                )
+            for field in _REQUIRED_FIELDS.get(rule, ()):
+                if entry.get(field) is None:
+                    raise ValueError(
+                        f"{path}: rule {rule!r} 에 {field!r} 가 없다"
+                    )
+            if rule == "object_count" and int(entry["min"]) > int(entry["max"]):
+                raise ValueError(
+                    f"{path}: object_count 의 min 이 max 보다 크다"
+                )
+
+
+def load_rules(path: Path = RULES_PATH) -> dict:
+    """scene_rules.yaml 을 읽고, 알 수 없는 rule 이름은 오류를 낸다.
+
+    조용한 무시 금지 -- 새 rule 을 추가하려면 이 모듈의 check() 에도
+    구현하고 yaml 에 이름을 적어야 한다.
+    """
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    _validate_rules(data, path)
+    return data
+
+
+@lru_cache(maxsize=1)
+def _default_rules() -> dict:
+    """기본 경로 규칙의 1회 캐시. check() 가 호출마다 yaml 을 다시 파싱하면
+    추천 후보 생성(후보당 1회 호출)과 NewSceneDialog 의 격자 클릭 lint 가
+    대부분 파싱 비용이 된다 (실측 200배). 규칙 yaml 을 고치면 프로세스
+    재시작(또는 _default_rules.cache_clear()) 이 필요하다 -- 규칙은 git 으로
+    관리되는 정본이라 런타임 변경을 전제하지 않는다."""
+    return load_rules()
+
+
+def object_count_range(rules_data: Optional[dict] = None) -> tuple:
+    """씬의 물체 개수 (최소, 최대). object_count 규칙이 정본이다.
+
+    후보 생성 범위이자 count 커버리지 축의 서포트라, 두 곳이 같은 값을 봐야
+    한다 -- 그래서 코드 상수가 아니라 규칙 yaml 에 있다.
+    """
+    data = rules_data if rules_data is not None else _default_rules()
+    for entry in data.get("compose", []) or []:
+        if entry.get("rule") == "object_count":
+            return (int(entry["min"]), int(entry["max"]))
+    raise ValueError("scene_rules.yaml 에 object_count 규칙이 없다")
+
+
+def rule_names(section: str, rules_data: Optional[dict] = None) -> set:
+    """yaml 의 한 섹션(compose/placement)에 선언된 rule 이름 집합.
+
+    위반 문자열은 ``"<rule>: 설명"`` 이라 이 목록으로 위반을 섹션별로 나눌
+    수 있다 -- 목록을 코드에 중복시키지 않기 위한 조회다.
+    """
+    data = rules_data if rules_data is not None else _default_rules()
+    return {e.get("rule") for e in (data.get(section) or []) if e.get("rule")}
+
+
+def violations_by_section(md: SceneMetadata, props: dict[str, Prop],
+                          rules_data: Optional[dict] = None) -> dict:
+    """:func:`check` 결과를 compose / placement / other 로 나눈다.
+
+    배치만 바꿔서는 고칠 수 없는 위반(compose: 물체 구성 자체의 문제)과
+    배치로 고칠 수 있는 위반(placement)을 구분해야 하는 곳에서 쓴다 --
+    사람이 소품을 직접 고른 뒤 배치만 추천받는 워크플로가 그런 경우다.
+    other 는 섹션에 없는 rule 이름으로, 있어서는 안 되지만 조용히 삼키지
+    않는다.
+    """
+    out: dict = {"compose": [], "placement": [], "other": []}
+    compose = rule_names("compose", rules_data)
+    placement = rule_names("placement", rules_data)
+    for v in check(md, props, rules_data):
+        name = v.split(":", 1)[0]
+        key = ("compose" if name in compose
+               else "placement" if name in placement else "other")
+        out[key].append(v)
+    return out
+
+
+def _prop_for(oid: str, props: dict[str, Prop]) -> Optional[Prop]:
+    return props.get(oid)
+
+
+def _object_triples(md: SceneMetadata, props: dict[str, Prop]) -> list[tuple[str, str, str]]:
+    """scene 의 물체를 (id, category, color) 로 변환. 인벤토리에 없으면 제외."""
+    out = []
+    for oid in md.objects:
+        p = _prop_for(oid, props)
+        if p is None:
+            continue
+        out.append((oid, p.category, p.color))
+    return out
+
+
+def _zones(md: SceneMetadata, props: dict[str, Prop]) -> list:
+    """(instance ID, (row, col)) 목록. 인벤토리에 없거나 존이 없으면 제외."""
+    placements = md.layout.get("placements", {})
+    out = []
+    for oid in md.objects:
+        if oid not in props:
+            continue
+        z = (placements.get(oid) or {}).get("zone", [])
+        if len(z) == 2:
+            out.append((oid, tuple(z)))
+    return out
+
+
+def _tall_zones(md: SceneMetadata, props: dict[str, Prop]) -> list:
+    """키 큰 소품만 -- 배치 규칙이 category 가 아니라 물성으로 대상을 고른다."""
+    return [(oid, z) for oid, z in _zones(md, props) if props[oid].tall]
+
+
+def check(md: SceneMetadata, props: dict[str, Prop],
+          rules_data: Optional[dict] = None) -> list[str]:
+    """scene metadata 가 규칙을 얼마나 위반했는지 반환.
+
+    반환값이 비어 있으면 통과. props 는 mstack.scene.props.props_by_id() 결과.
+    """
+    data = rules_data if rules_data is not None else _default_rules()
+    if rules_data is not None:
+        # 기본 경로는 load_rules() 가 이미 검증했다 -- 주입분만 재검증.
+        _validate_rules(data, "<injected rules>")
+    violations: list[str] = []
+    triples = _object_triples(md, props)
+
+    for entry in data.get("compose", []) or []:
+        rule = entry.get("rule")
+        if rule == "no_lookalike_pair":
+            # stack 예외 (2026-08-31): 포갤 수 있는 category 의 동일 외형
+            # '쌍'은 "stack all the {색} {복수}" 로 모호성 없이 지칭되므로
+            # 씬당 max_stack_pairs 쌍까지 허용한다. 3개 이상은 예외가
+            # 아니다 -- 쌍이 아니라 더미이고, 배치 규칙도 흔들린다.
+            stack_cats = set(entry.get("stack_pair_categories", []) or [])
+            budget = int(entry.get("max_stack_pairs", 0))
+            counter = Counter((cat, color) for _, cat, color in triples)
+            for (cat, color), n in sorted(counter.items()):
+                if n < 2:
+                    continue
+                if n == 2 and cat in stack_cats and budget > 0:
+                    budget -= 1
+                    continue
+                violations.append(
+                    f"no_lookalike_pair: ({cat}, {color}) 가 {n}개"
+                    + (" -- stack 예외는 씬당 "
+                       f"{int(entry.get('max_stack_pairs', 0))}쌍까지"
+                       if cat in stack_cats else "")
+                )
+        elif rule == "color_diverse":
+            cat = entry.get("category")
+            colors = [color for _, c, color in triples if c == cat]
+            if len(colors) >= 2 and len(set(colors)) < len(colors):
+                dup = sorted({c for c in colors if colors.count(c) > 1})
+                violations.append(
+                    f"color_diverse: {cat} 에 중복 색 {dup}"
+                )
+        elif rule == "object_count":
+            lo, hi = int(entry["min"]), int(entry["max"])
+            n = len(md.objects)
+            if not lo <= n <= hi:
+                violations.append(
+                    f"object_count: 물체가 {n}개 -- {lo}~{hi}개여야 한다"
+                )
+        elif rule == "pair_if_present":
+            cats = entry.get("categories", [])
+            need = int(entry.get("min_count", 2))
+            counter = Counter(cat for _, cat, _ in triples)
+            for c in cats:
+                n = counter.get(c, 0)
+                if 0 < n < need:
+                    violations.append(
+                        f"pair_if_present: {c} 가 {n}개 -- 등장하려면 "
+                        f"{need}개 이상 (한 개면 색 없이 지칭 가능해져 "
+                        "shortcut 학습 위험)"
+                    )
+
+    for entry in data.get("placement", []) or []:
+        rule = entry.get("rule")
+        if rule == "ban_zones":
+            cat = entry.get("category")
+            banned = [tuple(z) for z in entry.get("zones", [])]
+            placements = md.layout.get("placements", {})
+            for oid, c, _ in triples:
+                if c != cat:
+                    continue
+                zone = tuple(placements.get(oid, {}).get("zone", []))
+                if zone in banned:
+                    violations.append(
+                        f"ban_zones: {cat} ({oid}) 가 금지 존 {list(zone)} 에 있음"
+                    )
+        elif rule in ("occludes_behind", "robot_clearance"):
+            # 방향이 반대인 두 규칙 (2026-09-06). 키 큰 소품(props.yaml 의
+            # tall)이 있는 열에서, 기준 행에서 그 소품보다 **더 먼** 칸이
+            # 막힌다: 카메라 기준이면 가려지고(occludes_behind), 로봇
+            # 기준이면 팔이 소품을 넘어가야 한다(robot_clearance).
+            # 두 규칙의 합집합은 소품 칸을 뺀 열 전체다.
+            if rule == "occludes_behind":
+                ref, why = int(entry["camera_row"]), "agentview 에서 가려진다"
+            else:
+                ref, why = int(entry["robot_row"]), "팔이 넘어가야 한다"
+            for a_oid, (ar, ac) in _tall_zones(md, props):
+                for oid, z in _zones(md, props):
+                    if oid == a_oid or z[1] != ac:
+                        continue
+                    if abs(z[0] - ref) > abs(ar - ref):
+                        violations.append(
+                            f"{rule}: {a_oid} (존 {[ar, ac]}) 너머 존 "
+                            f"{list(z)} 에 {oid} 가 있음 -- {why}"
+                        )
+
+    return violations
+
+
+def selftest() -> None:
+    """로더/검사기 스스로를 검증한다."""
+    from mstack.scene.props import props_by_id
+
+    props = props_by_id()
+    rules = load_rules()
+
+    # 통과 케이스 (pair_if_present: 등장 category 는 2색 이상 -- 2026-08-24;
+    # occludes_behind/robot_clearance: 서랍 열(2)은 비움 -- 2026-09-06)
+    ok_md = SceneMetadata(
+        scene_id="S000",
+        objects=["OBJ-CUP-BLU-01", "OBJ-CUP-WHT-01",
+                 "OBJ-BOWLS-WHT-01", "OBJ-BOWLS-BLU-01", "OBJ-DRAWER-01"],
+        layout={
+            "grid": [3, 3],
+            "placements": {
+                "OBJ-CUP-BLU-01": {"zone": [0, 0]},
+                "OBJ-CUP-WHT-01": {"zone": [1, 0]},
+                "OBJ-BOWLS-WHT-01": {"zone": [0, 1]},
+                "OBJ-BOWLS-BLU-01": {"zone": [2, 0]},
+                "OBJ-DRAWER-01": {"zone": [0, 2]},
+            },
+        },
+    )
+    assert check(ok_md, props, rules) == [], check(ok_md, props, rules)
+
+    # lookalike 페어
+    look_md = SceneMetadata(
+        scene_id="S001",
+        objects=["OBJ-CUP-WHT-01", "OBJ-CUP-WHT-02", "OBJ-BOWLS-WHT-01"],
+        layout={
+            "grid": [3, 3],
+            "placements": {
+                "OBJ-CUP-WHT-01": {"zone": [0, 0]},
+                "OBJ-CUP-WHT-02": {"zone": [0, 1]},
+                "OBJ-BOWLS-WHT-01": {"zone": [0, 2]},
+            },
+        },
+    )
+    v = check(look_md, props, rules)
+    assert any("no_lookalike_pair" in x for x in v)
+
+    # stack 예외 (2026-08-31): 포갤 수 있는 그릇류의 동일 외형 '쌍'은 허용
+    # ("stack all the pink striped bowls" 로 모호성 없이 지칭된다).
+    stack_md = SceneMetadata(
+        scene_id="S003",
+        objects=["OBJ-BOWLM-PNKSTR-01", "OBJ-BOWLM-PNKSTR-02",
+                 "OBJ-CUP-BLU-01", "OBJ-CUP-WHT-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-BOWLM-PNKSTR-01": {"zone": [0, 0]},
+            "OBJ-BOWLM-PNKSTR-02": {"zone": [1, 0]},
+            "OBJ-CUP-BLU-01": {"zone": [0, 1]},
+            "OBJ-CUP-WHT-01": {"zone": [1, 1]}}})
+    assert check(stack_md, props, rules) == [], check(stack_md, props, rules)
+    assert "bowl" in stack_pair_categories(rules)
+    # 컵은 예외 대상이 아니다 (color_diverse 로 색 학습을 강제하는 category)
+    assert "cup" not in stack_pair_categories(rules)
+
+    # drawer 중앙 존
+    drawer_md = SceneMetadata(
+        scene_id="S002",
+        objects=["OBJ-CUP-BLU-01", "OBJ-DRAWER-01"],
+        layout={
+            "grid": [3, 3],
+            "placements": {
+                "OBJ-CUP-BLU-01": {"zone": [0, 0]},
+                "OBJ-DRAWER-01": {"zone": [1, 1]},
+            },
+        },
+    )
+    v = check(drawer_md, props, rules)
+    assert any("ban_zones" in x for x in v)
+
+    # 앞줄 중앙 [2,1] 도 금지 (2026-08-26)
+    front_md = SceneMetadata(
+        scene_id="S005",
+        objects=["OBJ-CUP-BLU-01", "OBJ-DRAWER-01"],
+        layout={
+            "grid": [3, 3],
+            "placements": {
+                "OBJ-CUP-BLU-01": {"zone": [0, 0]},
+                "OBJ-DRAWER-01": {"zone": [2, 1]},
+            },
+        },
+    )
+    assert any("ban_zones" in x for x in check(front_md, props, rules))
+
+    # 방향성 배치 규칙 (2026-09-06): 키 큰 소품이 있는 열은 그 소품을
+    # 기준으로 양분되고, 어느 쪽이 막히는지에 따라 사유가 다르다.
+    #   row 0 = 로봇 쪽, row 2 = 카메라 쪽.
+    def _col_scene(drawer_row: int, other_row: int) -> SceneMetadata:
+        return SceneMetadata(
+            scene_id="S003",
+            objects=["OBJ-CUP-BLU-01", "OBJ-BOWLS-WHT-01", "OBJ-DRAWER-01"],
+            layout={"grid": [3, 3], "placements": {
+                "OBJ-CUP-BLU-01": {"zone": [other_row, 2]},
+                "OBJ-BOWLS-WHT-01": {"zone": [0, 1]},
+                "OBJ-DRAWER-01": {"zone": [drawer_row, 2]}}})
+
+    def _col_rules(drawer_row: int, other_row: int) -> set:
+        return {x.split(":")[0] for x in check(_col_scene(drawer_row, other_row),
+                                               props, rules)
+                if x.startswith(("occludes_behind", "robot_clearance"))}
+
+    # 서랍이 로봇 쪽(0): 그 너머는 전부 팔 경로 문제
+    assert _col_rules(0, 1) == {"robot_clearance"}, _col_rules(0, 1)
+    assert _col_rules(0, 2) == {"robot_clearance"}, _col_rules(0, 2)
+    # 서랍이 카메라 쪽(2): 그 뒤는 전부 가림 문제
+    assert _col_rules(2, 0) == {"occludes_behind"}, _col_rules(2, 0)
+    assert _col_rules(2, 1) == {"occludes_behind"}, _col_rules(2, 1)
+    # 서랍이 가운데(1): 양쪽이 서로 다른 사유로 막힌다
+    assert _col_rules(1, 0) == {"occludes_behind"}, _col_rules(1, 0)
+    assert _col_rules(1, 2) == {"robot_clearance"}, _col_rules(1, 2)
+    # 두 규칙의 합집합 = 서랍 칸을 뺀 열 전체 (2026-08-26 exclusive_column 과
+    # 막는 칸이 같다 -- 달라지는 것은 사유뿐이다)
+    for dr in range(3):
+        for orow in range(3):
+            if dr != orow:
+                assert _col_rules(dr, orow), (dr, orow)
+
+    # 다른 열이면 통과
+    clear_md = SceneMetadata(
+        scene_id="S004",
+        objects=["OBJ-CUP-BLU-01", "OBJ-BOWLS-WHT-01", "OBJ-DRAWER-01"],
+        layout={
+            "grid": [3, 3],
+            "placements": {
+                "OBJ-CUP-BLU-01": {"zone": [2, 0]},
+                "OBJ-BOWLS-WHT-01": {"zone": [0, 1]},
+                "OBJ-DRAWER-01": {"zone": [0, 2]},
+            },
+        },
+    )
+    assert not any(x.startswith(("occludes_behind", "robot_clearance"))
+                   for x in check(clear_md, props, rules))
+
+    # 대상은 category 가 아니라 tall 물성에서 파생된다
+    assert props["OBJ-DRAWER-01"].tall
+    assert not props["OBJ-BOWLL-WHT-01"].tall
+    tall_free = SceneMetadata(
+        scene_id="S006",
+        objects=["OBJ-BOWLL-WHT-01", "OBJ-BOWLL-BLU-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-BOWLL-WHT-01": {"zone": [0, 1]},
+            "OBJ-BOWLL-BLU-01": {"zone": [2, 1]}}})
+    assert not any(x.startswith(("occludes_behind", "robot_clearance"))
+                   for x in check(tall_free, props, rules))
+
+    # object_count: 범위 밖이면 위반, 범위는 규칙이 정본
+    lo, hi = object_count_range(rules)
+    assert (lo, hi) == (2, 5), (lo, hi)
+    few = SceneMetadata(
+        scene_id="S007", objects=["OBJ-TRAY-01"],
+        layout={"grid": [3, 3],
+                "placements": {"OBJ-TRAY-01": {"zone": [0, 0]}}})
+    assert any("object_count" in x for x in check(few, props, rules))
+
+    # 규칙이 기하를 스스로 선언하지 않으면 로드 시 오류 (방향 추측 금지)
+    for bad_rules in ({"version": 1, "placement": [{"rule": "occludes_behind"}]},
+                      {"version": 1, "placement": [{"rule": "robot_clearance"}]},
+                      {"version": 1, "compose": [{"rule": "object_count",
+                                                  "min": 5, "max": 2}]}):
+        try:
+            check(ok_md, props, bad_rules)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"필수 필드 검증이 없다: {bad_rules}")
+
+    # 알 수 없는 rule 이름은 로드 시 예외
+    bad = {"version": 1, "compose": [{"rule": "no_such_rule"}]}
+    try:
+        check(ok_md, props, bad)
+    except ValueError as e:
+        assert "no_such_rule" in str(e)
+    else:
+        raise AssertionError("알 수 없는 rule 은 예외가 나와야 한다")
+
+    print("scene_rules selftest 통과")
+
+
+if __name__ == "__main__":
+    selftest()

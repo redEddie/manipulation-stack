@@ -1,0 +1,55 @@
+# NOTICE
+
+manipulation-stack began as a fork of [GELLO](https://github.com/wuphilipp/gello_software)
+(MIT, Copyright (c) 2023 Philipp Wu) and grew well past its original scope. It is
+distributed under the same MIT license; see LICENSE for both copyright lines.
+
+This repository was published with a squashed history, so the per-file
+provenance that `git log` would normally carry is recorded here instead.
+
+## Files derived from gello_software
+
+The files below descend from upstream. Most have been relocated and modified —
+some heavily (`mstack/hw/dynamixel/driver.py` gained the joint-limit wall,
+voltage watchdog and fake-driver fallback; `mstack/agents/gello_agent.py` grew
+from 133 to 437 lines) — but their lineage is upstream's.
+
+Fork point: wuphilipp/gello_software @ fa0407bb (2026-04-07).
+
+    mstack/agents/gello_agent.py
+    mstack/cameras/realsense_camera.py
+    mstack/comm/__init__.py
+    mstack/comm/zmq_core/camera_node.py
+    mstack/config/__init__.py
+    mstack/core/agent.py
+    mstack/core/camera.py
+    mstack/core/env.py
+    mstack/core/robot.py
+    mstack/hw/dynamixel/driver.py
+    mstack/hw/dynamixel/tests/test_driver.py
+    mstack/robots/dynamixel.py
+    scripts/calib/gello_get_offset.py
+    scripts/launch/launch_camera_clients.py
+    scripts/launch/launch_camera_nodes.py
+
+Everything else in this repository was written for manipulation-stack.
+
+## Removed from the fork
+
+The following upstream subsystems were dropped because this station does not
+use them; consult upstream if you need them:
+
+  * the ROS 2 packages (`ros2/`)
+  * the FACTR gravity-compensation leader (`gello/factr/`)
+  * the dm_control / MuJoCo simulation servers
+  * the xArm / UR / Panda / YAM robot backends, and the Quest and SpaceMouse agents
+  * the `run_env.py` / `launch_yaml.py` command-line teleop path and the
+    `data_utils` / `utils` modules it drove — that branch depended on packages
+    (`gdict`, `simple_bc`, `mediapy`, `natsort`, `transforms3d`, `pygame`) that
+    were never installed here, so it could not run; the GUI never called it.
+
+## Third-party runtime dependencies
+
+See requirements.txt. Notable ones with their own licenses: DynamixelSDK
+(Apache-2.0, via the `dynamixel-sdk` PyPI package), PyQt6 (GPL-3.0 / commercial),
+and pylibfranka (see patches/README.md for the local patches applied).

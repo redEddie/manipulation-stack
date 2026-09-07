@@ -1,0 +1,43 @@
+# keep each top level section alphabetical
+# keep each item within the sections alphabetical
+
+# large files
+*.png
+*.gif
+
+# mac
+*.DS_Store
+
+# 스테이션 로컬 덮어쓰기 -- 일련번호·IP·정책 서버 주소 등 이 기계를
+# 드러내는 값. 구조와 측정값은 커밋된 <이름>.yaml 에 남는다.
+configs/stations/*.local.yaml
+
+# misc
+# zip 만 커밋한다 -- GUI 가 뜰 때 여기로 푼다
+# (apps/workspace/features/scene/layout_ref.py)
+assets/libero_init_layouts/
+logs/
+runs/
+tb_logs/
+wandb/
+wandb_logs/
+outputs/*
+
+# python
+*__pycache__
+*.egg-info
+*.hypothesis
+*.ipynb_checkpoints
+*.mypy_cache
+*.pyc
+
+# vim
+*.swp
+MUJOCO_LOG.TXT
+
+# 3D Model Files
+*.stl
+.venv
+
+# 밤샘 러너 로그 (기계별로 다르다)
+.kimi-runs/
