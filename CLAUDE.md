@@ -83,15 +83,17 @@ Keep this invariant when adding files; a module's folder must announce its role.
   `policy.url` of the station file or in `MSTACK_POLICY_SERVER`, never in
   source. Korean comments are fine and stay; new comments/docs/issues in
   English (issue #42, carried over).
-- Two checkouts share this git repo, one branch each:
-  `~/teleop-franka/manipulation-stack` holds `main` (desktop icon
-  "Scene 데이터 수집기", the real collection) and `manipulation-stack-dev` holds
-  `dev` (icon "[DEV] Scene 수집기 — 확인용"). Each carries its own gitignored
-  `configs/stations/*.local.yaml` and `.venv` symlink.
-- Release flow: develop on `dev`, run the suite there, then
-  `git -C ../manipulation-stack merge --ff-only dev`, re-run the suite **there**,
-  and push both branches. `main` is never developed on directly — it is what the
-  operator's collection icon runs, so nothing lands there unverified.
+- One checkout for now: `~/teleop-franka/manipulation-stack` on `main`, which
+  the desktop icon "Scene 데이터 수집기" runs. It carries a gitignored
+  `configs/stations/*.local.yaml` and a `.venv` symlink; a second worktree would
+  need its own copies of both.
+- Small, verified changes may land on `main` directly while that is the only
+  checkout (operator's call, 2026-09-08). For anything systemic, add the `dev`
+  worktree first and merge `--ff-only` into `main` after the suite passes there
+  — `main` is what the operator runs, so nothing lands there unverified.
+- The icon runs `git pull --ff-only` before launching, so **whatever is on
+  `origin/main` is what the operator gets on the next launch.** Say so before
+  pushing anything they are about to test on hardware.
 - History note: this repository was split out of the `gello_software` fork with
   a squashed initial commit. Anything older than that lives at
   `redEddie/gello_software`; `NOTICE` records which files came from upstream.
