@@ -25,6 +25,15 @@ compose:
   - rule: pair_if_present
     categories: [cup, small_bowl, bowl, large_bowl]
     min_count: 2
+  # 담을 그릇이 있어야 커트러리가 나온다 (2026-09-08 사용자 확정).
+  # 커트러리는 길쭉해서 small_bowl 이나 bowl(15cm)에는 넣기 어렵다 -- 실제로
+  # 놓아 보면 걸치거나 넘어간다. 그래서 커트러리가 든 scene 은 tray 나
+  # large_bowl 중 하나를 반드시 함께 갖는다. 담을 곳이 없는 커트러리는
+  # "put the cutlery in the ..." 문장 자체가 성립하지 않는다.
+  # 이미 수집한 scene_017 은 tray 와 함께 있어 소급 위반이 없다.
+  - rule: requires_companion
+    category: cutlery
+    any_of: [tray, large_bowl]
   # 물체 개수 범위 (2026-09-06 설정으로 이관). 후보 생성 범위이자 count
   # 커버리지 축의 서포트라, 코드 상수로 두면 두 곳이 어긋난다.
   # 5 -> 6 으로 올릴지는 현장에서 6개를 실제로 놓아 보고 정한다. 6물체 씬에는

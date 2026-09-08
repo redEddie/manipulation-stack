@@ -26,7 +26,7 @@ RULES_PATH = Path(__file__).resolve().parents[2] / "configs" / "scenes" / "scene
 
 
 _KNOWN_RULES = {"no_lookalike_pair", "color_diverse", "ban_zones",
-                "pair_if_present", "object_count",
+                "pair_if_present", "object_count", "requires_companion",
                 "occludes_behind", "robot_clearance"}
 
 #: rule 이름 -> 반드시 있어야 하는 필드. 없으면 로드 시 오류다 -- 규칙이
@@ -35,6 +35,7 @@ _REQUIRED_FIELDS = {
     "occludes_behind": ("camera_row",),
     "robot_clearance": ("robot_row",),
     "object_count": ("min", "max"),
+    "requires_companion": ("category", "any_of"),
 }
 
 
@@ -224,6 +225,19 @@ def check(md: SceneMetadata, props: dict[str, Prop],
                 violations.append(
                     f"object_count: 물체가 {n}개 -- {lo}~{hi}개여야 한다"
                 )
+        elif rule == "requires_companion":
+            # 어떤 category 는 짝이 될 소품이 있어야만 과제가 성립한다.
+            # 커트러리(길쭉하다)는 tray 나 large_bowl 이 있어야 담을 수 있다 --
+            # 작은 그릇이나 15cm 그릇에는 걸치거나 넘어간다 (2026-09-08).
+            cat = entry.get("category")
+            need = list(entry.get("any_of", []) or [])
+            present = {c for _, c, _ in triples}
+            if cat in present and not (present & set(need)):
+                violations.append(
+                    f"requires_companion: {cat} 가 있으면 "
+                    f"{' / '.join(need)} 중 하나가 함께 있어야 한다 -- "
+                    "담을 곳이 없으면 과제가 성립하지 않는다"
+                )
         elif rule == "pair_if_present":
             cats = entry.get("categories", [])
             need = int(entry.get("min_count", 2))
@@ -331,6 +345,56 @@ def selftest() -> None:
     assert "bowl" in stack_pair_categories(rules)
     # 컵은 예외 대상이 아니다 (color_diverse 로 색 학습을 강제하는 category)
     assert "cup" not in stack_pair_categories(rules)
+
+    # 커트러리는 담을 곳이 있어야 한다 (2026-09-08). 길쭉해서 small_bowl 이나
+    # bowl(15cm)에는 걸친다 -- tray 나 large_bowl 이 함께 있어야 한다.
+    cutlery_alone = SceneMetadata(
+        scene_id="S006",
+        objects=["OBJ-CUP-BLU-01", "OBJ-CUP-WHT-01", "OBJ-CUTLERY-SET-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-CUP-BLU-01": {"zone": [0, 0]},
+            "OBJ-CUP-WHT-01": {"zone": [1, 0]},
+            "OBJ-CUTLERY-SET-01": {"zone": [0, 1]}}})
+    assert any("requires_companion" in x
+               for x in check(cutlery_alone, props, rules)), \
+        check(cutlery_alone, props, rules)
+
+    # 15cm bowl 은 짝이 되지 못한다 -- 커트러리가 걸치는 그 크기다.
+    cutlery_mid = SceneMetadata(
+        scene_id="S007",
+        objects=["OBJ-BOWLM-PNKSTR-01", "OBJ-BOWLM-PNKSTR-02",
+                 "OBJ-CUTLERY-SET-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-BOWLM-PNKSTR-01": {"zone": [0, 0]},
+            "OBJ-BOWLM-PNKSTR-02": {"zone": [1, 0]},
+            "OBJ-CUTLERY-SET-01": {"zone": [0, 1]}}})
+    assert any("requires_companion" in x
+               for x in check(cutlery_mid, props, rules)), \
+        check(cutlery_mid, props, rules)
+
+    # tray 와 함께면 통과 (실제 scene_017 의 구성이다)
+    cutlery_tray = SceneMetadata(
+        scene_id="S008",
+        objects=["OBJ-BOWLM-PNKSTR-01", "OBJ-BOWLM-PNKSTR-02",
+                 "OBJ-CUTLERY-SET-01", "OBJ-TRAY-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-BOWLM-PNKSTR-01": {"zone": [0, 0]},
+            "OBJ-BOWLM-PNKSTR-02": {"zone": [1, 0]},
+            "OBJ-CUTLERY-SET-01": {"zone": [0, 1]},
+            "OBJ-TRAY-01": {"zone": [0, 2]}}})
+    assert not [x for x in check(cutlery_tray, props, rules)
+                if "requires_companion" in x], check(cutlery_tray, props, rules)
+
+    # large_bowl 도 짝이 된다
+    cutlery_large = SceneMetadata(
+        scene_id="S009",
+        objects=["OBJ-BOWLL-YEL-01", "OBJ-BOWLL-BLU-01", "OBJ-CUTLERY-SET-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-BOWLL-YEL-01": {"zone": [0, 0]},
+            "OBJ-BOWLL-BLU-01": {"zone": [1, 0]},
+            "OBJ-CUTLERY-SET-01": {"zone": [0, 1]}}})
+    assert not [x for x in check(cutlery_large, props, rules)
+                if "requires_companion" in x], check(cutlery_large, props, rules)
 
     # drawer 중앙 존
     drawer_md = SceneMetadata(
