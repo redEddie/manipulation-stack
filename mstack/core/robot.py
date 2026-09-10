@@ -44,6 +44,20 @@ class Robot(Protocol):
         """
         raise NotImplementedError
 
+    def hold(self) -> None:
+        """Stop where you are, without a new target.
+
+        Default: do nothing.  A robot whose commands take effect immediately
+        (a simulator, a print stub) is already stopped once commands stop
+        arriving, so there is nothing to undo.  Only a driver that keeps
+        advancing toward a stored setpoint -- FrankaFR3Robot's 1 kHz
+        reference filter -- has to act, and it overrides this.
+
+        This exists so an upper layer can order an emergency stop without
+        knowing which arm is attached: only the driver knows where its own
+        filter currently is, so the stop cannot be composed from outside.
+        """
+
     @abstractmethod
     def get_observations(self) -> Dict[str, np.ndarray]:
         """Get the current observations of the robot.

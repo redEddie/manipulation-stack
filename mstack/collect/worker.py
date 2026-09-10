@@ -41,7 +41,8 @@ from mstack.agents.lerobot_plugin import (
     GelloFR3TeleopConfig,
 )
 from mstack.data.libero_format import LiberoTaskWriter, NullTaskWriter
-from mstack.config.constants import ROLL_ABORT_RAD
+from mstack.config.constants import LEADER_DROP_SPEED_RAD_S, ROLL_ABORT_RAD
+from mstack.collect.leader_guard import LeaderDropGuard
 from mstack.robots.franka_fr3 import FR3_RESET_POSES, FR3_ROLL_JOINTS
 from mstack.comm.phase_bus import PhasePublisher
 from mstack.config.constants import MATCH_GATE_RAD
@@ -1244,6 +1245,41 @@ class CollectionWorker(QThread):
             time.sleep(0.02)
 
     # -------------------------------------------------------------- episode
+    def _emergency_hold(self, speed: float) -> None:
+        """리더를 놓쳤다고 보고 팔을 세운다.
+
+        세우는 것은 노드가 한다 (``FrankaFR3Robot.hold``) -- 필터가 지금 어디를
+        내보내고 있는지는 노드만 알기 때문이다. 여기서 명령을 그냥 끊으면
+        설정점이 직전 값에 남아 팔이 거기까지 계속 간다.
+
+        ``hold`` 가 실패해도 계속 진행한다. 에피소드를 끊고 홈으로 돌리는 것이
+        더 중요하고, 노드가 안 받는 상황이면 그 다음 관측에서 어차피 NODE DOWN
+        으로 잡힌다 -- 여기서 예외를 올리면 그 처리만 방해한다.
+        """
+        try:
+            self._robot.hold()
+        except Exception as e:  # noqa: BLE001
+            self.log_message.emit(f"[안전] 급정거 명령이 실패했습니다: {_why(e)}")
+        # 단계 표지만 보낸다. state_changed 로 새 상태를 흘리지 않는 것은
+        # GUI 의 상태 표(STATE_LABELS/SHORTCUT_HINTS/키 표시)가 모르는 값을
+        # 받게 되기 때문이다. 이 구간은 수백 ms 뒤 homing 으로 넘어간다.
+        self._phase_pub.publish("estop", speed=round(float(speed), 3))
+        self.log_message.emit(
+            f"[안전] 리더 속도 {speed:.2f} rad/s (임계 {LEADER_DROP_SPEED_RAD_S:.1f}) "
+            "-- 팔을 세우고 에피소드를 폐기합니다. 리더를 잡고 다시 정렬하세요.")
+        # 팔이 실제로 설 때까지 기다렸다가 홈 복귀로 넘긴다. _ramp_home 은
+        # **측정된** 현재 자세에서 시작하는데, 아직 감속 중이면 그 자세가
+        # 곧바로 낡는다. 필터는 0.25초면 서므로 0.5초면 넉넉하다.
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            try:
+                dq = self._get_obs()["_joint_velocities"][:7]
+            except Exception:  # noqa: BLE001 -- 노드가 죽었으면 상위가 잡는다
+                return
+            if float(np.abs(dq).max()) < 0.05:
+                return
+            time.sleep(0.02)
+
     def _record_episode(self) -> tuple[str, int]:
         """Returns (outcome, n_frames); outcome is "save", "discard", "quit", or "go_home"."""
         self._teleop.set_teleop_mode(True)
@@ -1268,6 +1304,9 @@ class CollectionWorker(QThread):
             n = 0
             outcome = "save"
             stop = False
+            # 리더 놓침 감시. 에피소드마다 새로 만든다 -- 직전 에피소드의
+            # 홈 복귀·정렬 이동이 첫 판정에 섞이면 안 된다.
+            drop_guard = LeaderDropGuard()
             for i in range(max_frames):
                 for k in range(TELEOP_SUBSTEPS):
                     # 버튼은 명령 주기로 본다 -- 기록 주기로만 보면 반응이
@@ -1288,6 +1327,14 @@ class CollectionWorker(QThread):
                             break
 
                     action = self._teleop.get_action()
+                    # **보내기 전에** 본다. 이 명령이 곧 떨어진 리더의 자세다.
+                    speed = drop_guard.update(
+                        self._joint_vec(action)[:7], time.monotonic())
+                    if drop_guard.tripped(speed):
+                        self._emergency_hold(speed)
+                        outcome = "discard"
+                        stop = True
+                        break
                     self._robot.send_action(action)
                     if k < TELEOP_SUBSTEPS - 1:
                         t_next += cmd_budget

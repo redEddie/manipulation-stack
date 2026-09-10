@@ -58,6 +58,14 @@ class ZMQServerRobot:
                         result = self._robot.get_joint_state()
                     elif method == "command_joint_state":
                         result = self._robot.command_joint_state(**args)
+                    elif method == "hold":
+                        # 급정거. 어떤 로봇이든 있어야 하는 동작이라
+                        # core.robot.Robot 에 기본 구현(무동작)이 있지만,
+                        # 예전 노드/구현과 섞여 돌 수 있으니 없으면 조용히
+                        # 넘긴다 -- 안전 정지를 부르는 쪽은 이미 비상 상황이라
+                        # 여기서 예외를 던져 봐야 그 처리만 방해한다.
+                        fn = getattr(self._robot, "hold", None)
+                        result = fn() if fn is not None else None
                     elif method == "get_observations":
                         result = self._robot.get_observations()
                     elif method == "payload":
@@ -132,6 +140,25 @@ class ZMQClientRobot(Robot):
             "method": "command_joint_state",
             "args": {"joint_state": joint_state},
         }
+        send_message = pickle.dumps(request)
+        try:
+            self._socket.send(send_message)
+            result = pickle.loads(self._socket.recv())
+            if isinstance(result, dict) and "error" in result:
+                raise RuntimeError(result["error"])
+            return result
+        except zmq.Again:
+            raise RuntimeError("ZMQ timeout - robot may be disconnected")
+
+    def hold(self) -> None:
+        """Order the robot to stop where it is (see ``Robot.hold``).
+
+        Used by the collection worker's leader-drop safety layer. Kept as its
+        own request rather than "just stop sending": with no new setpoint the
+        FR3's reference filter keeps travelling to the *last* one, which after
+        a dropped leader is exactly the pose we are trying not to reach.
+        """
+        request = {"method": "hold"}
         send_message = pickle.dumps(request)
         try:
             self._socket.send(send_message)

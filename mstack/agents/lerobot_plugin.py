@@ -170,6 +170,14 @@ class FR3ZMQRobot(Robot):
         self._client.command_joint_state(vec)
         return action
 
+    def hold(self) -> None:
+        """Stop the arm where it is (see ``mstack.core.robot.Robot.hold``).
+
+        Passthrough so the collection worker's safety layer does not have to
+        reach past this wrapper for the ZMQ client.
+        """
+        self._client.hold()
+
     def disconnect(self) -> None:
         for cam in self.cameras.values():
             cam.disconnect()

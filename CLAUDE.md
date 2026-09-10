@@ -50,11 +50,12 @@ Keep this invariant when adding files; a module's folder must announce its role.
 ## Verification
 
 - Grammar/rules: `python -m mstack.scene.instruction_grammar`, `python -m mstack.scene.scene_rules`
-- Setpoint-gap safety limit: `scripts/analyze/setpoint_gap.py` reads the 1 kHz
-  raw logs and says how far `MAX_SETPOINT_GAP_RAD` (0.9 rad) can come down.
-  It is meant to come down — 0.9 is 1.7x the measured worst case, nothing more.
-  Try a candidate with `MSTACK_MAX_SETPOINT_GAP=<rad>` (inherited by the robot
-  node from whatever launched it) before changing the source.
+- Leader-drop safety threshold: `scripts/analyze/leader_speed.py [--sweep]`
+  replays the 1 kHz raw logs through the *same* guard class the worker runs.
+  `LEADER_DROP_SPEED_RAD_S` (2.4) rests on one drop event and 28.9 s of normal
+  teleop — re-run this as sessions accumulate and watch the normal-side
+  headroom, because one false stop is enough for an operator to switch a
+  safety layer off.
 - Full GUI acceptance suite (offscreen, no hardware):
   `bash tests/gui/run_all.sh ~/lerobot-venv/bin/python`
 - The collector is launched by desktop icon via `run_scene_collector.sh`
