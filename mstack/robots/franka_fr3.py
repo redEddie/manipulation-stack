@@ -239,12 +239,18 @@ class _RawPublisher:
             print(f"[FR3] 원시 상태 발행 비활성 ({type(e).__name__}: {e})", flush=True)
             self._sock = None
 
-    def send(self, state, q_des=None) -> None:
+    def send(self, state, q_des=None, q_cmd=None) -> None:
+        """한 틱을 발행한다.
+
+        ``q_cmd`` 는 **직전 틱에 로봇으로 쓴 값**이다 -- 이 함수는 필터가
+        돌기 전에 불리므로, 지금의 ``state`` 는 바로 그 명령에 대한 로봇의
+        응답이다. 둘을 짝지어 보면 "무엇을 시켰고 무엇이 나왔나" 가 된다.
+        """
         if self._sock is None:
             return
         try:
             b = self._buf
-            sq, sqd, sdq, st, sdt, sdes = self._sl
+            sq, sqd, sdq, st, sdt, sdes, scmd = self._sl
             b[0] = time.time()
             b[sq] = state.q
             b[sqd] = state.q_d
@@ -253,6 +259,8 @@ class _RawPublisher:
             b[sdt] = state.dtau_J
             if q_des is not None:
                 b[sdes] = q_des
+            if q_cmd is not None:
+                b[scmd] = q_cmd
             self._sock.send_multipart([RAW_TOPIC, b], flags=self._nb, copy=False)
         except Exception:  # noqa: BLE001 -- 한 번 실패하면 끈다
             self._sock = None
@@ -637,7 +645,7 @@ class FrankaFR3Robot(Robot):
                         self._read_ft(state)
                 # 목표를 읽은 뒤에 발행한다 -- 필터의 입력과 출력이 같은
                 # 틱에서 맞물려야 나중에 맞대 볼 수 있다.
-                raw_pub.send(state, target)
+                raw_pub.send(state, target, q_cmd)
 
                 # Critically-damped second-order reference filter, saturated in
                 # jerk, acceleration and velocity -> smooth, bounded command.

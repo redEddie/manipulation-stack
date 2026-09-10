@@ -43,6 +43,7 @@ from mstack.comm.phase_bus import DEFAULT_PHASE_PORT, PHASE_TOPIC
 from mstack.comm.robot_raw import (
     DEFAULT_RAW_PORT,
     DOF,
+    FLOAT64_FIELDS,
     RAW_FIELDS,
     RAW_LEN,
     RAW_TOPIC,
@@ -97,7 +98,7 @@ def _rotate(d: Path, keep: int = KEEP_FILES) -> None:
 
 
 def _write_window(d: Path, buf: np.ndarray, n: int, phases: list) -> Path:
-    """창 하나를 ``.npz`` 로 쓴다. 시각만 float64, 나머지는 float32.
+    """창 하나를 ``.npz`` 로 쓴다. 위치 계열은 float64, 나머지는 float32.
 
     자기 설명적으로 둔다 -- 필드 이름이 곧 배열 이름이라, 나중에 읽는 쪽이
     이 모듈을 몰라도 ``np.load`` 만으로 무엇인지 알 수 있다.
@@ -105,7 +106,8 @@ def _write_window(d: Path, buf: np.ndarray, n: int, phases: list) -> Path:
     rows = buf[:n]
     arrays = {"t": rows[:, 0].astype(np.float64)}
     for f in RAW_FIELDS:
-        arrays[f] = rows[:, field_slice(f)].astype(np.float32)
+        dt = np.float64 if f in FLOAT64_FIELDS else np.float32
+        arrays[f] = rows[:, field_slice(f)].astype(dt)
     arrays["phases"] = np.array(json.dumps(phases, ensure_ascii=False))
     stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(rows[0, 0] if n else time.time()))
     path = d / f"raw_{stamp}.npz"
