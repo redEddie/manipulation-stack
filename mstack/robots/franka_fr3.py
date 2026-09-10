@@ -133,16 +133,7 @@ DEFAULT_JOINT_IMPEDANCE = [3000.0, 3000.0, 3000.0, 2500.0, 2500.0, 2000.0, 2000.
 # readOnce 간 간격이 이 값을 넘으면 "늦은 틱" 으로 센다. 정상은 1 ms 며,
 # 네트워크/GIL 지연으로 한 틱을 놓치면 2 ms 가 된다 -- 1.5 ms 는 그 사이의
 # 판별선이다.
-_ZERO7 = np.zeros(7)
-
 LATE_TICK_S = 1.5e-3
-
-#: 속도 피드포워드가 유효한 시한(초). 이보다 오래 새 명령이 없으면 0 으로
-#: 떨어뜨린다 -- 워커가 멈췄는데 마지막 속도를 계속 믿으면 팔이 목표를 지나쳐
-#: 계속 가속한다. 실측 명령 주기가 50.07~50.86 ms 이므로 3주기이고, 정상
-#: 지터로는 걸리지 않는다. 0 으로 떨어질 때의 가속 계단은 필터의 저크
-#: 클램프(3000 rad/s^3 = 3 rad/s^2 per tick)가 2 ms 에 걸쳐 받아낸다.
-FF_STALE_S = 0.150
 
 # FR3 joint torque limits (N*m), datasheet.  These are the *actuation* limits,
 # and they are NOT a way to disable the collision reflex: the reflex compares
@@ -248,22 +239,18 @@ class _RawPublisher:
             print(f"[FR3] 원시 상태 발행 비활성 ({type(e).__name__}: {e})", flush=True)
             self._sock = None
 
-    def send(self, state, q_des=None, qd_ff=None) -> None:
+    def send(self, state) -> None:
         if self._sock is None:
             return
         try:
             b = self._buf
-            sq, sqd, sdq, st, sdt, sdes, sff = self._sl
+            sq, sqd, sdq, st, sdt = self._sl
             b[0] = time.time()
             b[sq] = state.q
             b[sqd] = state.q_d
             b[sdq] = state.dq
             b[st] = state.tau_J
             b[sdt] = state.dtau_J
-            if q_des is not None:
-                b[sdes] = q_des
-            if qd_ff is not None:
-                b[sff] = qd_ff
             self._sock.send_multipart([RAW_TOPIC, b], flags=self._nb, copy=False)
         except Exception:  # noqa: BLE001 -- 한 번 실패하면 끈다
             self._sock = None
@@ -404,11 +391,6 @@ class FrankaFR3Robot(Robot):
             print(f"[FR3] robot state 에 포스·토크 필드가 없습니다: {missing} "
                   "-- 포스·토크·접촉 관측은 기록되지 않습니다 (knu-1.0.0 로 기록됨)")
         self._success_rate = 1.0
-        # 리더 속도 피드포워드. 명령에 실려 오면 채워지고, FF_STALE_S 를
-        # 넘기면 0 으로 간다. 8원소 명령(정책 클라이언트 등)에서는 늘 0 --
-        # 그때의 동작은 이 기능이 없던 때와 정확히 같다.
-        self._desired_qd = np.zeros(7)
-        self._desired_qd_t = 0.0
         # 틱 지연 계측 (2026-09-07): reflex 가 떴을 때 "틱이 늦었나" 를 로그로
         # 판별하기 위함. readOnce 간 간격을 재고, LATE_TICK_S 초과면 유실로 센다.
         # 비용은 틱당 monotonic() 두 번뿐이라 1 kHz 루프에 무시할 수준이다.
@@ -478,15 +460,9 @@ class FrankaFR3Robot(Robot):
     def command_joint_state(self, joint_state: np.ndarray) -> None:
         joint_state = np.asarray(joint_state, dtype=float)
         q_des = joint_state[:7]
-        # [q1..q7, gripper] 8원소가 기존 계약. 뒤에 [v1..v7] 이 붙어 15원소면
-        # 리더 속도를 실은 것이다 (mstack/agents/lerobot_plugin.py VEL_KEYS).
-        qd_des = joint_state[8:15] if len(joint_state) >= 15 else None
 
         with self._lock:
             self._desired_q = q_des.copy()
-            if qd_des is not None:
-                self._desired_qd = np.asarray(qd_des, dtype=float).copy()
-                self._desired_qd_t = time.monotonic()
             if self._use_gripper and len(joint_state) >= 8:
                 self._gripper_target = float(np.clip(joint_state[7], 0.0, 1.0))
 
@@ -640,6 +616,7 @@ class FrankaFR3Robot(Robot):
                 t_prev = t_now
                 if gap > self._max_tick_gap:
                     self._max_tick_gap = gap
+                raw_pub.send(state)
                 if gap > LATE_TICK_S:
                     self._late_ticks += 1
                     # 유실이 있을 때만, 초당 1 번까지 -- 스팸 방지.
@@ -651,19 +628,12 @@ class FrankaFR3Robot(Robot):
                               flush=True)
                 with self._lock:
                     target = self._desired_q.copy()
-                    # 시한을 넘긴 속도는 쓰지 않는다 (FF_STALE_S 참고).
-                    qd_ff = (self._desired_qd.copy()
-                             if t_now - self._desired_qd_t < FF_STALE_S
-                             else _ZERO7)
                     self._q = np.asarray(state.q, dtype=float)
                     self._dq = np.asarray(state.dq, dtype=float)
                     self._ee_pose = np.asarray(state.O_T_EE, dtype=float)
                     self._success_rate = float(state.control_command_success_rate)
                     if self._has_ft:
                         self._read_ft(state)
-                # 목표와 피드포워드를 읽은 뒤에 발행한다 -- 필터의 입력과
-                # 출력이 같은 틱에서 맞물려야 나중에 맞대 볼 수 있다.
-                raw_pub.send(state, target, qd_ff)
 
                 # Critically-damped second-order reference filter, saturated in
                 # jerk, acceleration and velocity -> smooth, bounded command.
@@ -674,17 +644,8 @@ class FrankaFR3Robot(Robot):
                 # flips between +/-a_max on adjacent ticks, which is a jerk of
                 # 2*a_max/dt -- far past franka::kMaxJointJerk.
                 err = target - q_cmd
-                # 감쇠항이 절대속도가 아니라 **속도 오차** 다 (2026-09-10).
-                # qd_ff = 0 이면 예전 식과 완전히 같다.
-                #
-                # 왜 이렇게 하나: 예전 식은 목표가 일정 속도로 움직일 때
-                # kp*err 가 kd*qd_cmd 와 균형을 이룰 만큼 err 가 벌어져야
-                # 따라갔다 -- 그 err 가 곧 추종 지연이다. 속도를 먹여 주면
-                # err 가 0 이어도 그 속도로 움직일 수 있다. 동차 방정식
-                # (e'' + kd e' + kp e = 0) 은 그대로라 임계감쇠도 유지된다.
                 acc_target = np.clip(
-                    self._kp * err + self._kd * (qd_ff - qd_cmd),
-                    -self._a_max, self._a_max
+                    self._kp * err - self._kd * qd_cmd, -self._a_max, self._a_max
                 )
                 # 속도 상한에 닿기 전에 가속을 미리 줄인다: 저크 j_max 로 감속해
                 # 정확히 v_max 에서 가속 0 이 되려면 |acc| <= sqrt(2 j (v_max - |qd|)).

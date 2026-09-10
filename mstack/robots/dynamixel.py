@@ -149,25 +149,6 @@ class DynamixelRobot(Robot):
 
         return pos
 
-    def get_joint_velocity(self) -> np.ndarray:
-        """관절 속도 (rad/s). 서보가 보고하는 값이지 위치를 미분한 것이 아니다.
-
-        오프셋은 속도에 영향이 없고 부호만 적용한다. 그리퍼(마지막 원소)는
-        0 으로 둔다 -- FR3 쪽 그리퍼 명령은 이진(열림/닫힘)이라 속도라는
-        개념이 없다.
-
-        **왜 서보 값을 쓰나.** 위치 스트림을 차분해 추정할 수도 있지만,
-        2026-09-10 실측에서 생차분은 서보 보고값보다 30~46배 시끄러웠고
-        최댓값을 60% 부풀렸다 (움직이는 리더암 4278표본). 서보는 내부에서
-        훨씬 높은 주기로 미분하고 필터링한다. 분해능은 0.024 rad/s 이고
-        정지 시 표준편차는 그보다 작다.
-        """
-        _, vel = self._driver.get_positions_and_velocities()
-        out = np.asarray(vel, dtype=float) * self._joint_signs
-        if self.gripper_open_close is not None:
-            out[-1] = 0.0
-        return out
-
     def command_joint_state(self, joint_state: np.ndarray) -> None:
         self._driver.set_joints((joint_state + self._joint_offsets).tolist())
 
