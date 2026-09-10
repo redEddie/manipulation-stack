@@ -41,6 +41,7 @@ from mstack.agents.lerobot_plugin import (
 from mstack.data.libero_format import LiberoTaskWriter, NullTaskWriter
 from mstack.config.constants import ROLL_ABORT_RAD
 from mstack.robots.franka_fr3 import FR3_RESET_POSES, FR3_ROLL_JOINTS
+from mstack.comm.phase_bus import PhasePublisher
 from mstack.config.constants import MATCH_GATE_RAD
 from mstack.scene.scene_format import QUALITY_FAILED, QUALITY_SUCCESS, SceneMetadata, SceneWriter
 from mstack.config.station import load_station
@@ -353,6 +354,10 @@ class CollectionWorker(QThread):
         self._episode_count = 0
         self._last_gate_emit = 0.0
         self._last_leader_state = ""
+        # 단계 표지: GUI 시그널 · 사람이 읽는 로그 · PUB 소켓 세 곳으로 나간다
+        # (_set_state 참고). 소켓이 안 열려도 나머지는 그대로 동작한다.
+        self._phase_pub = PhasePublisher()
+        self._phase = ""
         # scene 모드 slot 상태. cmd_set_slot 으로 바뀌고, 에피소드에는
         # "기록 시작 시점의 slot"(_episode_slot 캡처본)이 찍힌다 -- 저장이
         # 백그라운드라 저장 시점의 현재 slot 을 읽으면 안 된다.
@@ -459,6 +464,25 @@ class CollectionWorker(QThread):
         except queue.Empty:
             pass
         return result
+
+    def _set_state(self, phase: str, **extra) -> None:
+        """단계 전이를 한 곳에서 처리한다 -- 화면 · 로그 · PUB.
+
+        예전에는 ``state_changed.emit`` 만 불러서 단계가 GUI 안에서만 살았다.
+        홈 복귀는 성공하면 로그를 한 줄도 안 남기므로, 사고를 되짚을 때 "그때
+        무슨 단계였나" 를 마지막 로그 줄로 **추측**해야 했고 2026-09-10 에
+        실제로 틀렸다 (조작자는 "녹화 종료 후 homing 첫 스텝" 이라고 정확히
+        보고 있었다). 이제 단계마다 시각과 함께 남는다.
+
+        같은 단계를 연속으로 다시 알리지는 않는다 -- 반복 구간에서 로그가 같은
+        줄로 차는 것을 막는다. PUB 은 매번 보낸다 (구독자가 늦게 붙어도 현재
+        단계를 알 수 있어야 한다).
+        """
+        self.state_changed.emit(phase)
+        if phase != self._phase:
+            self._phase = phase
+            self.log_message.emit(f"[단계] {phase}")
+        self._phase_pub.publish(phase, **extra)
 
     def _drain_interrupt(self, react_to_go_home: bool = True) -> Optional[str]:
         """Non-blocking: services ``delete_episode`` inline, reports whether
@@ -989,7 +1013,7 @@ class CollectionWorker(QThread):
 
         Returns "ok", "quit", or "go_home".
         """
-        self.state_changed.emit("gate")
+        self._set_state("gate")
         deadline = time.monotonic() + timeout
         # 자동 정렬이 켜져 있어도 무조건 당기지 않는다: 리더가 느슨한 게이트
         # (GATE_RAD) 안으로 들어온 뒤에만 정렬한다 -- 버튼 경로와 같은 모터
@@ -1173,7 +1197,7 @@ class CollectionWorker(QThread):
         """Returns (outcome, n_frames); outcome is "save", "discard", "quit", or "go_home"."""
         self._teleop.set_teleop_mode(True)
         try:
-            self.state_changed.emit("recording")
+            self._set_state("recording")
             self._writer.start_episode()
             # 이 에피소드에 찍힐 slot 을 기록 시작 시점에 캡처한다. 이후
             # cmd_set_slot 이 와도(다음 에피소드 준비) 이 에피소드에는 무영향.
@@ -1311,7 +1335,7 @@ class CollectionWorker(QThread):
     # ------------------------------------------------------------------- run
     def run(self) -> None:  # noqa: C901 - state machine, kept in one place on purpose
         try:
-            self.state_changed.emit("connecting")
+            self._set_state("connecting")
             self._connect()
             if self.cfg.no_dataset:
                 self._writer = NullTaskWriter(schema=self.cfg.schema)
@@ -1399,7 +1423,9 @@ class CollectionWorker(QThread):
                         cleanup()
                     except Exception:  # noqa: BLE001
                         pass
-            self.state_changed.emit("idle")
+            self._set_state("idle")
+            # 마지막 표지까지 나간 뒤에 닫는다.
+            self._phase_pub.close()
             return
 
         self._episode_count = self._writer.num_episodes
@@ -1415,7 +1441,7 @@ class CollectionWorker(QThread):
                 try:
                     # react_to_go_home=False: this ramp already IS "go home",
                     # so a go_home click here is a no-op, not an abort.
-                    self.state_changed.emit("homing")
+                    self._set_state("homing")
                     if self._ramp_home(react_to_go_home=False) != "ok":
                         break
 
@@ -1432,7 +1458,7 @@ class CollectionWorker(QThread):
                     if g == "go_home":
                         continue
 
-                    self.state_changed.emit("approach")
+                    self._set_state("approach")
                     a = self._approach_ramp()
                     if a == "quit":
                         break
@@ -1531,7 +1557,7 @@ class CollectionWorker(QThread):
                         cleanup()
                     except Exception:  # noqa: BLE001
                         pass
-            self.state_changed.emit("idle")
+            self._set_state("idle")
 
     def _connect(self) -> None:
         from mstack.comm.camera_client import NodeCamera
@@ -1578,7 +1604,7 @@ class CollectionWorker(QThread):
         남은 시간 대신 경과 시간을 싣는다. cfg.reset_wait_seconds 는 더
         이상 진행에 쓰이지 않는다.
         """
-        self.state_changed.emit("reset_wait")
+        self._set_state("reset_wait")
         t0 = time.monotonic()
         last_count = 0.0
         while True:

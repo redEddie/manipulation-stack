@@ -116,4 +116,4 @@ assert not leaky, (
     f"mstack/config 는 아무것도 임포트하지 않는 잎사귀여야 한다: {leaky}")
 print(f"3. mstack/config 무의존 (파일 {len(cfg)}개) OK")
 
-print("\ngello/ 계층 규칙 통과")
+print("\nmstack/ 계층 규칙 통과")
