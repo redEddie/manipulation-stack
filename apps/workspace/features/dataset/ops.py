@@ -16,7 +16,7 @@ from mstack.gui.text_utils import repo_id_error
 from mstack.gui.i18n import tr
 from apps.workspace.features.dataset.right_panel import PHOTO_W
 from apps.workspace.shared.info import scene_fields
-from mstack.gui.scene_gallery import invalidate_scene_thumbs
+from mstack.gui.scene_gallery import invalidate_scene_caches
 from mstack.gui.widgets.video_view import np_to_pixmap
 from mstack.scene.scene_format import (
     delete_scene_episodes,
@@ -533,16 +533,19 @@ class DatasetOps:
             try:
                 if is_scene:
                     delete_scene_episodes(path, names)
-                    # renumber 로 uid 가 재배정되므로 해당 scene 의 썸네일 캐시를
-                    # 전부 무효화한다. 삭제와 별도 try -- 썸네일 정리 실패가
-                    # "삭제 실패" 로 오표기되면 안 된다 (삭제는 이미 성공했다).
+                    # renumber 로 uid 가 재배정되므로 해당 scene 의 파생 캐시를
+                    # (썸네일·프록시 클립) 전부 무효화한다. 삭제와 별도 try --
+                    # 캐시 정리 실패가 "삭제 실패" 로 오표기되면 안 된다
+                    # (삭제는 이미 성공했다).
                     try:
                         sid = read_scene_metadata(path).scene_id
-                        n_thumbs = invalidate_scene_thumbs(sid)
-                        if n_thumbs:
-                            self.win.log(f"[썸네일] {path.name}: {n_thumbs}개 캐시 무효화")
+                        c = invalidate_scene_caches(sid)
+                        if c["thumbs"] or c["proxies"]:
+                            self.win.log(
+                                f"[캐시] {path.name}: 썸네일 {c['thumbs']}개 · "
+                                f"프록시 {c['proxies']}개 무효화")
                     except Exception as e:  # noqa: BLE001
-                        self.win.log(f"[썸네일 캐시 정리 실패] {path.name}: {e}")
+                        self.win.log(f"[캐시 정리 실패] {path.name}: {e}")
                 else:
                     with h5py.File(path, "a") as f:
                         data = f["data"]
@@ -561,6 +564,24 @@ class DatasetOps:
         # 있으면 그 줄을 눌렀을 때 없는 것을 재생하려 든다.
         self.win.stats_ops.mark_stats_stale()
         return True
+
+    def on_build_proxies(self) -> None:
+        """프록시 클립 만들기 대화상자를 연다 (큐레이션 그리드의 전제).
+
+        원본은 읽기만 하지만, 업로드·재압축·변환이 .hdf5 를 쥐고 있으면 목록을
+        잠근다 -- 어느 파일인지까지는 알 수 없으므로 전부 잠근다. 남의 작업을
+        방해하는 것보다 기다리는 쪽이 싸다 (2026-09-10 에 업로드가 scene_021 을
+        열고 있었다).
+        """
+        from apps.workspace.features.dataset.proxy_dialog import ProxyBuildDialog
+
+        paths = sorted(self.dataset_root().glob("**/*.hdf5"))
+        if not paths:
+            QMessageBox.information(
+                self.win, tr("파일 없음"),
+                tr("{r} 에 .hdf5 가 없습니다.").format(r=self.dataset_root()))
+            return
+        ProxyBuildDialog(self.win, paths, self.busy_reason()).exec()
 
     def on_delete_file(self) -> None:
         """Deletes a whole <task>_demo.hdf5. Never offered for the file a

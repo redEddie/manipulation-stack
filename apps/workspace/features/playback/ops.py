@@ -16,7 +16,11 @@ from mstack.gui.workers import EpisodeLoadWorker
 from mstack.gui.i18n import tr
 from mstack.data.libero_format import hdf5_repack_status
 from mstack.data.schema_description import describe_episode
-from mstack.gui.scene_gallery import invalidate_scene_thumbs
+from mstack.data.proxy_clip import (
+    episode_uid_at,
+    invalidate_episode_proxies,
+)
+from mstack.gui.scene_gallery import invalidate_scene_caches
 from mstack.scene.scene_format import count_by_slot, read_scene_metadata
 
 from apps.workspace.constants import REPLAY_SCRIPT
@@ -215,6 +219,17 @@ class PlaybackOps:
             return
         self.win.log(f"[트림] {Path(path).name} {demo}: {self.win.playback.trim_n} → {new_n}프레임 "
                  f"(−{n_trim})")
+        # 프록시 클립은 잘린 꼬리를 아직 갖고 있다 -- 지우지 않으면 큐레이션
+        # 그리드가 **이미 없는 프레임을 계속 보여준다.** 썸네일은 첫 프레임이라
+        # 트림에 안 변하므로 여기서는 건드리지 않는다 (둘의 수명이 다르다).
+        # uid 도 번호도 안 바뀌었으니 scene 통째가 아니라 이 에피소드만.
+        try:
+            uid = episode_uid_at(path, demo)
+            n_px = invalidate_episode_proxies(uid) if uid else 0
+            if n_px:
+                self.win.log(f"[캐시] {uid}: 프록시 {n_px}개 무효화")
+        except Exception as e:  # noqa: BLE001 -- 캐시 정리 실패가 트림 실패는 아니다
+            self.win.log(f"[캐시 정리 실패] {e}")
         self.win.dataset_ops.refresh_dataset_tree()
         self.win.stats_ops.refresh_analysis(force=True)
         self.show_trim_for(path, demo)
@@ -453,11 +468,12 @@ class PlaybackOps:
                     # 파일은 saver 가 잠그고 있다 -- 다시 열지 않고 세션 설정에서
                     # scene_id 를 얻는다 (_session_scene_id).
                     sid = self.win.scene_ops.session_scene_id()
-                    n_thumbs = invalidate_scene_thumbs(sid) if sid else 0
-                    if n_thumbs:
-                        self.win.log(f"[썸네일] {sid}: {n_thumbs}개 캐시 무효화")
+                    c = invalidate_scene_caches(sid) if sid else None
+                    if c and (c["thumbs"] or c["proxies"]):
+                        self.win.log(f"[캐시] {sid}: 썸네일 {c['thumbs']}개 · "
+                                     f"프록시 {c['proxies']}개 무효화")
                 except Exception as e:  # noqa: BLE001
-                    self.win.log(f"[썸네일 캐시 정리 실패] {e}")
+                    self.win.log(f"[캐시 정리 실패] {e}")
         self.win.dataset_ops.refresh_dataset_tree()
         if self.win.session.scene_session:
             # 저장/재판정마다 saver 가 새 목록을 보내온다 -- slot 카운트 갱신

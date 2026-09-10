@@ -311,7 +311,13 @@ def build_menu(win) -> None:
     m.addAction(tr("선택 재생 (실로봇)"), win.playback_ops.on_replay_selected)
     m.addAction(tr("끝 다듬기 (Trim 탭에서)"), win.playback_ops.on_open_trim)
     m.addSeparator()
+    m.addAction(tr("프록시 클립 만들기..."), win.dataset_ops.on_build_proxies)
+    m.addSeparator()
     m.addAction(tr("에피소드 삭제"), win.dataset_ops.on_delete_selected)
+    m.addSeparator()
+    # 파일 삭제는 에피소드 삭제와 **붙여 두지 않는다**. 전에 패널에서 나란히
+    # 두었다가 오클릭으로 태스크 하나가 통째로 날아간 적이 있어 메뉴로 옮겼는데,
+    # 메뉴에서 다시 인접해 있으면 옮긴 의미가 없다 (2026-09-10).
     m.addAction(tr("파일 삭제"), win.dataset_ops.on_delete_file)
     m.addSeparator()
     m.addAction(tr("다시 분석"),

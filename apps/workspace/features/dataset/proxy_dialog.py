@@ -1,0 +1,226 @@
+"""프록시 클립 만들기 대화상자.
+
+큐레이션 그리드는 원본 .hdf5 로는 못 돈다 -- 에피소드 하나가 480x640 카메라
+2대로 280 MB 이고, gzip 청크가 19프레임 깊이라 솎아 읽기가 통째 읽기보다
+14배 느리다. 그래서 미리 작은 mp4 를 구워 둔다 (``mstack.data.proxy_clip``).
+
+이 대화상자가 하는 일은 **무엇을 구울지 고르는 것**뿐이다. 파일마다 "몇 개가
+빠졌나" 를 세어 보여주고, 다른 작업이 쥐고 있는 파일은 잠근다 -- 업로드가
+읽는 중인 .hdf5 를 같이 열면 그쪽을 방해한다 (2026-09-10 에 실제로 업로드가
+scene_021 을 열고 있었다).
+
+이미 있는 클립은 건너뛴다. 중단해도 구운 것은 남고, 다시 열면 남은 것만
+목록에 나온다.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+)
+
+from mstack.data.proxy_clip import DEFAULT_CRF, DEFAULT_SCALE, scan_file
+from mstack.gui.i18n import tr
+from mstack.gui.workers import ProxyBuildWorker
+
+#: 스케일을 %로 고른다. 50% 면 640x480 -> 320x240.
+_SCALE_MIN, _SCALE_MAX = 20, 100
+
+#: 실측 근거 (2026-09-10, 157프레임 320x240 카메라 1대):
+#: crf 23 -> 0.075 MB, 28 -> 0.043 MB, 32 -> 0.030 MB.
+_CRF_MIN, _CRF_MAX = 18, 40
+
+#: 클립 하나의 대략 용량 (MB). scene 0~4 실측 480클립 25.4 MB 에서 나온 값으로,
+#: 목록의 "예상" 칸에만 쓴다 -- 맞히는 것이 목적이 아니라 자릿수를 보여주는
+#: 것이 목적이다.
+_MB_PER_CLIP = 25.4 / 480
+
+#: 클립 하나당 대략 소요 (초). 같은 실측에서 10.2분 / 480클립.
+_SEC_PER_CLIP = 10.2 * 60 / 480
+
+
+class ProxyBuildDialog(QDialog):
+    def __init__(self, win, paths, busy_label: str = "") -> None:
+        super().__init__(win)
+        self.win = win
+        self.worker = None
+        self.setWindowTitle(tr("프록시 클립 만들기"))
+        self.resize(720, 520)
+        col = QVBoxLayout(self)
+
+        col.addWidget(QLabel(tr(
+            "큐레이션 그리드가 쓸 작은 mp4 를 미리 구워 둡니다.\n"
+            "원본은 읽기만 하고, 이미 있는 클립은 건너뜁니다.")))
+
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(
+            [tr("파일"), tr("만들 클립"), tr("예상 용량"), tr("예상 시간")])
+        self.tree.setColumnWidth(0, 300)
+        col.addWidget(self.tree, 1)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel(tr("해상도")))
+        self.scale_spin = QSpinBox()
+        self.scale_spin.setRange(_SCALE_MIN, _SCALE_MAX)
+        self.scale_spin.setValue(int(DEFAULT_SCALE * 100))
+        self.scale_spin.setSuffix(" %")
+        self.scale_spin.setToolTip(tr(
+            "원본 긴 변에 대한 비율. 50% 면 640x480 이 320x240 이 됩니다.\n"
+            "3x4 그리드에서 타일이 250px 안팎이라 그보다 크면 버려집니다."))
+        row.addWidget(self.scale_spin)
+        row.addSpacing(16)
+        row.addWidget(QLabel(tr("화질 (CRF)")))
+        self.crf_spin = QSpinBox()
+        self.crf_spin.setRange(_CRF_MIN, _CRF_MAX)
+        self.crf_spin.setValue(DEFAULT_CRF)
+        self.crf_spin.setToolTip(tr(
+            "낮을수록 좋고 큽니다. 실측(157프레임 320x240 카메라 1대):\n"
+            "  23 -> 0.075 MB    28 -> 0.043 MB    32 -> 0.030 MB"))
+        row.addWidget(self.crf_spin)
+        row.addStretch(1)
+        col.addLayout(row)
+
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(True)
+        col.addWidget(self.bar)
+        self.status = QLabel("")
+        self.status.setStyleSheet("color:#888;")
+        self.status.setWordWrap(True)
+        col.addWidget(self.status)
+
+        btns = QDialogButtonBox()
+        self.start_btn = QPushButton(tr("만들기 시작"))
+        self.start_btn.clicked.connect(self.on_start)
+        btns.addButton(self.start_btn, QDialogButtonBox.ButtonRole.AcceptRole)
+        self.close_btn = QPushButton(tr("닫기"))
+        self.close_btn.clicked.connect(self.reject)
+        btns.addButton(self.close_btn, QDialogButtonBox.ButtonRole.RejectRole)
+        col.addWidget(btns)
+
+        # 목록은 **위젯을 다 만든 뒤에** 채운다 -- _fill 이 진행바와 상태줄을
+        # 건드리므로 먼저 부르면 AttributeError 다.
+        self._fill(paths, busy_label)
+
+    # ------------------------------------------------------------------ 목록
+    def _fill(self, paths, busy_label: str) -> None:
+        """파일마다 빠진 클립 수를 세어 넣는다. 못 여는 파일은 잠근다."""
+        total = 0
+        for p in paths:
+            p = Path(p)
+            it = QTreeWidgetItem(self.tree)
+            it.setText(0, p.name)
+            it.setData(0, Qt.ItemDataRole.UserRole, str(p))
+            try:
+                sc = scan_file(p)
+                n = len(sc["missing"])
+                # 0 의 뜻이 둘이다 -- 다 만들었거나, 파일이 비었거나.
+                note = "" if n else (tr("이미 있음") if sc["episodes"]
+                                     else tr("에피소드 없음"))
+            except Exception as e:  # noqa: BLE001
+                n, note = 0, f"{type(e).__name__}"
+            if busy_label and n:
+                # 다른 작업이 .hdf5 를 쥐고 있을 수 있다. 어느 파일인지까지는
+                # 알 수 없으므로 전부 잠근다 -- 남의 작업을 방해하는 것보다
+                # 기다리는 쪽이 싸다.
+                note = tr("{job} 중").format(job=busy_label)
+                n = 0
+            it.setText(1, str(n) if n else note)
+            it.setText(2, f"{n * _MB_PER_CLIP:.1f} MB" if n else "-")
+            it.setText(3, f"{n * _SEC_PER_CLIP / 60:.1f} 분" if n else "-")
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(0, Qt.CheckState.Checked if n
+                             else Qt.CheckState.Unchecked)
+            if not n:
+                it.setDisabled(True)
+            total += n
+        self.tree.sortItems(0, Qt.SortOrder.AscendingOrder)
+        self.bar.setRange(0, max(total, 1))
+        self.status.setText(
+            tr("만들 클립 {n}개, 예상 {mb:.0f} MB · {min:.0f}분").format(
+                n=total, mb=total * _MB_PER_CLIP,
+                min=total * _SEC_PER_CLIP / 60) if total
+            else tr("만들 것이 없습니다."))
+        self._total = total
+
+    def _checked_paths(self) -> list:
+        out = []
+        for i in range(self.tree.topLevelItemCount()):
+            it = self.tree.topLevelItem(i)
+            if it.checkState(0) == Qt.CheckState.Checked and not it.isDisabled():
+                out.append(it.data(0, Qt.ItemDataRole.UserRole))
+        return out
+
+    # ------------------------------------------------------------------ 실행
+    def on_start(self) -> None:
+        if self.worker is not None:      # 돌고 있으면 이 버튼이 '중단'이다
+            self.worker.stop()
+            self.status.setText(tr("중단하는 중… (지금 굽는 클립까지는 끝냅니다)"))
+            return
+        paths = self._checked_paths()
+        if not paths:
+            self.status.setText(tr("고른 파일이 없습니다."))
+            return
+        self.tree.setEnabled(False)
+        self.scale_spin.setEnabled(False)
+        self.crf_spin.setEnabled(False)
+        self.start_btn.setText(tr("중단"))
+        self.worker = ProxyBuildWorker(
+            paths, self.scale_spin.value() / 100.0, self.crf_spin.value(), self)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.file_done.connect(self.on_file_done)
+        self.worker.done.connect(self.on_done)
+        self.worker.start()
+
+    def on_progress(self, done: int, total: int, label: str) -> None:
+        self.bar.setRange(0, max(total, 1))
+        self.bar.setValue(done)
+        self.status.setText(f"{done}/{total}  {label}")
+
+    def on_file_done(self, r: dict) -> None:
+        name = Path(r["path"]).name
+        msg = tr("[프록시] {f}: {n}개 ({mb:.1f} MB)").format(
+            f=name, n=r["made"], mb=r["bytes"] / 1e6)
+        if r.get("failed"):
+            msg += tr("  실패 {k}개 — {e}").format(
+                k=r["failed"], e=r.get("error") or "?")
+        self.win.log(msg)
+
+    def on_done(self, r: dict) -> None:
+        self.worker = None
+        self.tree.setEnabled(True)
+        self.scale_spin.setEnabled(True)
+        self.crf_spin.setEnabled(True)
+        self.start_btn.setText(tr("만들기 시작"))
+        head = tr("중단했습니다.") if r["stopped"] else tr("끝났습니다.")
+        self.status.setText(tr(
+            "{head} 만든 클립 {n}개 ({mb:.1f} MB), 실패 {k}개.").format(
+                head=head, n=r["made"], mb=r["bytes"] / 1e6, k=r["failed"]))
+        self.win.log(tr("[프록시] {head} 만든 클립 {n}개 ({mb:.1f} MB), 실패 {k}개")
+                     .format(head=head, n=r["made"], mb=r["bytes"] / 1e6,
+                             k=r["failed"]))
+        # 남은 것을 다시 세어 목록을 갱신한다 -- 중단 후 이어 만들 때
+        # "몇 개 남았나" 가 맞아야 한다.
+        paths = [self.tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
+                 for i in range(self.tree.topLevelItemCount())]
+        self.tree.clear()
+        self._fill(paths, "")
+
+    def reject(self) -> None:
+        if self.worker is not None:
+            self.worker.stop()
+            self.worker.wait(5000)
+            self.worker = None
+        super().reject()

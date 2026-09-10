@@ -236,3 +236,79 @@ class DepthCloudWorker(QThread):
             cam.disconnect()
 
 
+
+
+class ProxyBuildWorker(QThread):
+    """큐레이션용 mp4 프록시를 UI 스레드 밖에서 굽는다.
+
+    왜 QProcess 가 아니라 QThread 인가. 인코딩은 PyAV 안에서 일어나고
+    (``mstack.data.proxy_clip``) PyAV 는 GIL 을 놓는다 -- 굽는 동안 화면이
+    멎지 않는다. 별도 프로세스로 띄우면 진행 상황을 다시 파이프로 실어
+    날라야 하는데 얻는 것이 없다. 원시 상태 로거와는 사정이 다르다: 저쪽은
+    1 kHz 제어 루프가 GIL 전환에 걸려서 프로세스를 나눴다.
+
+    원본 .hdf5 는 읽기 전용으로만 연다. 파일당 한 번 열고 그 안의 모든
+    에피소드를 처리한다 -- 비싼 것은 읽기(카메라 2대 2.24초)이고 인코딩은
+    0.4초뿐이라, 파일을 다시 여는 것이 가장 나쁘다.
+    """
+
+    #: (지금까지, 전체, 무엇을)
+    progress = pyqtSignal(int, int, str)
+    #: 파일 하나가 끝날 때마다 -- {"path", "made", "failed", "bytes", "error"}
+    file_done = pyqtSignal(dict)
+    #: 전부 끝났을 때 -- {"made", "failed", "bytes", "stopped"}
+    done = pyqtSignal(dict)
+
+    def __init__(self, paths, scale: float, crf: int, parent=None) -> None:
+        super().__init__(parent)
+        self.paths = [str(p) for p in paths]
+        self.scale = float(scale)
+        self.crf = int(crf)
+        self._stop = False
+
+    def stop(self) -> None:
+        """다음 클립부터 멈춘다. 이미 구운 것은 남는다 -- 다시 돌리면 이어서
+        만든다 (있는 것은 건너뛰므로)."""
+        self._stop = True
+
+    def run(self) -> None:
+        from mstack.data.proxy_clip import build_file, plan_file
+
+        # 전체 개수를 먼저 센다. 진행바가 "남은 일" 을 알아야 하고, plan_file
+        # 은 이미지 없이 attrs 만 읽으므로 싸다.
+        per_file = {}
+        total = 0
+        for p in self.paths:
+            try:
+                n = len(plan_file(p))
+            except Exception:  # noqa: BLE001 -- 못 여는 파일은 0개로 두고 넘어간다
+                n = 0
+            per_file[p] = n
+            total += n
+
+        made = failed = 0
+        nbytes = 0
+        base = 0
+        for p in self.paths:
+            if self._stop:
+                break
+            if per_file[p] == 0:
+                continue
+
+            def _prog(done_in_file, _total_in_file, label, _base=base):
+                self.progress.emit(_base + done_in_file, total, label)
+
+            try:
+                r = build_file(p, scale=self.scale, crf=self.crf,
+                               progress=_prog, should_stop=lambda: self._stop)
+            except Exception as e:  # noqa: BLE001 -- 한 파일이 전체를 멈추지 않는다
+                r = {"made": 0, "failed": per_file[p], "bytes": 0,
+                     "total": per_file[p],
+                     "error": f"{type(e).__name__}: {e}"}
+            base += per_file[p]
+            made += r["made"]
+            failed += r["failed"]
+            nbytes += r["bytes"]
+            self.file_done.emit({"path": p, **r})
+        self.done.emit({"made": made, "failed": failed, "bytes": nbytes,
+                        "stopped": self._stop})

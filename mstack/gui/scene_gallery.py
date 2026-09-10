@@ -105,3 +105,20 @@ def reference_thumb(scene_path: Path, scene_id: str,
     out = Path(thumbs_dir) / f"{scene_id}__reference.jpg"
     _write_thumb(img, out)
     return str(out)
+
+
+def invalidate_scene_caches(scene_id: str) -> dict:
+    """한 scene 의 **파생 캐시 전부**를 무효화한다. ``{"thumbs", "proxies"}``.
+
+    캐시가 둘(썸네일·프록시 클립)인데 무효화를 각각 부르게 두면 반드시 한쪽을
+    빠뜨린다 -- 삭제 경로가 세 군데였던 것과 같은 함정이다. 캐시가 늘면 여기
+    한 곳만 늘린다.
+
+    삭제·renumber 뒤에 부른다. 트림은 uid 를 바꾸지 않으므로 이것이 아니라
+    ``proxy_clip.invalidate_episode_proxies`` 를 쓴다 (썸네일은 첫 프레임이라
+    트림에 변하지 않는다).
+    """
+    from mstack.data.proxy_clip import invalidate_scene_proxies
+
+    return {"thumbs": invalidate_scene_thumbs(scene_id),
+            "proxies": invalidate_scene_proxies(scene_id)}
