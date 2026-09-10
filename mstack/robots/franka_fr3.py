@@ -71,11 +71,21 @@ two real causes were the GIL (see ``patches/README.md``) and the missing jerk
 clamp above.
 """
 
+import os
 import threading
 import time
 from typing import Dict, Optional
 
 import numpy as np
+
+from mstack.comm.robot_raw import (
+    DEFAULT_RAW_PORT,
+    NO_RAW_BUS_ENV,
+    RAW_FIELDS,
+    RAW_LEN,
+    RAW_TOPIC,
+    field_slice,
+)
 
 from mstack.core.robot import Robot
 from mstack.data.dataset_schema import (
@@ -191,6 +201,67 @@ FR3_RESET_POSES = {
     "robosuite": np.array([0.0, 0.196350, 0.0, -2.617994, 0.0, 2.941593, 0.785398]),
 }
 DEFAULT_RESET_POSE = "panda"
+
+
+class _RawPublisher:
+    """1 kHz 원시 상태를 PUB 으로 흘린다. 실패하면 스스로 꺼진다.
+
+    제어 루프 안에서 불리므로 규칙이 엄격하다:
+
+    * **할당하지 않는다** -- 버퍼는 미리 잡고 슬라이스에 대입만 한다.
+    * **블로킹하지 않는다** -- NOBLOCK, HWM 을 넘으면 조용히 버린다.
+    * **던지지 않는다** -- 한 번이라도 실패하면 영구히 끄고 루프는 계속 돈다.
+
+    진단이 제어 루프를 죽이는 일은 없어야 한다. 이 저장소가 루프를 죽여 본
+    원인 두 가지 중 하나가 GIL 이었다 (모듈 독스트링 참고).
+    """
+
+    def __init__(self, port: int) -> None:
+        self._sock = None
+        self._buf = np.zeros(RAW_LEN, dtype=np.float64)
+        # 슬라이스를 미리 잡아 둔다 -- field_slice() 는 이름을 선형 탐색하므로
+        # 틱마다 부르면 7 µs 가 나온다 (실측). 미리 잡으면 1 µs 대다.
+        self._sl = tuple(field_slice(f) for f in RAW_FIELDS)
+        if os.environ.get(NO_RAW_BUS_ENV) == "1":
+            return
+        try:
+            import zmq
+
+            ctx = zmq.Context.instance()
+            sock = ctx.socket(zmq.PUB)
+            # 구독자가 밀리면 버린다. 1 kHz 라 밀리면 금방 쌓인다.
+            sock.setsockopt(zmq.SNDHWM, 4000)
+            sock.setsockopt(zmq.LINGER, 0)
+            sock.bind(f"tcp://127.0.0.1:{port}")
+            self._sock = sock
+            self._nb = zmq.NOBLOCK
+        except Exception as e:  # noqa: BLE001
+            print(f"[FR3] 원시 상태 발행 비활성 ({type(e).__name__}: {e})", flush=True)
+            self._sock = None
+
+    def send(self, state) -> None:
+        if self._sock is None:
+            return
+        try:
+            b = self._buf
+            sq, sqd, sdq, st, sdt = self._sl
+            b[0] = time.time()
+            b[sq] = state.q
+            b[sqd] = state.q_d
+            b[sdq] = state.dq
+            b[st] = state.tau_J
+            b[sdt] = state.dtau_J
+            self._sock.send_multipart([RAW_TOPIC, b], flags=self._nb, copy=False)
+        except Exception:  # noqa: BLE001 -- 한 번 실패하면 끈다
+            self._sock = None
+
+    def close(self) -> None:
+        if self._sock is not None:
+            try:
+                self._sock.close(linger=0)
+            except Exception:  # noqa: BLE001
+                pass
+            self._sock = None
 
 
 class FrankaFR3Robot(Robot):
@@ -493,6 +564,7 @@ class FrankaFR3Robot(Robot):
 
     def _control_loop(self) -> None:
         pf = self._pf
+        raw_pub = None
         try:
             ctrl = self.robot.start_joint_position_control(
                 pf.ControllerMode.JointImpedance
@@ -535,6 +607,8 @@ class FrankaFR3Robot(Robot):
             acc_prev = np.zeros(7)
             t_prev = time.monotonic()
             last_late_log = 0.0
+            # 진단용 1 kHz 원시 상태 발행. 실패해도 루프는 그대로 돈다.
+            raw_pub = _RawPublisher(DEFAULT_RAW_PORT)
             while not self._stop.is_set():
                 state, _ = ctrl.readOnce()
                 t_now = time.monotonic()
@@ -542,6 +616,7 @@ class FrankaFR3Robot(Robot):
                 t_prev = t_now
                 if gap > self._max_tick_gap:
                     self._max_tick_gap = gap
+                raw_pub.send(state)
                 if gap > LATE_TICK_S:
                     self._late_ticks += 1
                     # 유실이 있을 때만, 초당 1 번까지 -- 스팸 방지.
@@ -614,6 +689,11 @@ class FrankaFR3Robot(Robot):
                 f"late={self._late_ticks}, success_rate={self._success_rate:.4f}]"
             )
             print(f"[FR3] CONTROL LOOP ABORTED: {self._control_error}", flush=True)
+        finally:
+            # 포트를 놓아 준다 -- 루프가 다시 서면 같은 포트에 다시 바인드해야
+            # 하는데, 남아 있으면 두 번째 바인드가 실패해 발행이 조용히 꺼진다.
+            if raw_pub is not None:
+                raw_pub.close()
 
     def _gripper_read_loop(self) -> None:
         """Samples the measured finger width, and does nothing else.

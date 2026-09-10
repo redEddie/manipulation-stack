@@ -102,6 +102,7 @@ from apps.workspace.models import (  # noqa: E402
     ProcessRegistry,
     SessionState,
 )
+from apps.workspace.shared.raw_logger_proc import spawn_logger
 from apps.workspace.shared.camera_node_proc import adopt_node  # noqa: E402
 from apps.workspace.shared.robot_node_proc import (  # noqa: E402
     adopt_node as adopt_robot_node,
@@ -325,6 +326,15 @@ class WorkspaceWindow(QMainWindow):
             self.procs.camera_node_process = camera_node
             self.cameras.camera_node_spec = camera_node_spec
             self.log(f"[카메라노드] 마법사에서 이어받음: {camera_node_spec}")
+
+        # 1 kHz 원시 상태 로거. 로봇 노드가 PUB 으로 흘리는 것을 받아
+        # ~/libero_gui_logs/robot_raw/ 에 창 단위로 남긴다. 에피소드 HDF5 는
+        # 20 Hz 라 나이퀴스트가 10 Hz 이고, 손에 느껴지는 진동은 거기 안
+        # 잡힌다 (2026-09-10 조작자 보고). 없어도 수집은 그대로 돈다.
+        logger_proc = spawn_logger(parent=self)
+        if logger_proc is not None:
+            logger_proc.readyReadStandardOutput.connect(self._on_raw_logger_output)
+            self.procs.raw_logger_process = logger_proc
 
         # 마법사의 데이터세트 버전 [확인] 이 로봇 노드를 띄웠으면 그것도
         # 이어받는다. FCI 는 클라이언트 하나만 받으므로, 안 이어받으면
@@ -911,6 +921,14 @@ class WorkspaceWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------- close
+    def _on_raw_logger_output(self) -> None:
+        proc = self.procs.raw_logger_process
+        if proc is None:
+            return
+        for line in self._proc_text(proc).splitlines():
+            if line.strip():
+                self.log(f"[원시로그] {line.strip()}")
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.playback.play_timer.stop()
         if self.playback.play_loader is not None:
@@ -918,6 +936,10 @@ class WorkspaceWindow(QMainWindow):
         self.depth_ops.stop_cloud(restore_previews=False)
         self.camera_ops.stop_previews_blocking()
         self.camera_ops.stop_camera_node()
+        if self.procs.raw_logger_process is not None:
+            self.procs.raw_logger_process.terminate()
+            self.procs.raw_logger_process.waitForFinished(2000)
+            self.procs.raw_logger_process = None
         if self.worker is not None and self.worker.isRunning():
             # 이력은 여기서 남긴다. cmd_quit 뒤의 wait() 동안에는 이벤트
             # 루프가 안 돌아서 on_worker_finished 가 올 자리가 없다 --

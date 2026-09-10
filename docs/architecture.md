@@ -27,10 +27,17 @@ flowchart LR
   end
 
   subgraph GUIP["GUI 프로세스 — lerobot-venv"]
-    RS["RealSenseCamera 스레드 × 2<br/>640×480 @ 30 fps"]
     W["CollectionWorker (QThread)<br/>20 Hz 텔레옵 루프"]
     SV["EpisodeSaver (QThread)<br/>h5py 호출 직렬화"]
     UI["PyQt6 메인 스레드<br/>미리보기 · Layout 오버레이"]
+  end
+
+  subgraph CAMP["카메라 노드 프로세스"]
+    RS["RealSenseCamera × 2<br/>640×480 @ 30 fps"]
+  end
+
+  subgraph LOGP["원시 상태 로거 프로세스"]
+    RL["1 kHz 구독 → 창 단위 .npz"]
   end
 
   subgraph NODEP["로봇 노드 프로세스 — pylibfranka-venv"]
@@ -45,8 +52,10 @@ flowchart LR
   GELLO -->|"USB serial · FTDI"| W
   CAM1 -->|USB3| RS
   CAM2 -->|USB3| RS
-  RS -->|"read_latest() · 논블로킹"| W
+  RS -->|"ZMQ PUB/SUB<br/>최신 프레임만"| W
   W <-->|"ZMQ REQ/REP + pickle<br/>틱당 왕복 2회"| REP
+  CTRL -->|"ZMQ PUB 1 kHz<br/>q·q_d·dq·tau_J"| RL
+  W -->|"ZMQ PUB<br/>단계 표지"| RL
   REP --> CTRL
   REP --> GRIP
   CTRL <-->|"FCI · 1 kHz · ethernet"| FR3
@@ -57,7 +66,7 @@ flowchart LR
 
   classDef proc fill:#e8f0fe,stroke:#4285f4
   classDef hw fill:#fef7e0,stroke:#f9ab00
-  class GUIP,NODEP proc
+  class GUIP,NODEP,CAMP,LOGP proc
   class IN hw
   class FR3 hw
 ```
@@ -81,15 +90,28 @@ abort 로 노드가 죽어도 GUI 는 살아서 그 사실을 화면에 띄울 �
 | 리더암 → 워커 | FTDI USB serial | 동기 읽기. 서보 8개를 매 틱 폴링 |
 | 워커 ↔ 노드 | ZMQ REQ/REP + pickle | **엄격한 락스텝**. 요청 하나가 미해결이면 다음 요청 불가 |
 | 노드 ↔ FR3 | FCI (libfranka ActiveControl) | 1 kHz 고정. 한 틱이라도 늦으면 로봇이 abort |
-| 카메라 → 워커 | 프로세스 내 공유 버퍼 | 논블로킹. 카메라 스레드가 갱신, 루프는 최신 것만 집어감 |
+| 카메라 → 워커 | ZMQ PUB/SUB | 논블로킹. 최신 프레임만 쓰므로 재전송할 이유가 없다 |
+| 노드 → 원시 로거 | ZMQ PUB/SUB | 1 kHz. 발행 비용 5.9 µs/tick (예산의 0.6%), HWM 초과 시 폐기 |
+| 워커 → 원시 로거 | ZMQ PUB/SUB | 단계 표지. 로거가 이것으로 창을 끊는다 |
 
 REQ/REP 의 락스텝이 중요하다. 노드가 한 틱 늦으면 워커가 그대로 블록되고, 예외가
 `recv()` 와 `send()` 사이에서 빠져나가면 소켓이 영구히 어긋난다. 그래서
 `ZMQServerRobot` 은 `RCVTIMEO` 를 걸고 `zmq.Again` 을 명시적으로 처리한다.
 
-카메라는 ZMQ 카메라 노드(`mstack/comm/zmq_core/camera_node.py`)를 **거치지 않는다**.
-그 경로는 존재하지만 이 GUI 는 쓰지 않고, lerobot 의 `RealSenseCamera` 를 GUI
-프로세스 안에서 직접 연다. 640×480 RGB 를 매 틱 pickle 로 왕복시킬 이유가 없다.
+전송이 셋으로 갈리는 기준은 **응답이 필요한가**다. 로봇 명령은 응답이 있어야
+다음 틱을 계산할 수 있으니 REQ/REP 다. 카메라 프레임과 진단 신호는 최신값만
+쓰면 되니 PUB/SUB 다 -- 놓친 것을 재전송할 이유가 없고, 구독자가 없거나 느려도
+발행자가 멈추면 안 된다.
+
+카메라는 2026-08-25 에 별도 노드로 분리됐다 (`mstack/comm/camera_node.py`,
+구독은 `mstack/comm/camera_client.py`). 그 전에는 GUI 프로세스 안에서
+`RealSenseCamera` 를 직접 열었다.
+
+원시 상태 로거(`mstack/comm/robot_raw_logger.py`)가 **프로세스**인 이유는 파이썬
+GIL 이다. 전환 간격이 기본 5 ms 라, 쓰기를 노드 안 스레드로 두면 1 kHz 제어
+루프가 그만큼 멈춘다 (실측: 파이썬 작업 스레드를 붙이면 모든 틱이 늦었다,
+486/486). 프로세스를 나누면 GIL 이 분리되어 로거가 무엇을 하든 제어 루프에
+닿지 않는다.
 
 ---
 

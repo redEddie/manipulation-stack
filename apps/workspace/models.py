@@ -32,6 +32,9 @@ class ProcessRegistry:
     #: 조용히 실패하는데, 빠른 재개는 그 사이를 기다려야 한다.
     node_ready: bool = False
     camera_node_process: QProcess | None = None
+    #: 1 kHz 원시 상태 로거. 순수 진단이라 없어도 수집은 그대로 돈다
+    #: (apps/workspace/shared/raw_logger_proc.py).
+    raw_logger_process: QProcess | None = None
     convert_process: QProcess | None = None
     repack_process: QProcess | None = None
     upload_process: QProcess | None = None
