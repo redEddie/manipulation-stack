@@ -35,6 +35,21 @@ def build_dataset(win) -> QWidget:
     dbrowse.clicked.connect(win.dataset_ops.browse_root)
     dr.addWidget(dbrowse)
     col.addLayout(dr)
+    # (씬 → 지시문) 선택은 Gallery 탭이 만든 콤보를 그대로 재사용한다. Qt 는
+    # 위젯을 레이아웃에 넣으면 부모가 옮겨지므로, 결과적으로 콤보는 이
+    # 왼쪽 패널에만 나타난다. build_center() 가 build_left() 보다 먼저
+    # 불리므로 (collect_workspace.py) 여기 도달할 때 콤보는 이미 있다.
+    if hasattr(win, "gallery_scene_combo"):
+        srow = QHBoxLayout()
+        srow.addWidget(QLabel(tr("Scene")))
+        srow.addWidget(win.gallery_scene_combo, 1)
+        col.addLayout(srow)
+        irow = QHBoxLayout()
+        irow.addWidget(QLabel(tr("Instruction")))
+        irow.addWidget(win.gallery_filter_combo, 1)
+        col.addLayout(irow)
+    else:
+        col.addWidget(QLabel(tr("Scene 목록은 Gallery 탭을 연 뒤 나타납니다")))
     # 비활성 '에피소드 검색' 입력칸을 뺐다 (2026-09-06). 검색/필터는 아직
     # 없고, 누를 수 없는 입력칸은 트리 위에서 자리만 차지했다.
     win.dataset_tree = QTreeWidget()
@@ -49,8 +64,11 @@ def build_dataset(win) -> QWidget:
     win.dataset_tree.setSelectionMode(
         QAbstractItemView.SelectionMode.ExtendedSelection)
     win.dataset_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+    # 트리는 확인용으로만 남긴다 -- 큐레이션의 축은 파일이 아니라
+    # (씬 → 지시문) 이고, 좁힌 목록은 위 콤보로 갤러리에서 본다.
+    win.dataset_tree.setMaximumHeight(180)
     win.dataset_tree.itemSelectionChanged.connect(win.dataset_ops.on_dataset_selection)
-    col.addWidget(win.dataset_tree, 1)
+    col.addWidget(win.dataset_tree)
     # 파일 삭제는 여기 없다. 에피소드 삭제 바로 옆에 두었더니 실제로 오클릭이
     # 났고, 한 번에 태스크 하나가 통째로 날아간다. 되돌릴 수 없는 조작은
     # 한 단계 더 들어가야 닿도록 Dataset 메뉴에만 둔다.

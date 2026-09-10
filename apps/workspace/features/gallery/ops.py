@@ -127,10 +127,10 @@ class GalleryOps:
         g = self.win.gallery_grid
         if g.playing:
             g.stop()
-            self.win.gallery_play_btn.setText(tr("▶ 재생"))
+            self.win.gallery_play_btn.setText(tr("▶ Play"))
         else:
             g.start()
-            self.win.gallery_play_btn.setText(tr("■ 정지"))
+            self.win.gallery_play_btn.setText(tr("■ Stop"))
 
     def rewind(self) -> None:
         self.win.gallery_grid.rewind_all()

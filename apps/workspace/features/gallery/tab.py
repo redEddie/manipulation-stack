@@ -50,10 +50,10 @@ def build_gallery_tab(win) -> QWidget:
     # 걸러야 한다 -- 큐레이션 대상 셋 중 하나다 (조작자, 2026-09-10).
     win.gallery_len_combo = QComboBox()
     shrinkable_combo(win.gallery_len_combo)
-    for label, key in ((tr("(모든 길이)"), None),
-                       (tr("짧은 것만"), "short"),
-                       (tr("긴 것만"), "long"),
-                       (tr("실패만"), "failed")):
+    for label, key in ((tr("all lengths"), None),
+                       (tr("short only"), "short"),
+                       (tr("long only"), "long"),
+                       (tr("failed only"), "failed")):
         win.gallery_len_combo.addItem(label, key)
     win.gallery_len_combo.currentIndexChanged.connect(
         win.gallery_ops.apply_gallery_filter)
@@ -66,18 +66,18 @@ def build_gallery_tab(win) -> QWidget:
     # 재생 제어. 되감기가 따로 있는 이유는 격자가 **전부 끝난 뒤에만** 되감기
     # 때문이다 -- 다시 보고 싶을 때 기다리지 않아도 되게 한다.
     ctl = QHBoxLayout()
-    win.gallery_play_btn = QPushButton(tr("▶ 재생"))
+    win.gallery_play_btn = QPushButton(tr("▶ Play"))
     win.gallery_play_btn.clicked.connect(win.gallery_ops.toggle_play)
     ctl.addWidget(win.gallery_play_btn)
-    b = QPushButton(tr("↺ 처음부터"))
+    b = QPushButton(tr("↺ Restart"))
     b.setToolTip(tr("모든 타일을 첫 프레임으로 되돌리고 다시 맞춰 출발합니다."))
     b.clicked.connect(win.gallery_ops.rewind)
     ctl.addWidget(b)
     ctl.addSpacing(12)
     win.gallery_cam_combo = QComboBox()
     shrinkable_combo(win.gallery_cam_combo)
-    for label, key in ((tr("정면"), "agentview_rgb"),
-                       (tr("손목"), "eye_in_hand_rgb")):
+    for label, key in (("agent", "agentview_rgb"),
+                       ("wrist", "eye_in_hand_rgb")):
         win.gallery_cam_combo.addItem(label, key)
     win.gallery_cam_combo.currentIndexChanged.connect(win.gallery_ops.on_camera_changed)
     ctl.addWidget(win.gallery_cam_combo)
@@ -88,7 +88,7 @@ def build_gallery_tab(win) -> QWidget:
     ctl.addWidget(win.gallery_prev_btn)
     win.gallery_page_spin = QSpinBox()
     win.gallery_page_spin.setRange(1, 1)
-    win.gallery_page_spin.setPrefix(tr("쪽 "))
+    win.gallery_page_spin.setPrefix(tr("Page "))
     win.gallery_page_spin.valueChanged.connect(win.gallery_ops.on_page_changed)
     ctl.addWidget(win.gallery_page_spin)
     win.gallery_page_total = QLabel("/ 1")

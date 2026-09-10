@@ -116,7 +116,7 @@ class _Tile(QFrame):
         uid = ep.get("episode_uid", "")
         p = proxy_path(uid, camera)
         if not uid or not Path(p).exists():
-            self.view.setText("프록시 없음")
+            self.view.setText("no proxy")
             self.view.setStyleSheet("background:#111; color:#666;")
             self.caption.setText(self._caption_text())
             self.done = True
@@ -126,7 +126,7 @@ class _Tile(QFrame):
         cap = cv2.VideoCapture(str(p))
         if not cap.isOpened():
             cap.release()
-            self.view.setText("열 수 없음")
+            self.view.setText("unreadable")
             self.done = True
             return
         self.cap = cap

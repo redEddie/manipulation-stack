@@ -56,6 +56,7 @@ h264 장치를 못 찾고(``h264_v4l2m2m``), mp4v 로 떨어지면 ``VIDEOWRITER
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -63,8 +64,21 @@ import numpy as np
 
 from mstack.config.paths import state_dir
 
+#: 프록시 디렉터리를 바꾸는 환경 변수. 두 체크아웃(main/dev)이
+#: ``MSTACK_PROXY_DIR`` 을 같은 곳으로 가리키면 캐시를 공유한다.
+PROXY_DIR_ENV = "MSTACK_PROXY_DIR"
+
 #: 프록시가 쌓이는 곳. 썸네일 캐시(``thumbs/``) 옆이다.
-PROXY_DIR = state_dir() / "proxy"
+#:
+#: **왜 환경 변수로 덮을 수 있는가.** 프록시는 데이터셋의 파생물이지 세션의
+#: 파생물이 아니다. 두 체크아웃이 같은 ``~/libero_datasets`` 를 본다면 캐시도
+#: 같이 봐야 한다. 그런데 기본값이 ``state_dir()`` 아래라서, dev 아이콘이
+#: ``GELLO_STATE_DIR`` 을 다른 경로로 주면 **같은 데이터셋인데도** 이미 구워
+#: 둔 클립을 못 보고 다시 굽는다 (2026-09-11 에 dev 로 띄웠더니 480개를 못
+#: 봤다). 그래서 공유 캐시 자리를 이 환경 변수로 밀어 넣을 수 있게 했다.
+#: 기본값은 그대로 ``state_dir()`` 아래다 -- 인수 테스트가 조작자의 진짜
+#: 캐시를 건드리지 않게 테스트마다 격리된 자리를 쓰게 하려는 것이다.
+PROXY_DIR = Path(os.environ.get(PROXY_DIR_ENV) or (state_dir() / "proxy"))
 
 #: 긴 변을 이 비율로 줄인다. 0.5 면 640x480 -> 320x240.
 #: 3x4 그리드에서 중앙 패널이 1000px 안팎이면 타일이 250x188 이라 이보다 큰

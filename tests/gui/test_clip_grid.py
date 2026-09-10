@@ -60,7 +60,7 @@ opened = [t for t in g.tiles if t.cap is not None]
 assert len(opened) == 2, f"클립이 {len(opened)}개 열렸다 (2 여야 함)"
 missing = g.tiles[2]
 assert missing.ep is not None and missing.cap is None
-assert "프록시 없음" in missing.view.text(), missing.view.text()
+assert "no proxy" in missing.view.text(), missing.view.text()
 assert g.tiles[3].ep is None, "빈 칸이어야 한다"
 print("2. 프록시 없는 타일이 죽지 않고 그렇다고 말함 OK")
 
