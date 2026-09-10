@@ -118,14 +118,25 @@ Two things that look like safety layers and are not:
   `policy.url` of the station file or in `MSTACK_POLICY_SERVER`, never in
   source. Korean comments are fine and stay; new comments/docs/issues in
   English (issue #42, carried over).
-- One checkout for now: `~/teleop-franka/manipulation-stack` on `main`, which
-  the desktop icon "Scene 데이터 수집기" runs. It carries a gitignored
-  `configs/stations/*.local.yaml` and a `.venv` symlink; a second worktree would
-  need its own copies of both.
-- Small, verified changes may land on `main` directly while that is the only
-  checkout (operator's call, 2026-09-08). For anything systemic, add the `dev`
-  worktree first and merge `--ff-only` into `main` after the suite passes there
-  — `main` is what the operator runs, so nothing lands there unverified.
+- Two checkouts, one desktop icon each (2026-09-10):
+  `~/teleop-franka/manipulation-stack` on `main` → "Scene 데이터 수집기"
+  (real collection), and `~/teleop-franka/manipulation-stack-dev` on `dev` →
+  "Scene 수집기 [dev]" (pre-merge checking). Each carries its own gitignored
+  `configs/stations/*.local.yaml` and `.venv` symlink — a new worktree needs
+  copies of both or it will not start.
+  The dev icon sets `GELLO_STATE_DIR=~/libero_gui_logs_dev` so its logs,
+  settings and 1 kHz raw windows stay out of the collection ones (a shared raw
+  log dir means one session's rolling windows evict the other's — that
+  destroyed evidence on 2026-09-10). **The dataset root is a setting, not an
+  env var**, so a fresh dev state dir still defaults to the real
+  `~/libero_datasets`; point it elsewhere on the dev GUI's first launch.
+  The two cannot run at once: same ZMQ ports, and the FCI accepts one client.
+- `dev` exists now, so systemic work goes there first and reaches `main` by
+  `--ff-only` merge after the suite passes *and* the operator has run it on the
+  robot. `main` is what the icon pulls for real collection. (The leader-drop
+  safety layer is the exception on record: it landed on `main` on 2026-09-10
+  before any hardware run, because the operator asked for it live rather than
+  in shadow mode.)
 - The icon runs `git pull --ff-only` before launching, so **whatever is on
   `origin/main` is what the operator gets on the next launch.** Say so before
   pushing anything they are about to test on hardware.
