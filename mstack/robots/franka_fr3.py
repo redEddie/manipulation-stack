@@ -239,18 +239,20 @@ class _RawPublisher:
             print(f"[FR3] 원시 상태 발행 비활성 ({type(e).__name__}: {e})", flush=True)
             self._sock = None
 
-    def send(self, state) -> None:
+    def send(self, state, q_des=None) -> None:
         if self._sock is None:
             return
         try:
             b = self._buf
-            sq, sqd, sdq, st, sdt = self._sl
+            sq, sqd, sdq, st, sdt, sdes = self._sl
             b[0] = time.time()
             b[sq] = state.q
             b[sqd] = state.q_d
             b[sdq] = state.dq
             b[st] = state.tau_J
             b[sdt] = state.dtau_J
+            if q_des is not None:
+                b[sdes] = q_des
             self._sock.send_multipart([RAW_TOPIC, b], flags=self._nb, copy=False)
         except Exception:  # noqa: BLE001 -- 한 번 실패하면 끈다
             self._sock = None
@@ -616,7 +618,6 @@ class FrankaFR3Robot(Robot):
                 t_prev = t_now
                 if gap > self._max_tick_gap:
                     self._max_tick_gap = gap
-                raw_pub.send(state)
                 if gap > LATE_TICK_S:
                     self._late_ticks += 1
                     # 유실이 있을 때만, 초당 1 번까지 -- 스팸 방지.
@@ -634,6 +635,9 @@ class FrankaFR3Robot(Robot):
                     self._success_rate = float(state.control_command_success_rate)
                     if self._has_ft:
                         self._read_ft(state)
+                # 목표를 읽은 뒤에 발행한다 -- 필터의 입력과 출력이 같은
+                # 틱에서 맞물려야 나중에 맞대 볼 수 있다.
+                raw_pub.send(state, target)
 
                 # Critically-damped second-order reference filter, saturated in
                 # jerk, acceleration and velocity -> smooth, bounded command.
