@@ -73,34 +73,20 @@ def build_dataset(win) -> QWidget:
     # 났고, 한 번에 태스크 하나가 통째로 날아간다. 되돌릴 수 없는 조작은
     # 한 단계 더 들어가야 닿도록 Dataset 메뉴에만 둔다.
     #
-    # 두 줄로 나누고 삭제만 떼어놓는 이유는 폭이 아니라 종류다. 위 네 개는
-    # 읽거나 고르기만 하고, 아래 하나만 파일을 바꾼다 -- 한 줄에 다섯 개가
-    # 나란히 있으면 그 차이가 라벨 글자에만 남는다.
-    for pair in ((("새로고침", win.dataset_ops.refresh_dataset_tree,
-                   "데이터 폴더를 다시 읽어 목록을 새로 그립니다."),
-                  ("구조 확인", win.playback_ops.on_show_structure,
-                   "선택한 *파일*의 에피소드 수·용량·이미지 압축·재압축 이력과\n"
-                   "첫 에피소드의 데이터 구조를 보여줍니다.")),
-                 (("HDF5 트리 뷰어", win._on_hdf5_tree,
-                   "선택한 파일의 전체 내부 구조(그룹/데이터셋/attrs)를\n"
-                   "트리로 탐색합니다. 데이터셋을 클릭하면 shape·dtype·압축과\n"
-                   "이미지 미리보기/값 미리보기가 나옵니다 (myHDF5 스타일)."),
-                  ("myHDF5 (웹)", win.upload.on_myhdf5,
-                   "브라우저에서 myhdf5.hdfgroup.org 를 엽니다.\n"
-                   "파일을 창에 끌어다 놓으면 같은 구조를 웹에서 봅니다.")),
-                 (("실패만 선택", win.dataset_ops.on_select_failed,
-                   "success=False 로 표시된 에피소드를 모두 선택합니다.\n"
-                   "선택만 하고 지우지 않습니다."),
-                  ("튀는 것만 선택", win.dataset_ops.on_select_jerky,
-                   "같은 (scene·문장) 그룹 평균과 ±{d} 넘게 차이 나는 에피소드를 모두 선택합니다.\n"
-                   "선택만 하고 지우지 않습니다. (Analysis 탭과 같은 기준)"))):
-        row = QHBoxLayout()
-        for text, slot, tip in pair:
-            b = QPushButton(tr(text))
-            b.setToolTip(tr(tip).format(d=TASK_DEV_LIMIT))
-            b.clicked.connect(slot)
-            row.addWidget(b)
-        col.addLayout(row)
+    # 구조 확인·HDF5 트리·myHDF5·튀는 것만 선택은 메뉴에 같은 항목이 있어
+    # 패널에서는 뺐다 (2026-09-11) -- 삭제로 가는 문을 하나로 모으는 것이
+    # 목적이므로 이 행에는 읽기/고르기만 남긴다.
+    row = QHBoxLayout()
+    for text, slot, tip in (("새로고침", win.dataset_ops.refresh_dataset_tree,
+                             "데이터 폴더를 다시 읽어 목록을 새로 그립니다."),
+                            ("실패만 선택", win.dataset_ops.on_select_failed,
+                             "success=False 로 표시된 에피소드를 모두 선택합니다.\n"
+                             "선택만 하고 지우지 않습니다.")):
+        b = QPushButton(tr(text))
+        b.setToolTip(tr(tip).format(d=TASK_DEV_LIMIT))
+        b.clicked.connect(slot)
+        row.addWidget(b)
+    col.addLayout(row)
 
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
@@ -134,16 +120,28 @@ def build_dataset(win) -> QWidget:
     win.replay_btn.clicked.connect(win.playback_ops.on_replay_selected)
     col.addWidget(win.replay_btn)
 
-    del_btn = QPushButton(tr("선택한 에피소드 삭제"))
-    del_btn.setToolTip(tr(
-        "선택한 에피소드를 .hdf5 에서 실제로 지웁니다 (실패·튀는 궤적 큐레이션).\n"
-        "legacy/scene 모두 삭제 후 번호를 다시 매깁니다 (scene 은 slot E번호와 "
-        "uid 도 재부여).\nHub 에 이미 올라간 에피소드면 전체 재빌드가 필요합니다."
-        "\n되돌릴 수 없습니다. 수집 중이 아닌 "
-        "파일이면 세션 없이도 삭제됩니다. 파일 통째 삭제는 Dataset 메뉴에."))
-    del_btn.setStyleSheet("background-color:#c0392b; color:white; padding:6px;")
-    del_btn.clicked.connect(win.dataset_ops.on_delete_selected)
-    col.addWidget(del_btn)
+    # 삭제는 표시와 실행으로 갈라진다 (2026-09-11). 에피소드 삭제로 가는
+    # 문이 넷이던 것을 하나로 모으는 것이 목적 -- 격자·트리·순위표 어디서든
+    # "삭제 목록에 넣기"는 자유롭고, 실제로 지우는 것은 아래 빨간 버튼
+    # 하나뿐이다. 표시는 되돌릴 수 있으니 즉시, 실행은 장바구니를 거친다.
+    win.basket_label = QLabel("")
+    win.basket_label.setStyleSheet("color:#c0392b;")
+    win.basket_label.setWordWrap(True)
+    col.addWidget(win.basket_label)
+    brow = QHBoxLayout()
+    win.basket_exec_btn = QPushButton(tr("Delete marked"))
+    win.basket_exec_btn.setStyleSheet(
+        "background-color:#c0392b; color:white; padding:6px;")
+    win.basket_exec_btn.setToolTip(tr(
+        "삭제 목록에 넣은 에피소드를 한 번에 지웁니다.\n"
+        "확인창에서 무엇이 지워지는지 다시 봅니다. 되돌릴 수 없습니다.\n"
+        "표시는 격자·순위표 어디서든 하고, 지우는 것은 이 버튼 하나뿐입니다."))
+    win.basket_exec_btn.clicked.connect(win.dataset_ops.on_delete_marked)
+    brow.addWidget(win.basket_exec_btn)
+    win.basket_clear_btn = QPushButton(tr("Clear marks"))
+    win.basket_clear_btn.clicked.connect(win.dataset_ops.on_clear_marks)
+    brow.addWidget(win.basket_clear_btn)
+    col.addLayout(brow)
 
     # 빈 채로 시작한다. 고정 안내문은 매번 같은 말을 차지하기만 했고, 정작
     # 알아야 할 것("N개 선택됨")은 누른 뒤에만 생긴다.

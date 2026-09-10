@@ -64,6 +64,35 @@ assert "no proxy" in missing.view.text(), missing.view.text()
 assert g.tiles[3].ep is None, "빈 칸이어야 한다"
 print("2. 프록시 없는 타일이 죽지 않고 그렇다고 말함 OK")
 
+
+# ------------------------------------------------- 빈 칸은 정말 비어 있어야 한다
+# setText("") 는 QLabel 의 픽스맵을 지우지 않는다. 그래서 목록을 좁히면 남는
+# 칸이 **직전 화면의 프레임을 그대로 들고** 있었다 (2026-09-11 조작자 보고).
+# 그러면 "에피소드가 없는 칸" 과 "짧아서 금방 멈춘 에피소드" 가 화면에서
+# 똑같아 보인다 -- 둘 다 안 움직이는 그림이라서다. 3프레임짜리를 찾는 것이
+# 이 화면의 목적 중 하나인데 그것이 빈 칸에 묻힌다.
+g2 = cg.ClipGrid(cols=2, rows=2)
+g2.resize(400, 300)
+g2.set_episodes([eps[0], eps[1], make("EP-S000-I000-E002", 30),
+                 make("EP-S000-I000-E003", 30)])
+for _ in range(40):
+    g2._tick()
+assert all(t.view.pixmap() is not None and not t.view.pixmap().isNull()
+           for t in g2.tiles), "네 칸 다 그림이 있어야 한다"
+g2.set_episodes([eps[0]])            # 목록을 하나로 좁힌다
+for t in g2.tiles[1:]:
+    pm = t.view.pixmap()
+    assert t.ep is None
+    assert pm is None or pm.isNull(), "빈 칸이 직전 프레임을 들고 있다"
+    assert "none" in t.styleSheet(), "빈 칸에 테두리가 남아 있다"
+    assert t.caption.text() == "", f"빈 칸에 캡션이 남아 있다: {t.caption.text()!r}"
+# 짧은 에피소드는 반대로 그림·테두리·캡션이 남아야 구분된다
+short_ep = g2.tiles[0]
+assert short_ep.view.pixmap() is not None and not short_ep.view.pixmap().isNull()
+assert "none" not in short_ep.styleSheet()
+assert f"{SHORT}f" in short_ep.caption.text()
+print("2b. 빈 칸이 정말 빔 (짧은 에피소드와 구분됨) OK")
+
 # 캡션에 프레임 수가 늘 보인다 -- 2~3틱짜리를 숫자로 잡는 자리다
 assert f"{SHORT}f" in g.tiles[0].caption.text(), g.tiles[0].caption.text()
 assert "5f" in missing.caption.text(), missing.caption.text()

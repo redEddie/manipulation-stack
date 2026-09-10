@@ -161,6 +161,25 @@ class GalleryOps:
     def on_grid_selection(self, episodes) -> None:
         self.win._gallery_selected = list(episodes)
 
+    def toggle_mark(self) -> None:
+        """선택한 에피소드를 삭제 목록에 넣거나 뺀다 (지우지는 않는다).
+
+        전부 이미 표시되어 있으면 전부 해제하고, 아니면 전부 표시로 통일한다
+        -- 토글이 제각각이면 격자에서 무엇이 표시됐는지 알 수 없다.
+        """
+        keys = self.selected_keys()
+        if not keys:
+            self.win.gallery_status.setText(tr("표시할 에피소드를 선택하세요"))
+            return
+        if all(k in self.win.basket for k in keys):
+            for k in keys:
+                self.win.basket.discard(k)
+        else:
+            for k in keys:
+                self.win.basket.add(k)
+        self.win.gallery_grid.refresh_marks()
+        self.win.dataset_ops.refresh_basket_ui()
+
     def selected_keys(self) -> list:
         """선택을 ``(파일경로, 에피소드이름)`` 목록으로. 격자 밖(재판정·실로봇
         재생)에서 쓰는 유일한 통로다 -- 선택을 읽는 방법이 여럿이면 격자를

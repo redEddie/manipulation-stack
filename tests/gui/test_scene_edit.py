@@ -212,8 +212,9 @@ for node in ast.walk(tree):
         assert not dups, f"중복 정의: {dups}"
 print("8 통과: WorkspaceWindow 메서드 중복 정의 없음")
 
-# ---- 9. 회귀: 버튼 슬롯 경로에서 _describe_delete_targets 가 실제로 호출되고
-#          재빌드 안내가 뜨며 툼스톤 문구가 없음 ----
+# ---- 9. 회귀: 삭제 문이 하나로 모였다 -- 표시 경로(on_delete_selected)는
+#          확인창 없이 장바구니에만 넣고, 실행 경로(on_delete_marked)만
+#          _describe_delete_targets 확인창을 띄운다 ----
 class _MockParent:
     def __init__(self, path): self._path = path
     def data(self, column, role): return str(self._path)
@@ -245,21 +246,26 @@ _sync.hub_meta = lambda repo: ({cur[0]["instruction"]: 99}, {}, "")
 win.dataset_tree.selectedItems = lambda: [_MockItem(_MockParent(scene), cur[0]["name"])]
 captured_dialogs.clear()
 win.dataset_ops.on_delete_selected()
-
-assert captured_dialogs, "확인창이 뜨지 않음"
+# 표시 경로: 확인창이 뜨지 않고 장바구니에만 들어간다 (지우는 문은 Delete marked 하나).
+assert not captured_dialogs, captured_dialogs
+assert (str(scene), cur[0]["name"]) in win.basket
+# 실행 경로: 장바구니 -> 확인창 -> 실제 삭제, 성공 후 해당 파일 표시는 비워진다.
+win.dataset_ops.on_delete_marked()
+assert captured_dialogs, "\uD655\uC778\uCC3D\uC774 \uB728\uC9C0 \uC54A\uC74C"
 kind, title, body, wargs, wkw = captured_dialogs[-1]
-assert "에피소드 삭제" in title
-assert "재빌드" in body, body
-assert "번호가 다시 매겨집니다" in body
-assert "번호는 그대로" not in body, body
-assert "재사용 금지" not in body, body
+assert "\uC5D0\uD53C\uC18C\uB4DC \uC0AD\uC81C" in title
+assert "\uC7AC\uBE4C\uB4DC" in body, body
+assert "\uBC88\uD638\uAC00 \uB2E4\uC2DC \uB9E4\uACA8\uC9D1\uB2C8\uB2E4" in body, body
+assert "\uBC88\uD638\uB294 \uADF8\uB300\uB85C" not in body, body
+assert "\uC7AC\uC0AC\uC6A9 \uAE08\uC9C0" not in body, body
+assert win.basket.count_for(scene) == 0, win.basket.items()
 # 성공(success) 에피소드가 섞이면 warning + 기본 버튼 No 여야 한다 --
 # 함수 직접 호출이 아니라 슬롯 경로에서 검증 (기본 Yes 로 되돌아가는 회귀 방지).
 if cur[0].get("quality_status") == QUALITY_SUCCESS:
     assert kind == "warning", kind
     default = wkw.get("defaultButton", wargs[-1] if wargs else None)
     assert default == cw.QMessageBox.StandardButton.No, (wargs, wkw)
-print("9 통과: 버튼 슬롯 경로에서 확인창 문구 실제 동작 기준 (재빌드 O, 툼스톤 X, 기본 No)")
+print("9 통과: 표시 경로(장바구니, 확인창 X) + 실행 경로 확인창 문구 (재빌드 O, 툼스톤 X, 기본 No)")
 
 # ---- 10. 썸네일 캐시 무효화: scene 삭제/renumber 로 uid 가 재배정되면
 #    기존 썸네일이 잘못된 에피소드에 표시될 수 있다.

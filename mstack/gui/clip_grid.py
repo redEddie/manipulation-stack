@@ -90,6 +90,12 @@ class _Tile(QFrame):
 
     # ------------------------------------------------------------------ 상태
     def _restyle(self) -> None:
+        if self.ep is None:
+            # 빈 칸에는 테두리도 없다. 테두리가 있으면 "여기 뭔가 있는데
+            # 안 움직인다" 로 읽힌다 -- 없는 것은 없어 보여야 한다.
+            self.setStyleSheet("QFrame { border:none; }")
+            self.caption.setText("")
+            return
         # 표시가 선택을 이긴다 -- 둘 다일 때 알아야 하는 것은 "지울 것" 쪽이다.
         border = _MARK if self.marked else (_SEL if self.selected else "#333")
         width = 3 if self.marked else 2
@@ -120,9 +126,15 @@ class _Tile(QFrame):
         self.i = 0
         self._last = None
         if ep is None:
-            self.view.setText("")
-            self.caption.setText("")
+            # **clear() 여야 한다.** setText("") 는 픽스맵을 지우지 않아서
+            # 빈 칸이 직전 화면의 프레임을 그대로 들고 있었다 (2026-09-11
+            # 조작자 보고). 그러면 "에피소드가 없는 칸" 과 "짧아서 금방 멈춘
+            # 에피소드" 가 화면에서 똑같아 보인다 -- 둘 다 안 움직이는
+            # 그림이라서다. 3프레임짜리를 찾는 것이 이 화면의 목적 중 하나인데
+            # 그것이 빈 칸에 묻힌다.
+            self.view.clear()
             self.done = True
+            self._restyle()
             return
         uid = ep.get("episode_uid", "")
         p = proxy_path(uid, camera)
@@ -170,6 +182,7 @@ class _Tile(QFrame):
             self.cap = None
         self.n_frames = 0
         self.done = True
+        self._last = None
 
     def rewind(self) -> None:
         if self.cap is None:

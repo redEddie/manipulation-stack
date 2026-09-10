@@ -371,19 +371,11 @@ class DatasetOps:
 
     # ------------------------------------------------------------------ delete
     def on_delete_selected(self) -> None:
-        """Deletes the selected episode.
+        """Dataset 트리 선택을 삭제 목록에 넣는다 (지우지 않는다).
 
-        Two paths, because who owns the file decides who may touch it. h5py is
-        not thread-safe, so while a session has the file open, every
-        file-touching call goes through that session's saver thread -- deleting
-        behind its back would corrupt the file it is still writing into. When
-        no session owns the file, nothing else has it open and this window can
-        do it directly, which is the common case: curating yesterday's takes
-        should not require connecting a robot first.
+        실행은 왼쪽 패널의 "Delete marked" 하나뿐이다 -- 표시는 어디서든
+        자유롭게, 지우기는 확인창을 거치는 한 문으로.
         """
-        # 파일별로 묶는다. 여러 개를 지울 때 이름 하나씩 지우고 매번 번호를 다시
-        # 매기면 두 번째부터는 이미 밀린 이름을 지우게 된다 -- 한 파일 안에서
-        # 전부 지운 뒤 renumber는 마지막에 한 번만.
         by_file: dict = {}
         for item in self.win.dataset_tree.selectedItems():
             if item.parent() is None:
@@ -392,10 +384,62 @@ class DatasetOps:
             by_file.setdefault(Path(p), []).append(item.data(0, Qt.ItemDataRole.UserRole))
         if not by_file:
             QMessageBox.information(self.win, tr("선택 필요"),
-                                    tr("삭제할 에피소드를 선택하세요 (Ctrl/Shift로 여러 개)."))
+                                    tr("삭제 목록에 넣을 에피소드를 선택하세요 (Ctrl/Shift로 여러 개)."))
+            return
+        n = sum(len(v) for v in by_file.values())
+        for path, names in by_file.items():
+            for name in names:
+                self.win.basket.add((path, name))
+        self.win.log(f"[삭제 목록] {n}개 표시 (실행은 'Delete marked')")
+        self.refresh_basket_ui()
+        if hasattr(self.win, "gallery_grid"):
+            self.win.gallery_grid.refresh_marks()
+
+    def refresh_basket_ui(self) -> None:
+        """삭제 목록 라벨·실행 버튼을 장바구니 현황에 맞춘다.
+
+        위젯은 build_dataset 이후에만 있다 -- 갤러리 표시 등 빌드 전 경로에서
+        불릴 수 있으므로 hasattr 로 감싼다.
+        """
+        if not hasattr(self.win, "basket_label"):
+            return
+        n = len(self.win.basket)
+        text = ""
+        if n:
+            text = tr("삭제 목록 {n}개").format(n=n)
+            cur = self.win.gallery_scene_combo.currentData()
+            if cur:
+                k = self.win.basket.count_for(cur)
+                if k:
+                    text += tr(" (이 씬 {k}개)").format(k=k)
+        self.win.basket_label.setText(text)
+        self.win.basket_exec_btn.setEnabled(n > 0)
+
+    def on_clear_marks(self) -> None:
+        """삭제 목록 표시를 전부 해제한다 (에피소드는 지우지 않는다)."""
+        self.win.basket.clear()
+        self.refresh_basket_ui()
+        if hasattr(self.win, "gallery_grid"):
+            self.win.gallery_grid.refresh_marks()
+
+    def on_delete_marked(self) -> None:
+        """삭제 목록에 넣은 에피소드를 한 번에 지운다 -- 삭제로 가는 유일한 문.
+
+        삭제마다 번호가 다시 매겨지므로(파생 캐시 무효화 포함) 모아서 한 번
+        지운다. 조작자가 확인창에서 취소하면 장바구니는 그대로 둔다.
+        """
+        by_file = self.win.basket.by_file()
+        if not by_file:
+            QMessageBox.information(self.win, tr("삭제 목록 비어 있음"),
+                                    tr("삭제 목록에 넣은 에피소드가 없습니다. "
+                                       "격자·트리·순위표에서 먼저 표시하세요."))
             return
         if self.delete_episodes(by_file):
+            for path in list(by_file):
+                self.win.basket.drop_file(path)
             self.refresh_dataset_tree()
+            self.refresh_basket_ui()
+            self.win.gallery_ops.refresh_gallery()
 
     def describe_delete_targets(self, by_file: dict):
         """삭제 확인창용: (행 목록, 성공 개수, Hub 안내문). 파일을 읽지 못하면

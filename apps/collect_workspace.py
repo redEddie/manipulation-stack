@@ -80,6 +80,7 @@ from mstack.data.collection_history import new_run_id  # noqa: E402
 from mstack.scene.dataset_meta import load_identity  # noqa: E402
 from mstack.gui.dialogs import DatasetSchemaDialog, hf_account  # noqa: E402
 from mstack.gui.constants import PLAYBACK_FPS  # noqa: E402
+from mstack.gui.curation_basket import CurationBasket  # noqa: E402
 from mstack.gui.fonts import ensure_font
 from mstack.gui.wheel_guard import install_wheel_guard  # noqa: E402
 from mstack.gui.widgets import Recents  # noqa: E402
@@ -270,6 +271,7 @@ class WorkspaceWindow(QMainWindow):
         self.depth_ops = DepthOps(self)
         self.dataset_ops = DatasetOps(self)
         self.gallery_ops = GalleryOps(self)
+        self.basket = CurationBasket()
         self.stats_ops = StatsOps(self)
         self.system = SystemOps(self)
         self.collection = CollectionOps(self)
@@ -282,6 +284,10 @@ class WorkspaceWindow(QMainWindow):
             self.log(f"[스키마] 저장된 {flag}=True 를 무시합니다 -- "
                      "카메라 드라이버가 depth 읽기를 지원하지 않습니다")
         build_center(self)
+        # 장바구니 표시를 격자 타일에 반영하는 콜백. 격자가 만들어진 뒤에
+        # 꽂아야 한다 -- 표시 상태는 (지금 scene 파일, 에피소드 이름) 이다.
+        self.gallery_grid.is_marked = lambda ep: (
+            self.gallery_scene_combo.currentData(), ep["name"]) in self.basket
         build_left(self)
         build_right(self)
         build_layout(self)

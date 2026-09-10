@@ -157,7 +157,7 @@ def build_analysis_tab(win) -> QWidget:
 
     btns = QHBoxLayout()
     for text, slot in ((tr("재생해서 확인"), win.playback_ops.on_rank_play),
-                       (tr("선택 삭제"), win.stats_ops.on_rank_delete)):
+                       (tr("🗑 Mark for delete"), win.stats_ops.on_rank_delete)):
         b = QPushButton(text)
         b.clicked.connect(slot)
         btns.addWidget(b)

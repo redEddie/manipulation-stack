@@ -446,18 +446,21 @@ class StatsOps:
                 [(self.win._summary["p50"], tr("중앙값")), (stat.mean_da, tr("이 에피소드"))])
 
     def on_rank_delete(self) -> None:
-        """Hands the selection to the same delete path the Dataset panel uses --
-        including its session-ownership and busy checks."""
+        """순위표 선택을 삭제 목록에 **표시**한다 (실행이 아니다).
+
+        격자·트리·순위표 어디서든 표시는 자유롭고, 실제 삭제는 왼쪽 패널의
+        "Delete marked" 버튼 하나뿐이다 -- 그 곳의 확인창이 배치 전체를
+        보여주는 유일한 검토 순간이다.
+        """
         picks = [i.data(0, Qt.ItemDataRole.UserRole) for i in self.win.rank_tree.selectedItems()]
         if not picks:
             QMessageBox.information(self.win, tr("선택 필요"),
-                                    tr("삭제할 에피소드를 선택하세요 (Ctrl/Shift로 여러 개)."))
+                                    tr("삭제 목록에 넣을 에피소드를 선택하세요 (Ctrl/Shift로 여러 개)."))
             return
-        by_file: dict = {}
         for path, demo in picks:
-            by_file.setdefault(Path(path), []).append(demo)
-        if self.win.dataset_ops.delete_episodes(by_file):
-            self.refresh_analysis()
+            self.win.basket.add((path, demo))
+        self.win.dataset_ops.refresh_basket_ui()
+        self.win.gallery_grid.refresh_marks()
 
     def on_metric_help(self) -> None:
         """Shows docs/curation-metrics.md rather than a copy of it.

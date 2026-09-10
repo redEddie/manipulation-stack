@@ -73,6 +73,13 @@ def build_gallery_tab(win) -> QWidget:
     b.setToolTip(tr("모든 타일을 첫 프레임으로 되돌리고 다시 맞춰 출발합니다."))
     b.clicked.connect(win.gallery_ops.rewind)
     ctl.addWidget(b)
+    win.gallery_mark_btn = QPushButton(tr("🗑 Mark for delete"))
+    win.gallery_mark_btn.setToolTip(tr(
+        "선택한 에피소드를 삭제 목록에 넣습니다. 이미 들어 있으면 "
+        "뺍니다. 지금 지우지는 않습니다 -- 실행은 왼쪽 패널의 "
+        "'삭제 실행' 하나뿐입니다."))
+    win.gallery_mark_btn.clicked.connect(win.gallery_ops.toggle_mark)
+    ctl.addWidget(win.gallery_mark_btn)
     ctl.addSpacing(12)
     win.gallery_cam_combo = QComboBox()
     shrinkable_combo(win.gallery_cam_combo)
