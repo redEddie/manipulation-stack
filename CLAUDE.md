@@ -50,6 +50,11 @@ Keep this invariant when adding files; a module's folder must announce its role.
 ## Verification
 
 - Grammar/rules: `python -m mstack.scene.instruction_grammar`, `python -m mstack.scene.scene_rules`
+- Setpoint-gap safety limit: `scripts/analyze/setpoint_gap.py` reads the 1 kHz
+  raw logs and says how far `MAX_SETPOINT_GAP_RAD` (0.9 rad) can come down.
+  It is meant to come down — 0.9 is 1.7x the measured worst case, nothing more.
+  Try a candidate with `MSTACK_MAX_SETPOINT_GAP=<rad>` (inherited by the robot
+  node from whatever launched it) before changing the source.
 - Full GUI acceptance suite (offscreen, no hardware):
   `bash tests/gui/run_all.sh ~/lerobot-venv/bin/python`
 - The collector is launched by desktop icon via `run_scene_collector.sh`

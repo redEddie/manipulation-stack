@@ -14,7 +14,8 @@
 그대로 받아 500 Hz 까지 남긴다.
 
 **창(window).** ``WINDOW_S`` 초짜리 창을 **빈틈없이 이어 붙인다.** 노드가
-틱을 보내는 동안에는 항상 어느 창엔가 담긴다.
+틱을 보내는 동안에는 항상 어느 창엔가 담긴다. 단, 팔이 내내 멈춰 있던 창은
+버린다 (``IDLE_DQ_RAD_S``) -- 안 그러면 정지 시간이 롤링을 다 먹는다.
 
 처음에는 단계 표지로 창을 열었다 (``homing`` 진입). 그 방식은 2026-09-10 에
 실패했다 -- 조작자가 일부러 유도한 acceleration_discontinuity 반사가 창이
@@ -71,6 +72,18 @@ WINDOW_S = 45.0
 
 #: 남길 파일 수. 파일당 약 6.4 MB (float32) 이므로 20개면 130 MB 안쪽.
 KEEP_FILES = 20
+
+#: 창 전체에서 관절속도가 이보다 작으면 그 창을 **버린다** (rad/s).
+#:
+#: 연속 창은 팔이 멈춰 있는 동안에도 계속 돈다. 조작자가 수집을 끝내고 GUI 를
+#: 켜 둔 채 두면 15분 만에 20개 롤링이 전부 정지 구간으로 덮여, 정작 보려던
+#: 움직임이 사라진다 -- 2026-09-10 에 실제로 그랬다. 설정점 간격 실측치를
+#: 뒤늦게 다시 보려 했더니 남은 창이 전부 reset_wait 였다.
+#:
+#: 판정은 dq 로 한다. 단계 표지로 거르지 않는 이유는 표지가 없을 수도 있고
+#: (노드만 떠 있는 경우), 우리가 보려는 것은 단계 이름이 아니라 움직임 자체이기
+#: 때문이다. 0.01 rad/s 는 정지 중 센서 잡음(실측 ~1e-3)보다 한 자리 위다.
+IDLE_DQ_RAD_S = 0.01
 
 _PR_SET_PDEATHSIG = 1
 
@@ -212,10 +225,19 @@ def main(argv=None) -> int:
                     open_ = False
                     phases = []
                     continue
+                peak_dq = float(np.abs(buf[:n, field_slice("dq")]).max())
+                if peak_dq < IDLE_DQ_RAD_S:
+                    # 정지 구간이다. 쓰지 않고 롤링도 건드리지 않는다 --
+                    # 움직인 창을 정지 창으로 밀어내면 안 된다.
+                    open_ = False
+                    n = 0
+                    phases = []
+                    continue
                 try:
                     p = _write_window(d, buf, n, phases)
                     _rotate(d, args.keep)
                     print(f"[raw-log] {p.name}  {n} 틱  "
+                          f"최대 |dq| {peak_dq:.2f} rad/s  "
                           f"{p.stat().st_size / 1024 / 1024:.1f} MB", flush=True)
                 except Exception as e:  # noqa: BLE001
                     print(f"[raw-log] 쓰기 실패 ({type(e).__name__}: {e})", flush=True)

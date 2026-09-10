@@ -60,6 +60,15 @@ Safety
   Don't raise these without re-checking that jerk budget first.
   ``max_joint_jerk`` is a limit, not a tuning knob --
   keep it under ``franka::kMaxJointJerk`` (5000) with margin.
+* ``max_setpoint_gap`` (0.9 rad, env ``MSTACK_MAX_SETPOINT_GAP``) refuses a
+  setpoint that sits further than that from the filter's current output and
+  parks the arm where it is.  This is the layer that catches a dropped or
+  runaway leader -- and a policy that emits a nonsense pose.  Until 2026-09-10
+  nothing did: the acceleration_discontinuity reflex was killing the control
+  loop, which was a side effect, not a safety feature, and raising v/a plus
+  fixing the v_max taper removed it.  See ``MAX_SETPOINT_GAP_RAD`` for why the
+  limit is on the *gap* rather than on speed, and why 0.9 is a starting value
+  meant to come down.
 
 Make sure ``ros2_control_node`` is **not** running: the FCI accepts one client.
 
@@ -115,6 +124,32 @@ FT_STATE_ATTRS = (
     (OBS_EE_WRENCH_EE, "K_F_ext_hat_K"),
 )
 
+#: 설정점(``_desired_q``)이 필터 출력(``_q_cmd``)에서 이만큼 넘게 떨어지면
+#: 그 명령을 받지 않고 팔을 **그 자리에 세운다** (rad, 관절별 최대).
+#:
+#: 왜 이것이 필요한가. 2026-09-10 이전에 리더를 놓치거나 난폭하게 흔들면
+#: libfranka 가 명령을 거부하며 acceleration_discontinuity 반사로 제어 루프를
+#: 죽였다 -- 설계된 안전장치가 아니라 부작용이었지만, 실제로 팔을 세우는
+#: 유일한 것이었다. v/a 를 1.5/6.0 으로 올리고(2026-08-19) v_max 접근 테이퍼의
+#: 이산 항을 채워 넣으면서(2026-09-10) 그 경로가 사라졌다. 추종이 좋아진 만큼
+#: 이제는 필터가 **떨어진 리더를 끝까지 충실히 쫓아간다.**
+#:
+#: 왜 속도가 아니라 간격인가. 필터가 이미 v_max 로 묶여 있어 팔로워는 빠르게
+#: 갈 수 없다. 남는 위험은 속도가 아니라 **아무도 의도하지 않은 자세까지
+#: 1.5 rad/s 로 꾸준히 밀고 가는 거리**다. 그 양이 바로 이 간격이다.
+#:
+#: 왜 0.9 인가. 2026-09-10 원시 로그(1 kHz) 실측 최대가 recording 0.532,
+#: homing 0.157, gate/reset_wait 0.019 rad 이었다. 0.9 는 그 최대의 1.7배다 --
+#: 첫 값이라 넉넉히 잡았고, **줄이는 것이 전제다**. 얼마까지 줄일 수 있는지는
+#: ``scripts/analyze/setpoint_gap.py`` 가 같은 로그에서 답한다. 줄일 때는
+#: 소스를 고치지 말고 아래 환경변수를 쓰면 된다.
+MAX_SETPOINT_GAP_RAD = 0.9
+
+#: ``MAX_SETPOINT_GAP_RAD`` 를 덮어쓴다. 0 이하면 검사를 끈다 (진단용).
+#: 환경변수로 두는 이유는 이 값이 **실측으로 내려갈 예정**이기 때문이다 --
+#: 후보값을 시험하는 데 커밋도 재빌드도 필요 없어야 한다.
+SETPOINT_GAP_ENV = "MSTACK_MAX_SETPOINT_GAP"
+
 # FR3 gripper stroke (m).  Franka Hand opens to ~0.08 m.
 MAX_GRIPPER_WIDTH = 0.08
 
@@ -123,6 +158,25 @@ MAX_GRIPPER_WIDTH = 0.08
 # exponential squeeze resistance at this same value, so the moment resistance is
 # felt under the finger is the moment the hand grasps.
 GRIPPER_CLOSE_AT = 0.6
+
+
+def _setpoint_gap_limit(explicit: Optional[float] = None) -> float:
+    """설정점 간격 상한 (rad). 인자 > 환경변수 > 모듈 기본값 순.
+
+    0 이하면 검사를 끈다. 못 읽는 값이면 끄지 않고 기본값으로 간다 --
+    오타 하나로 안전 검사가 조용히 사라지면 안 된다.
+    """
+    if explicit is not None:
+        return float(explicit)
+    raw = os.environ.get(SETPOINT_GAP_ENV)
+    if raw is None or raw.strip() == "":
+        return MAX_SETPOINT_GAP_RAD
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[FR3] {SETPOINT_GAP_ENV}={raw!r} 를 못 읽었다 -- "
+              f"기본값 {MAX_SETPOINT_GAP_RAD} rad 로 간다", flush=True)
+        return MAX_SETPOINT_GAP_RAD
 # 폭 읽기 주기. 기록이 20Hz라 그보다 빠를 이유가 없고, read_once() 한 번이
 # 30ms 안쪽이라 이 주기를 지킬 수 있다(scripts/check/check_gripper_concurrent_read.py).
 GRIPPER_READ_HZ = 20.0
@@ -321,6 +375,8 @@ class FrankaFR3Robot(Robot):
         home_gripper: bool = False,
         collision_torque: Optional[list] = None,  # None -> FR3_COLLISION_TORQUE
         collision_force: float = 100.0,
+        # None -> 환경변수 MSTACK_MAX_SETPOINT_GAP -> MAX_SETPOINT_GAP_RAD.
+        max_setpoint_gap: Optional[float] = None,
     ):
         import pylibfranka as pf
 
@@ -334,6 +390,12 @@ class FrankaFR3Robot(Robot):
         self._kp = float(filter_wn) ** 2
         self._kd = 2.0 * float(filter_wn)
         self._dt = 1e-3  # FCI control period (1 kHz)
+        self._gap_max = _setpoint_gap_limit(max_setpoint_gap)
+        # 실측 최고 간격. 상한을 얼마까지 내릴 수 있는지는 결국 이 숫자가
+        # 정한다 -- 그래서 세어 두고 종료할 때 찍는다.
+        self._gap_peak = 0.0
+        self._gap_stops = 0
+        self._gap_stopped = False
 
         rt = pf.RealtimeConfig.kEnforce if enforce_rt else pf.RealtimeConfig.kIgnore
         print(f"[FR3] connecting to {robot_ip} (realtime={'enforce' if enforce_rt else 'ignore'})")
@@ -366,6 +428,15 @@ class FrankaFR3Robot(Robot):
         st = self.robot.read_once()
         q0 = np.asarray(st.q, dtype=float)
         print(f"[FR3] connected. q = {np.round(q0, 3)}  mode = {st.robot_mode}")
+        # 어떤 상한이 실제로 걸렸는지 찍는다. 환경변수를 걸어 놓고 그것이
+        # 노드까지 안 갔는지 모르는 상태가 제일 나쁘다.
+        if not read_only:
+            print(
+                f"[FR3] 설정점 간격 상한 {self._gap_max:.2f} rad "
+                f"(내리려면 {SETPOINT_GAP_ENV}=<rad>)"
+                if self._gap_max > 0.0 else
+                f"[FR3] ** 설정점 간격 검사가 꺼져 있다 ({SETPOINT_GAP_ENV}={self._gap_max}) **",
+                flush=True)
 
         # Shared state (guarded by _lock).
         self._lock = threading.Lock()
@@ -468,13 +539,64 @@ class FrankaFR3Robot(Robot):
         return q
     
     def command_joint_state(self, joint_state: np.ndarray) -> None:
+        """설정점을 받는다. 필터 출력에서 너무 먼 명령은 받지 않고 팔을 세운다.
+
+        여기가 유일한 입구라 검사도 여기 하나로 족하다. 명령 사이에는 간격이
+        늘어날 수 없다 -- 필터는 항상 ``_desired_q`` **쪽으로만** 움직이므로
+        간격은 단조 비증가다. 그래서 1 kHz 루프에는 이 검사가 없어도 된다.
+
+        멈추는 방법은 ``_desired_q`` 를 지금의 필터 출력으로 래치하는 것이다.
+        속도 상태(``_qd_cmd``)는 **건드리지 않는다** -- 0 으로 꽂으면 그
+        자체가 거대한 저크이고, 그것이 바로 우리가 없애려던 반사다. 필터가
+        자기 저크·가속 한계 안에서 스스로 선다 (v_max/a_max 로 0.25초,
+        0.19 rad).
+
+        단순히 명령을 무시하는 것으로는 부족하다. 그러면 직전 설정점이 남아
+        팔이 거기까지 계속 간다 -- 리더가 이미 떨어진 뒤라면 그 목표가 바로
+        잘못된 자세다.
+
+        걸린 상태는 따로 래치하지 않는다. 리더가 멀리 있는 동안에는 다음
+        명령도 같은 이유로 걸려 팔이 계속 서 있고, 조작자가 리더를 상한 안으로
+        되가져오면 그대로 이어진다. 에피소드를 끊고 게이트를 다시 태우는 것은
+        리더의 의미를 아는 **워커**의 일이지 노드의 일이 아니다 -- 노드는
+        에피소드를 모른다.
+
+        VLA 배포에도 같은 검사가 걸린다 (``lerobot_plugin`` 이 이 메서드로
+        내려온다). 엉뚱한 자세를 뱉는 정책도 리더를 놓친 것과 똑같이 위험하다.
+        """
         joint_state = np.asarray(joint_state, dtype=float)
         q_des = joint_state[:7]
+        note = ""
 
         with self._lock:
+            # read_only 는 제어 루프가 없어 _q_cmd 가 안 움직인다. 검사하면
+            # 첫 명령부터 영원히 걸린다.
+            if self._gap_max > 0.0 and not self._read_only:
+                d = np.abs(q_des - self._q_cmd)
+                gap = float(d.max())
+                self._gap_peak = max(self._gap_peak, gap)
+                if gap > self._gap_max:
+                    # 여기서 팔이 선다: 지금 필터가 내보내는 자리를 목표로
+                    # 삼는다. 속도 상태는 그대로 두어 필터가 스스로 감속한다.
+                    q_des = self._q_cmd.copy()
+                    self._gap_stops += 1
+                    if not self._gap_stopped:
+                        self._gap_stopped = True
+                        note = (f"[FR3] 안전 정지: 설정점이 J{int(d.argmax()) + 1} 에서 "
+                                f"{gap:.3f} rad 떨어졌다 (상한 {self._gap_max:.2f} rad). "
+                                f"리더를 상한 안으로 되가져오면 이어진다.")
+                elif self._gap_stopped:
+                    self._gap_stopped = False
+                    note = f"[FR3] 안전 정지 해제 (간격 {gap:.3f} rad)"
             self._desired_q = q_des.copy()
+            # 그리퍼는 계속 리더를 따른다. 위험한 것은 팔의 질량과 도달거리이지
+            # 손가락이 아니고, 세워 둔 동안 물체를 놓지도 못하게 하면 곤란하다.
             if self._use_gripper and len(joint_state) >= 8:
                 self._gripper_target = float(np.clip(joint_state[7], 0.0, 1.0))
+
+        # 락 밖에서 찍는다 -- print 는 1 kHz 루프도 기다리는 락이다.
+        if note:
+            print(note, flush=True)
 
     def get_observations(self) -> Dict[str, np.ndarray]:
         # If the 1kHz control thread has died (e.g. a reflex abort), q/dq/
@@ -823,6 +945,7 @@ class FrankaFR3Robot(Robot):
             return self._success_rate
 
     def stop(self) -> None:
+        self._report_gap_peak()
         self._stop.set()
         if self._control_thread is not None:
             self._control_thread.join(timeout=1.0)
@@ -834,6 +957,24 @@ class FrankaFR3Robot(Robot):
             self.robot.stop()
         except Exception:  # noqa: BLE001
             pass
+
+    def _report_gap_peak(self) -> None:
+        """이번 실행에서 설정점 간격이 실제로 얼마나 벌어졌는지 남긴다.
+
+        상한을 얼마까지 내릴 수 있는지 정하는 것은 결국 이 숫자다. 상한이
+        0.9 로 시작한 것은 실측 최대 0.532 의 1.7배라는 이유뿐이고,
+        **내리는 것이 전제**다 -- 그러려면 매 세션의 최고값이 보여야 한다.
+        1 kHz 원시 로그에서 단계별로 더 자세히 보려면
+        ``scripts/analyze/setpoint_gap.py`` 를 쓴다.
+        """
+        if self._read_only or self._gap_max <= 0.0 or self._gap_peak <= 0.0:
+            return
+        headroom = self._gap_max - self._gap_peak
+        msg = (f"[FR3] 설정점 간격 최고 {self._gap_peak:.3f} rad "
+               f"(상한 {self._gap_max:.2f}, 여유 {headroom:.3f})")
+        if self._gap_stops:
+            msg += f"  안전 정지 {self._gap_stops}회"
+        print(msg, flush=True)
 
     def __del__(self):
         try:
