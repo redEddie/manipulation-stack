@@ -659,13 +659,34 @@ class FrankaFR3Robot(Robot):
                 acc_target = np.clip(
                     self._kp * err - self._kd * qd_cmd, -self._a_max, self._a_max
                 )
-                # 속도 상한에 닿기 전에 가속을 미리 줄인다: 저크 j_max 로 감속해
-                # 정확히 v_max 에서 가속 0 이 되려면 |acc| <= sqrt(2 j (v_max - |qd|)).
-                # 없으면 v_max 에 닿는 순간 가속이 a_max -> 0 으로 한 틱에 꺾여
-                # 저크 a_max/dt (a_max=6 이면 6000 rad/s^3, J2 한계 3750 초과)
-                # 가 로봇에 그대로 보인다 -- 상한을 올릴수록 위험한 지점.
-                acc_up = np.sqrt(np.maximum(2.0 * self._j_max * (self._v_max - qd_cmd), 0.0))
-                acc_dn = np.sqrt(np.maximum(2.0 * self._j_max * (self._v_max + qd_cmd), 0.0))
+                # 속도 상한에 닿기 전에 가속을 미리 줄인다. 없으면 v_max 에
+                # 닿는 순간 가속이 한 틱에 꺾여 저크가 로봇 한계를 넘는다.
+                #
+                # 연속시간 공식 sqrt(2 j gap) 은 **두 가지를 빠뜨린다** (2026-09-10
+                # 실측으로 확인). 조작자가 일부러 크게 움직여 반사를 유도한
+                # 로그에서 저크 5105 rad/s^3 이 나왔고 (로봇 한계 5000), 원인이
+                # 이것이었다:
+                #
+                # 1. **이산 보정.** 가속을 a 에서 0 으로 저크 j 로 내리는 데
+                #    a/(j dt) 틱이 걸리고, 그동안 속도가 a^2/(2j) 가 아니라
+                #    a^2/(2j) + a dt/2 만큼 는다.
+                # 2. **당해 틱 소비.** 지금 틱에도 가속 a 가 속도를 a dt 만큼
+                #    올린다. 그 몫을 gap 에서 먼저 빼야 한다.
+                #
+                # 둘을 넣어 a^2/(2j) + a dt/2 <= gap - |a_prev| dt 를 a 에 대해
+                # 풀면 아래 식이다. 실측 재생: 5105 -> 3000 (초과 0틱), 가속
+                # 상한 6.0 은 그대로라 성능 손실이 없다. 스파이크가 없던 창은
+                # 그대로 3000 이다.
+                #
+                # 옛 식이 늦게 걸린 이유: gap < a_max^2/(2j) = 0.006 rad/s 에서만
+                # 개입하는데, 6 rad/s^2 로 달려오면 그 구간이 한 틱뿐이고 저크
+                # 클램프는 한 틱에 j dt = 3 밖에 못 바꾼다.
+                lag = np.abs(acc_prev) * dt
+                gap_up = np.maximum(self._v_max - qd_cmd - lag, 0.0)
+                gap_dn = np.maximum(self._v_max + qd_cmd - lag, 0.0)
+                jdt = self._j_max * dt
+                acc_up = (-jdt + np.sqrt(jdt * jdt + 8.0 * self._j_max * gap_up)) / 2.0
+                acc_dn = (-jdt + np.sqrt(jdt * jdt + 8.0 * self._j_max * gap_dn)) / 2.0
                 acc_target = np.clip(acc_target, -acc_dn, acc_up)
                 dacc_max = self._j_max * dt
                 acc = np.clip(acc_target, acc_prev - dacc_max, acc_prev + dacc_max)
