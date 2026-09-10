@@ -13,13 +13,21 @@
 느끼는 진동(대개 20~100 Hz)은 원리적으로 거기 안 잡힌다. 이 로거는 1 kHz 를
 그대로 받아 500 Hz 까지 남긴다.
 
-**창(window).** 항상 다 쓰면 하루에 수십 GB 가 된다. 그래서 단계 표지
-(:mod:`mstack.comm.phase_bus`)를 함께 구독해, ``TRIGGER_PHASE`` 로 들어갈 때
-창을 열고 ``WINDOW_S`` 초 뒤에 닫는다. 기본값이 ``homing`` 인 이유는
-2026-09-10 조작자 보고가 "녹화 종료 후 homing 첫 스텝" 이었기 때문이다 --
-homing 은 한 바퀴의 첫 단계라, 여기서 열면 homing -> gate -> approach ->
-recording 이 한 파일에 통째로 담긴다. 창이 열려 있는 동안의 새 트리거는
-무시한다.
+**창(window).** ``WINDOW_S`` 초짜리 창을 **빈틈없이 이어 붙인다.** 노드가
+틱을 보내는 동안에는 항상 어느 창엔가 담긴다.
+
+처음에는 단계 표지로 창을 열었다 (``homing`` 진입). 그 방식은 2026-09-10 에
+실패했다 -- 조작자가 일부러 유도한 acceleration_discontinuity 반사가 창이
+닫히고 15초 뒤에 나서 통째로 놓쳤다. 창이 열려 있는 동안의 새 트리거를
+무시하는 규칙 때문에, 두 번째 사이클이 첫 창에 얹혀 새 창을 못 연 것이다.
+**진단 도구가 진단하려던 사건을 놓치면 도구가 아니다.**
+
+단계 표지는 계속 구독한다 -- 창을 여닫지는 않고, 창 안에서 "그때 무슨
+단계였나" 를 남기는 용도다.
+
+용량이 대가다. 창당 6~8 MB 이고 20개 롤링이면 최근 15분을 덮는다. 그 이상
+거슬러 볼 필요는 없다 -- 반사는 에피소드 수집이 시작되고 45초 안에 나므로,
+사건이 난 창은 언제나 최근 몇 개 안에 있다 (조작자 판단, 2026-09-10).
 
 **실패 방향.** 이 프로세스가 죽어도 수집은 그대로 돈다. PUB 은 구독자가
 없어도 블로킹하지 않는다 -- 진단이 수집을 멈추는 일은 없어야 한다.
@@ -51,9 +59,10 @@ from mstack.comm.robot_raw import (
 )
 from mstack.config.paths import state_dir
 
-#: 창을 여는 단계. homing 이 한 바퀴의 첫 단계라 여기서 열면 한 사이클이
-#: 통째로 담긴다. gate(정렬 시작)로 바꾸면 기록 구간 위주가 된다.
-TRIGGER_PHASE = "homing"
+#: 빈 문자열이면 연속(창을 빈틈없이 이어 붙인다). 단계 이름을 주면 그 단계로
+#: 들어갈 때만 창을 연다 -- 용량을 아껴야 할 때 쓴다. 기본은 연속이다:
+#: 놓친 사건은 되돌릴 수 없지만 디스크는 지우면 된다.
+TRIGGER_PHASE = ""
 
 #: 창 길이(초). 실측 근거: 2026-09-09 세션에서 제어 루프 중단 21건 중 20건이
 #: 직전 정렬 시작으로부터 30초 안에 났고, 정렬 시작->에피소드 종료는 p99 가
@@ -122,7 +131,7 @@ def main(argv=None) -> int:
     ap.add_argument("--window", type=float, default=WINDOW_S)
     ap.add_argument("--keep", type=int, default=KEEP_FILES)
     ap.add_argument("--trigger", default=TRIGGER_PHASE,
-                    help="이 단계로 들어가면 창을 연다 (기본 homing)")
+                    help="이 단계로 들어갈 때만 창을 연다. 비우면 연속(기본)")
     ap.add_argument("--die-with-parent", action="store_true")
     args = ap.parse_args(argv)
 
@@ -151,9 +160,11 @@ def main(argv=None) -> int:
     window_end = 0.0                             # n 을 쓰면 가짜 첫 행이 생긴다)
     phases: list = []
     prev_phase = ""
+    last_phase = ""            # 연속 모드에서 새 창의 첫 줄로 쓴다
 
+    mode = f"트리거 '{args.trigger}'" if args.trigger else "연속(빈틈 없음)"
     print(f"[raw-log] 구독 시작: raw:{args.raw_port} phase:{args.phase_port} "
-          f"-> {d}  (창 {args.window:.0f}s, 트리거 '{args.trigger}', {args.keep}개 유지)",
+          f"-> {d}  (창 {args.window:.0f}s {mode}, {args.keep}개 유지)",
           flush=True)
 
     try:
@@ -168,9 +179,10 @@ def main(argv=None) -> int:
                     phase = msg.get("phase", "")
                     if phase != prev_phase:
                         prev_phase = phase
+                        last_phase = phase
                         if open_:
                             phases.append({"phase": phase, "t": msg.get("t")})
-                        elif phase == args.trigger:
+                        elif args.trigger and phase == args.trigger:
                             open_ = True
                             n = 0
                             window_end = time.time() + args.window
@@ -180,7 +192,15 @@ def main(argv=None) -> int:
                         _, payload = raw.recv_multipart()
                     except Exception:  # noqa: BLE001
                         continue
-                    if not open_ or n >= cap:
+                    if not open_:
+                        if args.trigger:
+                            continue
+                        # 연속 모드: 틱이 오면 곧바로 창을 연다.
+                        open_ = True
+                        n = 0
+                        window_end = time.time() + args.window
+                        phases = [{"phase": last_phase, "t": time.time()}] if last_phase else []
+                    if n >= cap:
                         continue
                     buf[n] = np.frombuffer(payload, dtype=np.float64)
                     n += 1
