@@ -287,10 +287,8 @@ class DatasetOps:
 
     def on_gallery_relabel(self) -> None:
         by_file: dict = {}
-        for item in self.win.gallery_list.selectedItems():
-            d = item.data(Qt.ItemDataRole.UserRole)
-            if d:
-                by_file.setdefault(Path(d[0]), []).append(d[1])
+        for path, name in self.win.gallery_ops.selected_keys():
+            by_file.setdefault(Path(path), []).append(name)
         if not by_file:
             QMessageBox.information(self.win, tr("선택 필요"),
                                     tr("재판정할 에피소드를 선택하세요."))

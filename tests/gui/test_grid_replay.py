@@ -190,9 +190,15 @@ assert win.procs.replay_process is not None
 args = win.procs.replay_process.arguments()
 assert args[0] == real_repl and args[1].endswith("x.hdf5")
 assert args[2] == "episode_000" and args[3:] == ["--speed", "0.5", "--yes"]
-# 재생 중에는 두 진입점 버튼이 '중단' 토글로 바뀐다
+# 재생 중에는 진입점 버튼이 '중단' 토글로 바뀐다.
+# 진입점은 Dataset 패널 **하나뿐**이다 -- 큐레이션 격자에서는 뺐다
+# (2026-09-11): 타일을 빠르게 눌러 고르는 화면에 로봇이 실제로 움직이는
+# 동작을 두면, 예전에 삭제를 에피소드 선택 옆에 두었다가 오클릭이 났던 것과
+# 같은 인접성이 된다.
 assert "중단" in win.replay_btn.text()
-assert "중단" in win.gallery_replay_btn.text()
+assert not hasattr(win, "gallery_replay_btn"), (
+    "큐레이션 격자에 실로봇 재생 버튼이 다시 생겼다 -- 의도한 것이면 "
+    "set_replay_ui 의 토글 목록에도 넣어야 한다")
 proc = win.procs.replay_process
 win.playback_ops.on_replay_selected()            # 토글: 재생 중 클릭 = 중단
 proc.waitForFinished(3000)

@@ -340,9 +340,9 @@ class PlaybackOps:
         if self.replay_running():      # 토글: 재생 중이면 중단 버튼이다
             self.on_replay_stop()
             return
-        picks = [item.data(Qt.ItemDataRole.UserRole)
-                 for item in self.win.gallery_list.selectedItems()]
-        picks = [d for d in picks if d]
+        # 격자 탭에는 이 버튼이 없다 (Dataset 패널에 있다). 메뉴나 단축키로
+        # 들어올 수 있으므로 선택은 같은 통로에서 읽는다.
+        picks = self.win.gallery_ops.selected_keys()
         if len(picks) != 1:
             QMessageBox.information(
                 self.win, tr("선택 필요"),
@@ -436,12 +436,26 @@ class PlaybackOps:
             proc.kill()
 
     def set_replay_ui(self, running: bool) -> None:
-        """재생/중단 토글 -- 두 진입점(Dataset·Gallery) 버튼이 함께 바뀐다."""
+        """재생/중단 토글.
+
+        버튼은 Dataset 패널 하나뿐이다. 큐레이션 격자에서는 뺐다 (2026-09-11)
+        -- 거기는 타일을 빠르게 눌러 고르는 화면이라, 로봇이 실제로 움직이는
+        동작을 선택 바로 옆에 두면 안 된다. "삭제를 에피소드 선택 옆에 두었다가
+        오클릭이 났다" 와 같은 종류의 인접성이다.
+
+        ``sip.isdeleted`` 로 먼저 막는다. 종료 중에 QProcess.finished 가 큐에
+        남아 뒤늦게 도착하면 창은 이미 C++ 쪽이 지워져 있고, 그때는
+        ``getattr(win, ..., None)`` 조차 AttributeError 가 아니라
+        RuntimeError 를 던져 기본값으로 넘어가지 않는다 (실제로 코어 덤프까지
+        갔다). 창 쪽 규약과 같다 -- collect_workspace.py 의 같은 주석 참고.
+        """
+        from PyQt6 import sip
+
+        if self.win is None or sip.isdeleted(self.win):
+            return
         for b, idle_text in ((getattr(self.win, "replay_btn", None),
-                              tr("선택 재생 (실로봇)")),
-                             (getattr(self.win, "gallery_replay_btn", None),
-                              tr("실로봇 재생"))):
-            if b is None:
+                              tr("선택 재생 (실로봇)")),):
+            if b is None or sip.isdeleted(b):
                 continue
             b.setText(tr("■ 재생 중단") if running else idle_text)
             b.setStyleSheet(

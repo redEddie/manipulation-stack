@@ -4,10 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QListWidgetItem
-
 from mstack.gui.i18n import tr
 from mstack.gui.workers import GalleryLoadWorker
 from mstack.scene.scene_format import iter_scene_files
@@ -36,8 +32,10 @@ class GalleryOps:
 
     def refresh_gallery(self, *_args) -> None:
         path = self.win.gallery_scene_combo.currentData()
-        self.win.gallery_list.clear()
+        self.win.gallery_grid.set_episodes([])
         self.win._gallery_episodes = []
+        self.win._gallery_shown = []
+        self.win._gallery_selected = []
         if not path:
             self.win.gallery_status.setText(tr("표시할 scene 파일이 없습니다"))
             return
@@ -75,38 +73,105 @@ class GalleryOps:
         self.apply_gallery_filter()
 
     def apply_gallery_filter(self, *_args) -> None:
+        """지시문·길이로 목록을 줄여 격자에 넘긴다.
+
+        큐레이션은 **먼저 줄이고 그 다음에 본다.** 60개를 한꺼번에 훑는 것이
+        아니라 (씬 → 지시문 → 길이) 로 좁혀 12칸에 담기게 만든 뒤, 그 12개를
+        나란히 돌려 이상한 것을 고른다.
+        """
+        from apps.workspace.features.gallery.tab import SHORT_FRAMES
+
         want = self.win.gallery_filter_combo.currentData()
-        path = self.win.gallery_scene_combo.currentData()
-        self.win.gallery_list.clear()
-        if getattr(self, "_ref_thumb", None):
-            it = QListWidgetItem(QIcon(self._ref_thumb), tr("기준 사진"))
-            it.setData(Qt.ItemDataRole.UserRole, None)
-            it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            self.win.gallery_list.addItem(it)
-        shown = 0
-        for e in self.win._gallery_episodes:
+        mode = self.win.gallery_len_combo.currentData()
+        eps = self.win._gallery_episodes
+        lens = sorted(e.get("num_samples", 0) for e in eps)
+        # "긴 것" 은 고정값이 아니라 이 씬의 분포로 정한다 -- 작업마다 정상
+        # 길이가 다르므로 절대 프레임 수로 자르면 어떤 씬에서는 전부 걸린다.
+        long_cut = lens[int(len(lens) * 0.8)] if lens else 0
+
+        shown = []
+        for e in eps:
             if want is not None and e["instruction_id"] != want:
                 continue
-            mark = {"success": "✓", "failed": "✗"}.get(e["quality_status"],
-                                                       e["quality_status"][:4])
-            it = QListWidgetItem(
-                QIcon(e["thumb"]) if e["thumb"] else QIcon(),
-                # E번호는 slot 로컬 (uid 의 마지막 조각) -- I000-E000, I003-E000 …
-                f"{e['instruction_id']}-{e['episode_uid'].rsplit('-', 1)[-1]} {mark}")
-            it.setData(Qt.ItemDataRole.UserRole, (path, e["name"]))
-            it.setToolTip(f"{e['episode_uid']}\n{e['instruction']}\n"
-                          f"{e['num_samples']}프레임 · {e['quality_status']}"
-                          f" · {e.get('collector', '')}")
-            self.win.gallery_list.addItem(it)
-            shown += 1
-        n_ok = sum(1 for e in self.win._gallery_episodes
-                   if e["quality_status"] == "success")
-        self.win.gallery_status.setText(
-            tr("{s}개 표시 (전체 {n}개 · success {ok}개) — 더블클릭: 재생, "
-               "선택 후 재판정 버튼: 성공↔실패").format(
-                   s=shown, n=len(self.win._gallery_episodes), ok=n_ok))
+            n = e.get("num_samples", 0)
+            if mode == "short" and n > SHORT_FRAMES:
+                continue
+            if mode == "long" and n <= long_cut:
+                continue
+            if mode == "failed" and e.get("quality_status") == "success":
+                continue
+            shown.append(e)
 
-    def on_gallery_activated(self, item) -> None:
-        d = item.data(Qt.ItemDataRole.UserRole)
-        if d:
-            self.win.playback_ops.play_episode(d[0], d[1])
+        self.win._gallery_shown = shown
+        self.win.gallery_grid.set_episodes(
+            shown, self.win.gallery_cam_combo.currentData())
+        self._sync_pager()
+        n_ok = sum(1 for e in eps if e["quality_status"] == "success")
+        missing = sum(1 for e in shown if not self._has_clip(e))
+        note = tr("  · 프록시 없음 {m}개 (Dataset 메뉴 → 프록시 클립 만들기)").format(
+            m=missing) if missing else ""
+        self.win.gallery_status.setText(
+            tr("{s}개 표시 (전체 {n}개 · success {ok}개) — 클릭: 선택, "
+               "Ctrl+클릭: 여러 개{note}").format(
+                   s=len(shown), n=len(eps), ok=n_ok, note=note))
+
+    @staticmethod
+    def _has_clip(e) -> bool:
+        from mstack.data.proxy_clip import proxy_path
+
+        uid = e.get("episode_uid", "")
+        return bool(uid) and proxy_path(uid, "agentview_rgb").exists()
+
+    # ------------------------------------------------------------------ 재생
+    def toggle_play(self) -> None:
+        g = self.win.gallery_grid
+        if g.playing:
+            g.stop()
+            self.win.gallery_play_btn.setText(tr("▶ 재생"))
+        else:
+            g.start()
+            self.win.gallery_play_btn.setText(tr("■ 정지"))
+
+    def rewind(self) -> None:
+        self.win.gallery_grid.rewind_all()
+
+    def on_camera_changed(self, *_args) -> None:
+        self.win.gallery_grid.set_camera(
+            self.win.gallery_cam_combo.currentData())
+
+    # ------------------------------------------------------------------ 쪽
+    def _sync_pager(self) -> None:
+        g = self.win.gallery_grid
+        sp = self.win.gallery_page_spin
+        sp.blockSignals(True)
+        sp.setRange(1, max(1, g.n_pages))
+        sp.setValue(g.page + 1)
+        sp.blockSignals(False)
+        self.win.gallery_page_total.setText(f"/ {g.n_pages}")
+
+    def on_page_changed(self, value: int) -> None:
+        self.win.gallery_grid.set_page(value - 1)
+
+    def step_page(self, delta: int) -> None:
+        g = self.win.gallery_grid
+        g.set_page(g.page + delta)
+        self._sync_pager()
+
+    # ------------------------------------------------------------------ 선택
+    def on_grid_selection(self, episodes) -> None:
+        self.win._gallery_selected = list(episodes)
+
+    def selected_keys(self) -> list:
+        """선택을 ``(파일경로, 에피소드이름)`` 목록으로. 격자 밖(재판정·실로봇
+        재생)에서 쓰는 유일한 통로다 -- 선택을 읽는 방법이 여럿이면 격자를
+        바꿀 때마다 그 수만큼 고쳐야 한다."""
+        path = self.win.gallery_scene_combo.currentData()
+        if not path:
+            return []
+        return [(path, e["name"]) for e in (self.win._gallery_selected or [])]
+
+    def on_gallery_activated(self, ep) -> None:
+        """타일을 크게 보기 -- 기존 Playback 경로를 그대로 쓴다."""
+        path = self.win.gallery_scene_combo.currentData()
+        if path and ep:
+            self.win.playback_ops.play_episode(path, ep["name"])
