@@ -49,6 +49,9 @@ REST_TICKS = 20
 
 #: 선택된 타일 테두리.
 _SEL = "#3498db"
+#: 삭제 표시된 타일 테두리. 선택(파랑)과 다른 뜻이라 색을 나눈다 --
+#: 선택은 "지금 보고 있다", 표시는 "지울 것이다" 이고 둘은 겹칠 수 있다.
+_MARK = "#c0392b"
 _DONE_DIM = 0.45
 
 
@@ -67,6 +70,7 @@ class _Tile(QFrame):
         self.i = 0
         self.done = True
         self.selected = False
+        self.marked = False
         self._last = None
         col = QVBoxLayout(self)
         col.setContentsMargins(2, 2, 2, 2)
@@ -86,11 +90,18 @@ class _Tile(QFrame):
 
     # ------------------------------------------------------------------ 상태
     def _restyle(self) -> None:
-        border = _SEL if self.selected else "#333"
-        self.setStyleSheet(f"QFrame {{ border:2px solid {border}; }}")
+        # 표시가 선택을 이긴다 -- 둘 다일 때 알아야 하는 것은 "지울 것" 쪽이다.
+        border = _MARK if self.marked else (_SEL if self.selected else "#333")
+        width = 3 if self.marked else 2
+        self.setStyleSheet(f"QFrame {{ border:{width}px solid {border}; }}")
+        self.caption.setText(self._caption_text())
 
     def set_selected(self, on: bool) -> None:
         self.selected = bool(on)
+        self._restyle()
+
+    def set_marked(self, on: bool) -> None:
+        self.marked = bool(on)
         self._restyle()
 
     def mousePressEvent(self, ev) -> None:  # noqa: N802 (Qt)
@@ -143,11 +154,14 @@ class _Tile(QFrame):
         이유는 큐레이션 대상 셋 중 하나가 "2~3틱만 찍힌 것" 이라서다 --
         영상으로 찾을 것이 아니라 여기 숫자로 바로 보여야 한다.
         """
-        ep = self.ep or {}
+        ep = self.ep
+        if ep is None:
+            return ""
         uid = ep.get("episode_uid", "")
         mark = {"success": "✓", "failed": "✗"}.get(
             ep.get("quality_status", ""), "·")
-        return (f"{ep.get('instruction_id', '')}-{uid.rsplit('-', 1)[-1]} "
+        head = "🗑 " if self.marked else ""
+        return (f"{head}{ep.get('instruction_id', '')}-{uid.rsplit('-', 1)[-1]} "
                 f"{mark} {ep.get('num_samples', 0)}f")
 
     def release(self) -> None:
@@ -231,6 +245,9 @@ class ClipGrid(QWidget):
         self.episodes: list = []
         self.page = 0
         self._rest = 0
+        #: ``ep -> bool`` -- 이 에피소드가 삭제 표시되었나. 창이 꽂는다.
+        #: 격자는 장바구니를 모른다 (그래야 화면 없이 시험된다).
+        self.is_marked = None
         grid = QGridLayout(self)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(4)
@@ -276,9 +293,19 @@ class ClipGrid(QWidget):
         for i, t in enumerate(self.tiles):
             t.load(chunk[i] if i < len(chunk) else None, self.camera)
             t.undim()
-            t.set_selected(False)
+            t.selected = False
+            t.marked = bool(self.is_marked and t.ep is not None
+                            and self.is_marked(t.ep))
+            t._restyle()
         self._rest = 0
         self._emit_selection()
+
+    def refresh_marks(self) -> None:
+        """표시 상태를 다시 물어 화면에 반영한다. 장바구니가 바뀌면 부른다."""
+        if self.is_marked is None:
+            return
+        for t in self.tiles:
+            t.set_marked(t.ep is not None and self.is_marked(t.ep))
 
     # ------------------------------------------------------------------ 재생
     def start(self, fps: float = 20.0) -> None:
