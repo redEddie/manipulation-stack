@@ -335,6 +335,24 @@ class GelloAgent(Agent):
             self._wall.poll()  # re-raises if the wall thread died -> teleop dies
         return self._robot.get_joint_state()
 
+    def joint_velocity(self):
+        """리더 관절 속도 (rad/s, 7개) 또는 못 읽으면 None.
+
+        노드의 속도 피드포워드에 쓴다. 이 값이 없으면 노드는 피드포워드를
+        0 으로 두고 예전과 똑같이 동작한다 -- 리더암이 바뀌거나 속도 보고가
+        고장나도 수집은 그대로 돌아야 한다. 여기서 추정으로 메우지 않는
+        이유는 검증할 수 없는 추정기를 넣는 것이 과한 공학이기 때문이다
+        (조작자 판단, 2026-09-10).
+        """
+        get = getattr(self._robot, "get_joint_velocity", None)
+        if get is None:
+            return None
+        try:
+            v = get()
+        except Exception:  # noqa: BLE001 -- 속도를 못 읽는다고 텔레옵이 멈추면 안 된다
+            return None
+        return v[:7] if v is not None and len(v) >= 7 else None
+
     # ------------------------------------------------------- pose-match assist
     def set_teleop_mode(self, in_teleop: bool) -> None:
         """Forward teleop/alignment mode to the leader wall (issue #37A).

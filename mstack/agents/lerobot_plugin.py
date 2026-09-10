@@ -38,6 +38,11 @@ from mstack.data.dataset_schema import ROBOT_JOINT_POSITIONS
 
 JOINT_KEYS = [f"joint{i}.pos" for i in range(1, 8)] + ["gripper.pos"]
 
+#: 속도 피드포워드용 부가 키. **JOINT_KEYS 계약 밖이다** -- 데이터셋에
+#: 들어가는 것은 JOINT_KEYS 뿐이고(worker._joint_vec), 이 키들은 노드로
+#: 가는 도중에만 쓰인다. 리더가 속도를 못 주면 아예 없다.
+VEL_KEYS = [f"joint{i}.vel" for i in range(1, 8)]
+
 
 def _find_gello_port() -> str:
     """리더암 시리얼 포트. 스테이션이 지정했으면 그것, 아니면 FTDI 자동 탐색."""
@@ -167,6 +172,11 @@ class FR3ZMQRobot(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         vec = np.array([float(action[k]) for k in JOINT_KEYS])
+        # 속도가 함께 오면 뒤에 붙여 15원소로 보낸다. 노드는 길이로 판단하고,
+        # 8원소만 오는 호출자(정책 클라이언트 등)는 고칠 것이 없다 --
+        # 그쪽은 피드포워드 0 으로 예전과 똑같이 동작한다.
+        if all(k in action for k in VEL_KEYS):
+            vec = np.append(vec, [float(action[k]) for k in VEL_KEYS])
         self._client.command_joint_state(vec)
         return action
 
@@ -239,7 +249,15 @@ class GelloFR3Teleop(Teleoperator):
         elif self._closed and trigger <= self.config.open_at:
             self._closed = False
         vec = np.append(raw[:7], 1.0 if self._closed else 0.0)
-        return dict(zip(JOINT_KEYS, vec.tolist()))
+        out = dict(zip(JOINT_KEYS, vec.tolist()))
+        # 속도 피드포워드용 부가 키 (VEL_KEYS 주석 참고). 리더가 못 주면
+        # 아예 넣지 않는다 -- 노드는 없으면 피드포워드 0 으로 간다.
+        get_v = getattr(self._agent, "joint_velocity", None)
+        if get_v is not None:
+            v = get_v()
+            if v is not None:
+                out.update(zip(VEL_KEYS, np.asarray(v, dtype=float).tolist()))
+        return out
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:
         pass
