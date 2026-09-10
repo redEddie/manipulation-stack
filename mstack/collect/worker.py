@@ -69,6 +69,24 @@ _GATE_EMIT_PERIOD_S = 1.0 / 15
 RAMP_HZ = 100.0
 RAMP_PERIOD_S = 1.0 / RAMP_HZ
 
+#: 텔레옵 명령 : 기록 프레임 비율. 명령 주기 = cfg.fps * TELEOP_SUBSTEPS.
+#: 기본 5 이므로 20 Hz 기록에서 명령은 100 Hz 다.
+#:
+#: **정수배로 둔다.** 그래야 기록 프레임이 언제나 명령 틱 위에 정확히 얹히고,
+#: 기록된 action 이 그 순간 실제로 나간 명령이 된다. 정수배가 아니면 둘의
+#: 위상이 미끄러져 "어느 명령을 기록할 것인가" 가 규약 문제가 되고, 그 규약이
+#: 틀리면 학습 라벨이 조용히 어긋난다.
+#:
+#: 근거는 homing 램프에서 먼저 확인했다 (2026-09-10, 20 -> 100 Hz): J2 토크의
+#: 15~25 Hz 성분이 4.9배 줄고 다른 대역은 그대로였다. 조작자가 "책상 진동이
+#: 아예 사라졌다" 고 보고했다. 텔레옵 구간도 같은 20 Hz 계단을 갖고 있다
+#: (정지 대비 107배).
+#:
+#: 지금은 상수다. 설정으로 빼는 것은 GUI 설계와 함께 다룬다 -- 명령 주기는
+#: scene/데이터세트 설정과 직교하는 축이라 별도 설정 화면이 맞고, 바꾸면
+#: 재시작이 필요하다.
+TELEOP_SUBSTEPS = 5
+
 #: 접근 램프 속도 (rad/s). 조작자가 리더를 목표 자세로 잡고 있고 거리가 짧다.
 #:
 #: 주의: 드라이버 기준 필터의 상한은 1.5 rad/s 다 (franka_fr3.py
@@ -1240,26 +1258,43 @@ class CollectionWorker(QThread):
             self._cam_stale_max_run = {}
             self._pending_success: Optional[bool] = None
             budget = 1.0 / self.cfg.fps
+            # 명령은 기록보다 TELEOP_SUBSTEPS 배 자주 나간다. 기록 프레임은
+            # 각 묶음의 **마지막** 명령 틱에 얹는다 -- 그 틱에서 명령을 보내고
+            # 곧바로 관측을 읽으므로, 기록되는 (action, obs) 쌍의 의미가
+            # 예전과 똑같다. 나머지 틱은 명령만 보낸다.
+            cmd_budget = budget / TELEOP_SUBSTEPS
             max_frames = int(self.cfg.max_episode_seconds * self.cfg.fps)
             t_next = time.monotonic()
             n = 0
             outcome = "save"
+            stop = False
             for i in range(max_frames):
-                cmd = self._poll_cmd()
-                if cmd:
-                    if cmd[0] == "discard_episode" or cmd[0] == "quit":
-                        outcome = "discard" if cmd[0] == "discard_episode" else "quit"
-                        break
-                    if cmd[0] == "go_home":
-                        outcome = "go_home"
-                        break
-                    if cmd[0] == "save_episode":
-                        outcome = "save"
-                        self._pending_success = cmd[1]
-                        break
+                for k in range(TELEOP_SUBSTEPS):
+                    # 버튼은 명령 주기로 본다 -- 기록 주기로만 보면 반응이
+                    # TELEOP_SUBSTEPS 배 느려진다.
+                    cmd = self._poll_cmd()
+                    if cmd:
+                        if cmd[0] == "discard_episode" or cmd[0] == "quit":
+                            outcome = "discard" if cmd[0] == "discard_episode" else "quit"
+                            stop = True
+                        elif cmd[0] == "go_home":
+                            outcome = "go_home"
+                            stop = True
+                        elif cmd[0] == "save_episode":
+                            outcome = "save"
+                            self._pending_success = cmd[1]
+                            stop = True
+                        if stop:
+                            break
 
-                action = self._teleop.get_action()
-                self._robot.send_action(action)
+                    action = self._teleop.get_action()
+                    self._robot.send_action(action)
+                    if k < TELEOP_SUBSTEPS - 1:
+                        t_next += cmd_budget
+                        time.sleep(max(0.0, t_next - time.monotonic()))
+                if stop:
+                    break
+
                 obs = self._get_obs()
 
                 # scene 기준 사진(§6 "사진 1장 필수"): 세션 첫 기록 프레임의
@@ -1289,7 +1324,8 @@ class CollectionWorker(QThread):
                 )
                 self._emit_frames(obs)
                 n = i + 1
-                t_next += budget
+                # 마지막 substep 분만 더한다 -- 앞의 substep 들은 이미 더했다.
+                t_next += cmd_budget
                 self.episode_progress.emit(n, n / self.cfg.fps)
                 time.sleep(max(0.0, t_next - time.monotonic()))
             else:
