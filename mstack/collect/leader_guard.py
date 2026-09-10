@@ -29,7 +29,11 @@ from collections import deque
 
 import numpy as np
 
-from mstack.config.constants import LEADER_DROP_SPEED_RAD_S, LEADER_DROP_WINDOW_S
+from mstack.config.constants import (
+    LEADER_DROP_JOINTS,
+    LEADER_DROP_SPEED_RAD_S,
+    LEADER_DROP_WINDOW_S,
+)
 
 
 class LeaderDropGuard:
@@ -44,9 +48,11 @@ class LeaderDropGuard:
         self,
         limit: float = LEADER_DROP_SPEED_RAD_S,
         window_s: float = LEADER_DROP_WINDOW_S,
+        joints=LEADER_DROP_JOINTS,
     ) -> None:
         self.limit = float(limit)
         self.window_s = float(window_s)
+        self.joints = np.asarray(joints, dtype=int)
         self.peak = 0.0          # 이번 에피소드의 최고값 -- 임계를 다시 볼 근거
         self._t: deque = deque()
         self._q: deque = deque()
@@ -84,10 +90,14 @@ class LeaderDropGuard:
         if len(self._t) < 2 or span < self.window_s:
             return None
 
+        # 피치 관절만 본다 (LEADER_DROP_JOINTS). 중력은 롤 축에 모멘트를
+        # 만들지 못하므로 롤은 떨어지지 않고, 넣으면 낙하 신호 없이 정상 쪽
+        # 바닥만 올린다 -- 실측에서 롤은 낙하 때가 정상보다 오히려 느렸다.
+        #
         # 관절별 이동거리 / 시간 = 관절별 평균 속력. 순 변위가 아니라
         # **이동거리**다 (절대값을 먼저 취한다) -- 실측 기준과 같은 정의이고,
         # 떨어지는 팔은 한 방향으로 가므로 둘이 같지만 손떨림은 거리만 키운다.
-        arr = np.asarray(self._q)
+        arr = np.asarray(self._q)[:, self.joints]
         speed = np.abs(np.diff(arr, axis=0)).sum(axis=0) / span
         value = float(np.linalg.norm(speed))
         if value > self.peak:

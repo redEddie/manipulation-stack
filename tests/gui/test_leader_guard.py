@@ -7,9 +7,12 @@ v_max 테이퍼를 고치면서 그 경로가 사라졌다. 이 층이 그 자�
 
 여기서 못박는 것 중 조용히 깨지기 쉬운 것들:
 
-  * **실측 정상 최대(1.51)는 통과, 실측 낙하 최고(2.84)는 발동.** 지표의
-    정의를 바꾸면(예: 절대값을 나중에 취하거나 L2 대신 관절 최대를 쓰면)
-    이 두 줄이 먼저 깨진다.
+  * **실측 정상 최대(1.41)는 통과, 실측 낙하 최고(2.83)는 발동.** 지표의
+    정의를 바꾸면(절대값을 나중에 취하거나, L2 대신 관절 최대를 쓰거나,
+    보는 관절이 달라지면) 이 두 줄이 먼저 깨진다.
+  * **롤 관절(J1/J3/J5/J7)은 보지 않는다.** 중력은 롤 축에 모멘트를 못
+    만들어 낙하 때 오히려 정상보다 느렸다 -- 넣으면 낙하 신호 없이 정상 쪽
+    바닥만 올라간다.
   * 창을 채우기 전에는 ``None`` -- "아직 모른다" 와 "0" 은 다르다.
   * 급정거는 ``robot.hold()`` 로 한다. 명령을 그냥 끊으면 설정점이 직전
     값에 남아 팔이 거기까지 계속 간다.
@@ -30,16 +33,17 @@ sys.path.insert(0, str(WT))
 from mstack.collect.leader_guard import LeaderDropGuard  # noqa: E402
 from mstack.collect.worker import CollectionWorker  # noqa: E402
 from mstack.config.constants import (  # noqa: E402
+    LEADER_DROP_JOINTS,
     LEADER_DROP_SPEED_RAD_S,
     LEADER_DROP_WINDOW_S,
 )
 
 #: 2026-09-10 실측을 이 코드에 흘려 얻은 값. 정상 5개(28.9초)와 낙하 2회다.
-MEASURED_NORMAL_PEAK = 1.51
-MEASURED_DROP_PEAKS = (2.84, 2.70)
+MEASURED_NORMAL_PEAK = 1.41
+MEASURED_DROP_PEAKS = (2.83, 2.69)
 
 
-def stream(guard, speed_l2, seconds, hz=100.0, joints=(1, 3)):
+def stream(guard, speed_l2, seconds, hz=100.0, joints=LEADER_DROP_JOINTS):
     """``speed_l2`` 의 L2 속도로 등속 이동하는 리더를 흘린다. 최고값 반환."""
     per = speed_l2 / np.sqrt(len(joints))   # 관절별 속도 -> L2 가 speed_l2
     q = np.zeros(7)
@@ -89,6 +93,27 @@ g2 = LeaderDropGuard(); stream(g2, 2.8, 1.0, joints=(1, 3, 5))
 assert abs(g1.peak - g2.peak) < 0.02, (
     f"L2 는 어느 관절에 실렸는지와 무관해야 한다: {g1.peak:.2f} vs {g2.peak:.2f}")
 print("3. L2 정의 (관절 분포와 무관) OK")
+
+
+# ------------------------------------------------------------- 롤은 안 본다
+# 중력은 롤 축에 모멘트를 못 만든다. 실측에서도 낙하 때 롤 넷이 정상보다
+# 느렸다 (J1 0.11/0.43, J3 0.20/0.51, J5 0.26/1.12, J7 0.44/1.01).
+ROLL = tuple(j for j in range(7) if j not in LEADER_DROP_JOINTS)
+assert ROLL == (0, 2, 4, 6), ROLL
+g = LeaderDropGuard()
+stream(g, 6.0, 1.0, joints=ROLL)
+assert g.peak == 0.0, f"롤만 움직였는데 지표가 {g.peak:.2f} 다 -- 롤을 보고 있다"
+# 롤이 아무리 빨라도 피치 판정을 밀어 올리지 않는다
+g = LeaderDropGuard()
+q = np.zeros(7)
+for k in range(200):
+    for j in ROLL:
+        q[j] = 6.0 * k / 100.0
+    q[LEADER_DROP_JOINTS[0]] = 1.0 * k / 100.0
+    v = g.update(q.copy(), 1000.0 + k / 100.0)
+assert abs(g.peak - 1.0) < 0.02, f"롤이 섞여 들어왔다: {g.peak:.2f}"
+assert not g.tripped(v)
+print(f"3b. 롤 J{[j + 1 for j in ROLL]} 무시 OK")
 
 
 # ------------------------------------------------------------------- reset

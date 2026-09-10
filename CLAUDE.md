@@ -52,7 +52,8 @@ Keep this invariant when adding files; a module's folder must announce its role.
 - Grammar/rules: `python -m mstack.scene.instruction_grammar`, `python -m mstack.scene.scene_rules`
 - Leader-drop safety threshold: `scripts/analyze/leader_speed.py [--sweep]`
   replays the 1 kHz raw logs through the *same* guard class the worker runs.
-  `LEADER_DROP_SPEED_RAD_S` (2.4) rests on one drop event and 28.9 s of normal
+  `LEADER_DROP_SPEED_RAD_S` (2.1, over the pitch joints only — gravity exerts
+  no moment about a roll axis) rests on one drop event and 28.9 s of normal
   teleop — re-run this as sessions accumulate and watch the normal-side
   headroom, because one false stop is enough for an operator to switch a
   safety layer off.
