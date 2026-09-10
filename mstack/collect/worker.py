@@ -6,6 +6,8 @@ handling) from its blocking-loop/KeyPoller CLI shape into a
 command-queue-in / Qt-signal-out worker thread, so a GUI can drive it without
 freezing on robot I/O. The state machine and constants (``GATE_RAD``,
 ``RAMP_STEP``) are unchanged from that script; only the I/O boundary moved.
+(2026-09-10: 램프 주기는 RAMP_HZ 로 옮겼다 -- 상수는 이제 rad/s 로 적고
+tick 크기는 주기에서 파생한다.)
 
 Run inside ``lerobot-venv`` (has ``mstack``, ``dynamixel-sdk``, ``pyrealsense2``,
 ``lerobot``). Requires ``scripts/launch/launch_nodes.py --robot fr3`` already
@@ -53,10 +55,34 @@ GATE_RAD = MATCH_GATE_RAD
 #: 게이트/정렬 루프는 50Hz 로 돌지만 게이지 갱신은 이 주기로만 보낸다
 #: (_emit_gate_status 참조).
 _GATE_EMIT_PERIOD_S = 1.0 / 15
-# rad/tick @ 20Hz. The FR3 driver's reference filter saturates at 1.5 rad/s
-# regardless (franka_fr3.py max_joint_velocity), so this only has to be large
-# enough not to be the binding constraint.
-RAMP_STEP = 0.10
+#: 램프(homing·접근) 명령 주기(Hz). **기록 주기(cfg.fps)와 무관하다** --
+#: 이 루프들은 기록되지 않으므로 데이터셋에 영향이 없다.
+#:
+#: 2026-09-10: 20 -> 100. 20 Hz 계단이 진동의 단일 원인이었다 -- 원시 로그에서
+#: 세 신호(필터 출력 속도·측정 속도·토크)의 봉우리가 전부 19.5 Hz 로 명령
+#: 주기와 일치했고, homing 의 J2 토크 맥동은 정지 대비 310배였다. 주기를 5배로
+#: 올리면 한 tick 이동이 1/5 이 되어 오차가 확 벌어지지 않고, 남는 리플도 더
+#: 높은 주파수로 옮겨가 2차 필터가 훨씬 강하게 누른다(감쇠가 주파수 제곱).
+#:
+#: 예산은 충분하다: ZMQ 왕복 2회가 270 µs 실측이고 리더 읽기·카메라는 캐시
+#: 반환이라, 10 ms 주기에서 작업이 3% 를 넘지 않는다.
+RAMP_HZ = 100.0
+RAMP_PERIOD_S = 1.0 / RAMP_HZ
+
+#: 접근 램프 속도 (rad/s). 조작자가 리더를 목표 자세로 잡고 있고 거리가 짧다.
+#:
+#: 주의: 드라이버 기준 필터의 상한은 1.5 rad/s 다 (franka_fr3.py
+#: max_joint_velocity). 2.0 은 그 위라 필터가 포화한다 -- 명령이 팔보다 빨리
+#: 달아나고 격차가 쌓인다. 짧은 구간이라 그동안 문제로 드러나지 않았지만,
+#: 포화는 HOME_TICK_DQ 주석이 말하는 그 위험이다. 낮출지는 별도 판단.
+APPROACH_SPEED = 2.0
+RAMP_STEP = APPROACH_SPEED / RAMP_HZ          # rad/tick
+
+#: 접근 완료 판정 (rad). 속도 상수와 **분리한다** -- 예전에는 RAMP_STEP 하나가
+#: 스텝 크기와 수렴 임계값을 겸했는데, 주기를 올리면 스텝만 줄어야 하고 판정
+#: 기준은 그대로여야 한다. 붙여 두면 주기를 바꾸는 순간 판정이 5배 엄격해진다.
+APPROACH_DONE_RAD = 0.10
+
 GRIPPER_OPEN = 0.0  # GELLO/franka_fr3 convention: 0=open, 1=closed
 
 # ---- EE 경로 homing ----
@@ -69,7 +95,7 @@ HOME_LIFT_M = 0.10       # 1단계: 현재 포즈에서 수직 리프트 높이
 HOME_EE_STEP_M = 0.010   # 웨이포인트 간 EE 이동
 HOME_ROT_STEP_RAD = 0.05  # 웨이포인트 간 EE 회전
 HOME_MAX_DQ = 0.35       # 연속 웨이포인트 관절 점프 상한 -- 초과 시 폴백
-#: tick 당 관절 이동 상한 (rad). 20Hz 이므로 0.06 = 1.2 rad/s.
+#: tick 당 관절 이동 상한 (rad) = HOME_SPEED / RAMP_HZ.
 #:
 #: 웨이포인트 하나 = tick 하나가 아니다. 위의 EE 스텝은 **직교** 속도만
 #: 묶는다 -- 자코비안이 나빠지는 자세에서는 1cm 이동이 관절 0.3 rad 이 되고,
@@ -82,13 +108,16 @@ HOME_MAX_DQ = 0.35       # 연속 웨이포인트 관절 점프 상한 -- 초과
 #:
 #: 그래서 웨이포인트 사이를 관절 공간에서 다시 잘라(_densify) 이 값을 넘지
 #: 않게 한다. v_max 의 80% 로 두어 명령이 팔을 앞지르지 않게 한다 -- 앞지르지
-#: 않으면 쌓일 격차도 없다. RAMP_STEP(0.10 = 2.0 rad/s)을 쓰지 않는 이유가
+#: 않으면 쌓일 격차도 없다. RAMP_STEP(APPROACH_SPEED = 2.0 rad/s)을 쓰지 않는 이유가
 #: 그것이다: v_max 보다 큰 요구는 필터를 포화시키고, 포화 상태에서 제어 루프
 #: 틱이 한 번 늦으면(ZMQ/GIL 간섭) 정지->재개 순간 가속도 불연속으로
 #: joint_motion_generator_acceleration_discontinuity 반사가 떠 제어 루프가
 #: 죽는다. 폴백 관절 램프(_ramp_to)는 목표로 clip 되어 결국 멎지만, 홈까지의
 #: 긴 이동 동안 포화 구간이 계속되므로 같은 캡이 필요하다 (2026-09-07 사고).
-HOME_TICK_DQ = 0.06
+#: (2026-09-10: 주기가 RAMP_HZ 로 바뀌어도 **속도**가 보존되도록 파생값으로
+#: 바꿨다. 20 Hz 시절의 0.06 rad/tick 과 같은 1.2 rad/s 다.)
+HOME_SPEED = 1.2                              # rad/s -- v_max(1.5)의 80%
+HOME_TICK_DQ = HOME_SPEED / RAMP_HZ           # rad/tick
 
 #: 노드 복구 재시도가 같은 이유로 계속 실패할 때 로그를 다시 찍는 주기(초).
 #: 2초마다 찍으면 로그가 그것만으로 차고, 안 찍으면 멈춘 것처럼 보인다.
@@ -656,7 +685,8 @@ class CollectionWorker(QThread):
 
     # ------------------------------------------------------------------ ramp
     def _ramp_to(
-        self, target_q: np.ndarray, max_ticks: int = 600, react_to_go_home: bool = True
+        self, target_q: np.ndarray, timeout_s: float = 30.0,
+        react_to_go_home: bool = True
     ) -> str:
         """Returns "ok", "quit", or "go_home" (go_home only possible when
         react_to_go_home). Running out of ticks without converging is
@@ -675,7 +705,10 @@ class CollectionWorker(QThread):
         every tick here is harmless and keeps this loop's shape unchanged.
         """
         q_cmd = None
-        for _ in range(max_ticks):
+        # **틱 수가 아니라 초** 로 센다. 예전에는 max_ticks 였는데, 그러면
+        # RAMP_HZ 를 올리는 순간 타임아웃이 같은 비율로 짧아진다 (20->100 Hz
+        # 에서 30초가 6초가 된다). 주기를 바꿔도 의미가 변하지 않아야 한다.
+        for _ in range(int(timeout_s * RAMP_HZ)):
             interrupt = self._drain_interrupt(react_to_go_home=react_to_go_home)
             if interrupt:
                 return interrupt
@@ -696,7 +729,7 @@ class CollectionWorker(QThread):
             cmd = dict(zip(JOINT_KEYS, np.append(q_cmd, GRIPPER_OPEN).tolist()))
             self._robot.send_action(cmd)
             self._emit_frames(obs)
-            time.sleep(0.05)
+            time.sleep(RAMP_PERIOD_S)
         return "quit"
 
     @staticmethod
@@ -853,7 +886,7 @@ class CollectionWorker(QThread):
             prev = q
         return out
 
-    def _ramp_home(self, max_ticks: int = 600, react_to_go_home: bool = True) -> str:
+    def _ramp_home(self, timeout_s: float = 30.0, react_to_go_home: bool = True) -> str:
         """EE 경로(리프트 -> 직선) homing. 실패 시 기존 관절 램프로 폴백.
 
         반환 계약은 _ramp_to 와 동일: "ok" / "quit" / "go_home".
@@ -866,7 +899,7 @@ class CollectionWorker(QThread):
         if wps is None:
             self.log_message.emit(
                 "[HOME] EE 경로 생성 실패 -- 관절 램프로 폴백합니다")
-            return self._ramp_to(self._reset_q, max_ticks=max_ticks,
+            return self._ramp_to(self._reset_q, timeout_s=timeout_s,
                                  react_to_go_home=react_to_go_home)
         for q_cmd in wps:
             interrupt = self._drain_interrupt(react_to_go_home=react_to_go_home)
@@ -876,9 +909,9 @@ class CollectionWorker(QThread):
             cmd = dict(zip(JOINT_KEYS, np.append(q_cmd, GRIPPER_OPEN).tolist()))
             self._robot.send_action(cmd)
             self._emit_frames(obs)
-            time.sleep(0.05)
+            time.sleep(RAMP_PERIOD_S)
         # EE 는 홈 포즈에 도착. 남은 널스페이스/추종 잔차를 관절 램프로 수렴.
-        return self._ramp_to(self._reset_q, max_ticks=max_ticks,
+        return self._ramp_to(self._reset_q, timeout_s=timeout_s,
                              react_to_go_home=react_to_go_home)
 
     @staticmethod
@@ -897,7 +930,7 @@ class CollectionWorker(QThread):
         same move takes 1.25 s (0.80 rad/s), a 3.5x speedup with no change
         to what the driver is allowed to do.
 
-        ``step`` is the per-tick cap (rad @ 20Hz). The default RAMP_STEP
+        ``step`` is the per-tick cap (rad @ RAMP_HZ). The default RAMP_STEP
         (2.0 rad/s) suits the short pre-teleop approach ramp; the long
         homing fallback/residual ramp (``_ramp_to``) passes HOME_TICK_DQ
         instead so the reference filter never sits saturated -- a late
@@ -937,7 +970,7 @@ class CollectionWorker(QThread):
             q_led = np.array([act[k] for k in JOINT_KEYS[:7]])
             d = q_led - q_rob
             self._emit_frames(obs)
-            if np.abs(d).max() < RAMP_STEP:
+            if np.abs(d).max() < APPROACH_DONE_RAD:
                 return "ok"
             # Integrated command, not measured+step -- see _advance_cmd. The
             # target here is live (the operator may still be moving), so the
@@ -954,7 +987,7 @@ class CollectionWorker(QThread):
             if now > deadline:
                 self.log_message.emit(f"[접근] {timeout:.0f}s 시간 초과 -- 세션 종료")
                 return "quit"
-            time.sleep(0.05)
+            time.sleep(RAMP_PERIOD_S)
 
     # ------------------------------------------------------------------ gate
     def _emit_gate_status(self) -> tuple[np.ndarray, bool]:
@@ -1545,7 +1578,7 @@ class CollectionWorker(QThread):
             except Exception:  # noqa: BLE001
                 pass
             try:
-                self._ramp_home(max_ticks=200)
+                self._ramp_home(timeout_s=10.0)
             except Exception:  # noqa: BLE001
                 pass
             for cleanup in (
