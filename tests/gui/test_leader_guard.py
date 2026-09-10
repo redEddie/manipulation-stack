@@ -166,19 +166,24 @@ class FakeWorker:
 
 w = FakeWorker()
 t0 = time.monotonic()
-w._emergency_hold(2.9)
+w._emergency_hold(2.9, 2.1)
 elapsed = time.monotonic() - t0
 assert w._robot.held == 1, "hold 를 불러야 한다 -- 전송 중단만으로는 안 선다"
 assert w._phase_pub.sent and w._phase_pub.sent[0][0] == "estop", w._phase_pub.sent
 assert w._phase_pub.sent[0][1]["speed"] == 2.9
 assert any("2.90 rad/s" in m for m in w.log_message.msgs), w.log_message.msgs
+# 로그는 **실제로 걸린 가드의 임계**를 찍어야 한다 -- 모듈 상수를 찍으면
+# 다른 임계로 만든 가드에서 거짓말이 된다.
+w2 = FakeWorker()
+w2._emergency_hold(9.9, 7.7)
+assert any("임계 7.7" in m for m in w2.log_message.msgs), w2.log_message.msgs
 assert w._obs_calls >= 3, "팔이 실제로 설 때까지 기다려야 한다"
 assert elapsed < 0.6, f"대기가 너무 길다: {elapsed:.2f}s"
 print(f"5. 급정거 배선 (hold + estop 표지 + 정지 대기 {elapsed * 1000:.0f} ms) OK")
 
 # hold 가 실패해도 폐기는 진행된다
 w = FakeWorker(fail=True)
-w._emergency_hold(3.1)
+w._emergency_hold(3.1, 2.1)
 assert any("실패" in m for m in w.log_message.msgs), w.log_message.msgs
 assert w._phase_pub.sent, "hold 실패가 단계 표지까지 막으면 안 된다"
 print("6. hold 실패해도 계속 진행 OK")

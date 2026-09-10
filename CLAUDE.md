@@ -47,6 +47,34 @@ Arrows point down only. `tests/gui/test_layer_rules.py` enforces this.
 
 Keep this invariant when adding files; a module's folder must announce its role.
 
+## Safety layers — and what each one does NOT catch
+
+There is no `mstack/safety/`: each layer lives with the mechanism it drives
+(`joint_limit_wall` cannot leave `robots/` — it shares the leader's Dynamixel
+port). This list is the index instead. **The right-hand column is the point.**
+On 2026-09-10 the team found that the layer everyone assumed was protecting the
+arm was not a safety feature at all, and that a limit named for dropped leaders
+never fired on one. Never add a layer here without saying what it misses.
+
+| Layer | Where | Catches | Does NOT catch |
+|---|---|---|---|
+| Collision reflex (100/40 N·m, 100 N) | `robots/franka_fr3.py` | impacts, abnormal wrist load | anything below threshold; deliberate contact is meant to pass |
+| Reference filter (v 1.5 / a 6 / jerk 3000) | `robots/franka_fr3.py` | commands the arm cannot execute | *where* the command goes — it will faithfully chase a wrong pose at v_max |
+| Leader joint-limit wall | `robots/joint_limit_wall.py` | leader poses the follower cannot reach; cable wind-up | anything inside the follower's range |
+| Leader-drop guard (pitch L2 > 2.1 rad/s over 100 ms) | `collect/leader_guard.py` → `hold()` | a released or runaway leader during recording | roll-only motion (gravity exerts no moment there); the VLA path, which has no leader |
+| `hold()` | `robots/franka_fr3.py` | — (mechanism, not a detector) | — |
+
+Two things that look like safety layers and are not:
+
+* **The `acceleration_discontinuity` reflex.** Until 2026-09-10 this was what
+  actually stopped the arm when a leader was dropped — a side effect of
+  libfranka refusing an impossible command, never a designed guard. Raising
+  v/a and fixing the v_max taper removed it. The leader-drop guard replaces it.
+* **Setpoint-vs-filter gap.** Tried and removed the same day: a real dropped
+  leader only opened a 0.322 rad gap, while ordinary teleop has reached 0.532.
+  A released leader falls *within* the follower's v_max, so the gap never
+  grows. Do not reintroduce this without new evidence.
+
 ## Verification
 
 - Grammar/rules: `python -m mstack.scene.instruction_grammar`, `python -m mstack.scene.scene_rules`

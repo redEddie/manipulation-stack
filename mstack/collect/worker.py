@@ -41,7 +41,7 @@ from mstack.agents.lerobot_plugin import (
     GelloFR3TeleopConfig,
 )
 from mstack.data.libero_format import LiberoTaskWriter, NullTaskWriter
-from mstack.config.constants import LEADER_DROP_SPEED_RAD_S, ROLL_ABORT_RAD
+from mstack.config.constants import ROLL_ABORT_RAD
 from mstack.collect.leader_guard import LeaderDropGuard
 from mstack.robots.franka_fr3 import FR3_RESET_POSES, FR3_ROLL_JOINTS
 from mstack.comm.phase_bus import PhasePublisher
@@ -1245,7 +1245,7 @@ class CollectionWorker(QThread):
             time.sleep(0.02)
 
     # -------------------------------------------------------------- episode
-    def _emergency_hold(self, speed: float) -> None:
+    def _emergency_hold(self, speed: float, limit: float) -> None:
         """리더를 놓쳤다고 보고 팔을 세운다.
 
         세우는 것은 노드가 한다 (``FrankaFR3Robot.hold``) -- 필터가 지금 어디를
@@ -1264,8 +1264,10 @@ class CollectionWorker(QThread):
         # GUI 의 상태 표(STATE_LABELS/SHORTCUT_HINTS/키 표시)가 모르는 값을
         # 받게 되기 때문이다. 이 구간은 수백 ms 뒤 homing 으로 넘어간다.
         self._phase_pub.publish("estop", speed=round(float(speed), 3))
+        # 임계는 모듈 상수가 아니라 **실제로 걸린 가드의 값**을 찍는다. 다른
+        # 임계로 만든 가드가 있으면 상수는 거짓말이 된다.
         self.log_message.emit(
-            f"[안전] 리더 속도 {speed:.2f} rad/s (임계 {LEADER_DROP_SPEED_RAD_S:.1f}) "
+            f"[안전] 리더 속도 {speed:.2f} rad/s (임계 {limit:.1f}) "
             "-- 팔을 세우고 에피소드를 폐기합니다. 리더를 잡고 다시 정렬하세요.")
         # 팔이 실제로 설 때까지 기다렸다가 홈 복귀로 넘긴다. _ramp_home 은
         # **측정된** 현재 자세에서 시작하는데, 아직 감속 중이면 그 자세가
@@ -1331,7 +1333,7 @@ class CollectionWorker(QThread):
                     speed = drop_guard.update(
                         self._joint_vec(action)[:7], time.monotonic())
                     if drop_guard.tripped(speed):
-                        self._emergency_hold(speed)
+                        self._emergency_hold(speed, drop_guard.limit)
                         outcome = "discard"
                         stop = True
                         break
