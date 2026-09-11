@@ -62,23 +62,21 @@ def build_dataset(win) -> QWidget:
         col.addWidget(QLabel(tr("Scene 목록은 Gallery 탭을 연 뒤 나타납니다")))
     # 비활성 '에피소드 검색' 입력칸을 뺐다 (2026-09-06). 검색/필터는 아직
     # 없고, 누를 수 없는 입력칸은 트리 위에서 자리만 차지했다.
+    # 목록 뷰 -- (씬 → 지시문) 으로 좁혀진 에피소드만 그린다. 파일 순서를
+    # 그대로 그리면 이어붙이기에서 지시문이 섞여 보인다 (2026-09-11).
+    # 열은 큐레이션에 필요한 것만: 번호 · 판정 · 프레임. 나머지는 우측 카드에서
+    # 읽는다 -- 좁은 패널에서 열을 늘리면 다 잘린다.
     win.dataset_tree = QTreeWidget()
     win.dataset_tree.setColumnCount(3)
-    # 수집자 열이 있다 (2026-09-07 조작자 요청). 에피소드 attrs 에 늘 있던
-    # 값인데 화면에 열이 없어서, "이건 누가 찍었지" 를 물으려면 파일을 열어야
-    # 했다 -- 여럿이 돌아가며 찍는 데이터셋에서 그것은 자주 나오는 질문이다.
-    win.dataset_tree.setHeaderLabels(
-        [tr("파일 / 에피소드"), tr("프레임"), tr("결과"), tr("수집자")])
-    win.dataset_tree.setColumnWidth(0, 300)
-    # 큐레이션은 실패 여러 개를 한 번에 지우는 작업이다.
+    win.dataset_tree.setHeaderLabels([tr("Episode"), tr("✓/✗"), tr("Frames")])
+    win.dataset_tree.setRootIsDecorated(False)      # 1단이라 펼침 삼각형이 없다
+    win.dataset_tree.setColumnWidth(0, 110)
+    win.dataset_tree.setColumnWidth(1, 36)
     win.dataset_tree.setSelectionMode(
         QAbstractItemView.SelectionMode.ExtendedSelection)
     win.dataset_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-    # 트리는 확인용으로만 남긴다 -- 큐레이션의 축은 파일이 아니라
-    # (씬 → 지시문) 이고, 좁힌 목록은 위 콤보로 갤러리에서 본다.
-    win.dataset_tree.setMaximumHeight(180)
     win.dataset_tree.itemSelectionChanged.connect(win.dataset_ops.on_dataset_selection)
-    col.addWidget(win.dataset_tree)
+    col.addWidget(win.dataset_tree, 1)
     # 파일 삭제는 여기 없다. 에피소드 삭제 바로 옆에 두었더니 실제로 오클릭이
     # 났고, 한 번에 태스크 하나가 통째로 날아간다. 되돌릴 수 없는 조작은
     # 한 단계 더 들어가야 닿도록 Dataset 메뉴에만 둔다.

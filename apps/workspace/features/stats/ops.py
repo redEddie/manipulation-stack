@@ -353,7 +353,8 @@ class StatsOps:
         # 선택 출처는 Dataset 트리 하나뿐이다. 파일 행을 고륾면 그 파일만,
         # 에피소드 행을 고륾면 그 부모 파일만 남긴다.
         path = None
-        sel = self.win.dataset_tree.selectedItems() if hasattr(self.win, "dataset_tree") else []
+        # 공유 선택에서 읽는다 -- 목록 뷰와 격자가 같은 것을 가리킨다.
+        sel = getattr(self.win, "_gallery_selected", []) or []
         if sel:
             node = sel[0] if sel[0].parent() is None else sel[0].parent()
             v = node.data(0, Qt.ItemDataRole.UserRole)

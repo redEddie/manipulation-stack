@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import h5py
@@ -19,6 +20,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 OBJ = ["OBJ-CUP-WHT-02", "OBJ-BOWLS-BLU-01"]
@@ -64,6 +66,9 @@ def main() -> None:
         _make(root)
         win = cw.WorkspaceWindow(None)
         win.root_edit.setText(str(root))
+        # 반영까지 해야 갤러리 콤보가 이 합성 뿌리를 본다. 안 하면 조작자의
+        # 진짜 데이터셋을 읽어 목록이 60줄이 된다 (2026-09-11 에 실제로 그랬다).
+        win.dataset_ops.on_root_changed()
         # 활동 전환이 자동 분석 때문에 죽지 않는다. 이 합성 파일에는 통계가
         # 쓰는 필드가 없어서 실제로 KeyError 로 활동 전환이 막혔다
         # (2026-09-07). 분석은 실패해도 되지만 화면을 끌고 죽으면 안 된다.
@@ -71,16 +76,35 @@ def main() -> None:
         assert win.right_pages["dataset"] != win.right_pages["collect"], \
             "Dataset 이 세션 페이지를 함께 쓰고 있다"
         assert win.right_stack.currentIndex() == win.right_pages["dataset"]
-        win.dataset_ops.refresh_dataset_tree()
+        # 목록 뷰는 (씬 → 지시문) 으로 좁혀진 집합만 그린다 (2026-09-11).
+        # 씬을 고르는 것이 콤보이고, 목록은 그 결과다 -- 파일 순서를 그대로
+        # 그리면 이어붙이기에서 지시문이 섞인다.
+        cb = win.gallery_scene_combo
+        assert cb.count() >= 1, "합성 scene 이 콤보에 없다"
+        cb.setCurrentIndex(0)
+        for _ in range(60):
+            app.processEvents()
+            if win._gallery_episodes:
+                break
+            time.sleep(0.05)
+        assert win._gallery_episodes, "갤러리가 scene 을 못 읽었다"
+        win.gallery_ops.apply_gallery_filter()
 
         t = win.dataset_tree
-        # 목록에 수집자 열이 있다 (여럿을 훑는 자리)
-        assert t.headerItem().text(3) == "수집자", t.headerItem().text(3)
-        top = t.topLevelItem(0)
-        assert top.childCount() == 1, top.childCount()
+        # 열은 큐레이션에 필요한 것만: 번호 · 판정 · 프레임.
+        # 수집자·지시문은 고른 뒤 우측 카드에서 읽는다 (좁은 패널에서 열을
+        # 늘리면 다 잘린다).
+        assert t.columnCount() == 3, t.columnCount()
+        assert [t.headerItem().text(i) for i in range(3)] == ["Episode", "✓/✗", "Frames"], \
+            [t.headerItem().text(i) for i in range(3)]
+        assert t.topLevelItemCount() == 1, t.topLevelItemCount()
+        assert t.topLevelItem(0).childCount() == 0, "1단 목록이어야 한다"
 
-        # 고른 한 줄은 오른쪽에서 온전히 -- 목록에 없는 값까지
-        win.dataset_ops._fill_right(top.child(0))
+        # 고른 한 줄은 오른쪽에서 온전히 -- 목록에 없는 값까지.
+        # 이제 위젯이 아니라 에피소드 dict 를 받는다: 예전에는 item.text(1) 처럼
+        # **화면에 그려진 글자를 도로 읽어서** 열이 바뀌면 조용히 어긋났다.
+        ep_dict = t.topLevelItem(0).data(0, Qt.ItemDataRole.UserRole)
+        win.dataset_ops.fill_right_for(ep_dict, win.dataset_ops.selected_file())
         ep = _text(win.ds_episode_card)
         for want in ("episode_000", "185", "success", "jeongrim",
                      "I000", "2026-08-21T15:40:08"):
@@ -97,10 +121,17 @@ def main() -> None:
         print("2. 고른 scene 의 배치 + 기준 사진 OK")
 
         # 고른 것이 없으면 비운다 (지난 선택이 남아 있으면 안 된다)
-        win.dataset_ops._fill_right(None)
+        # 에피소드 선택을 풀면 에피소드 카드는 비지만 **scene 은 남는다**
+        # (2026-09-11). 새 모델에서 씬은 콤보가 들고 있어 에피소드 선택과 함께
+        # 풀리지 않는다 -- 지금 무엇을 보고 있는지는 계속 보여야 한다.
+        win.dataset_ops.fill_right_for(None, win.dataset_ops.selected_file())
         assert "미선택" in _text(win.ds_episode_card)
+        assert "S000" in _text(win.ds_scene_card), "씬이 같이 지워졌다"
+        assert win.ds_scene_photo.pixmap() is not None
+        # 씬까지 없으면 그때는 비운다
+        win.dataset_ops.fill_right_for(None, None)
         assert "기준 사진 없음" in win.ds_scene_photo.text()
-        print("3. 선택 없음 OK")
+        print("3. 선택 없음 (씬은 유지, 씬도 없으면 비움) OK")
         win.close()
     print("test_dataset_right OK")
 

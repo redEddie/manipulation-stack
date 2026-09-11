@@ -152,21 +152,14 @@ print("3b 통과: 좌우 최대화(비율 88/12) 왕복 + 겹침 없음 + 콤보
 # ---- 3c. '실패만 선택' -- scene(failed)과 legacy(실패) 표기 모두 ----
 from PyQt6.QtWidgets import QTreeWidgetItem  # noqa: E402
 
-win.dataset_tree.clear()
-sp = QTreeWidgetItem(["scene_099.hdf5", "", "scene"])
-win.dataset_tree.addTopLevelItem(sp)
-for name, q in (("episode_000", "success"), ("episode_001", "failed")):
-    sp.addChild(QTreeWidgetItem([name, "10", q]))
-lp = QTreeWidgetItem(["t_demo.hdf5", "", ""])
-win.dataset_tree.addTopLevelItem(lp)
-lp.addChild(QTreeWidgetItem(["  demo_0", "10", cw.tr("실패")]))
-win.dataset_ops.on_select_failed()
-sel = [i.text(0) for i in win.dataset_tree.selectedItems()]
-assert "episode_001" in sel, sel                 # scene 실패 선택됨
-assert any("demo_0" in s for s in sel), sel      # legacy 실패도
-assert "episode_000" not in sel                  # 성공은 제외
-win.dataset_tree.clear()   # 합성 항목(UserRole 없음)이 뒤 재생 가드 테스트에
-print("3c 통과: 실패만 선택이 scene 'failed' 표기도 잡음")   # 안 섞이게
+# 3c. '실패만 선택' 은 없앴다 (2026-09-11). 왼쪽 목록이 (씬 → 지시문) 으로
+# 좁혀진 에피소드만 그리게 되면서, "전 파일에서 실패를 골라 준다" 는 동작은
+# 화면에 없는 것까지 고르는 셈이 되어 뜻이 사라졌다. 판정으로 좁히는 일은
+# 격자의 필터가 한다. 다시 생기면 여기서 걸리라고 계약만 남긴다.
+assert not hasattr(win.dataset_ops, "on_select_failed"), (
+    "'실패만 선택' 이 되살아났다 -- 좁혀진 목록과 어떻게 어울리는지 먼저 정할 것")
+assert not hasattr(win.dataset_ops, "on_select_jerky")
+print("3c 통과: 전역 선택 헬퍼가 없어졌다 (필터가 대신)")
 
 # 재생 가드: 선택 없음 -> 안내, 세션 중 -> 경고
 win.playback_ops.on_replay_selected()

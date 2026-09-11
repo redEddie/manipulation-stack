@@ -10,7 +10,6 @@ from PyQt6.QtCore import QProcess, Qt
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QTreeWidgetItem
 
 from mstack.data.dataset_schema import OBS_AGENTVIEW_RGB, normalize_schema_version
-from mstack.data.episode_stats import TASK_DEV_LIMIT
 from mstack.data.libero_format import hdf5_repack_status, renumber_episodes
 from mstack.gui.text_utils import repo_id_error
 from mstack.gui.i18n import tr
@@ -20,7 +19,6 @@ from mstack.gui.scene_gallery import invalidate_scene_caches
 from mstack.gui.widgets.video_view import np_to_pixmap
 from mstack.scene.scene_format import (
     delete_scene_episodes,
-    iter_scene_files,
     list_scene_episodes,
     read_reference_image,
     read_scene_metadata,
@@ -75,6 +73,11 @@ class DatasetOps:
         계획, 에피소드 트리, 분석. 한 곳에서 바뀌므로 한 곳에서 갱신한다."""
         self.win.stats_ops.mark_stats_stale()
         self.win.scene_ops.refresh_scene_combo()
+        # 큐레이션의 Scene 콤보도 여기서 갱신한다. 안 하면 경로를 바꿔도 옛
+        # 폴더의 씬 목록이 남고, 목록 뷰·격자가 전부 그 콤보에 걸려 있으므로
+        # **다른 폴더를 보고 있다고 믿게 된다** (2026-09-11).
+        if hasattr(self.win, "gallery_scene_combo"):
+            self.win.gallery_ops.refresh_gallery_scenes()
         self.refresh_dataset_tree()
 
     def browse_root(self) -> None:
@@ -86,84 +89,81 @@ class DatasetOps:
 
     # -------------------------------------------------------------------- tree
     def refresh_dataset_tree(self) -> None:
-        self.win.dataset_tree.clear()
-        root = self.dataset_root()
-        if not root.is_dir():
+        """이름은 옛것이나 하는 일은 목록 갱신이다. 부르는 곳이 많아 이름만 남긴다."""
+        self.refresh_episode_list()
+
+    def refresh_episode_list(self) -> None:
+        """왼쪽 목록 뷰 -- **(씬 → 지시문) 으로 좁혀진 에피소드 집합**을 그린다.
+
+        예전에는 데이터 뿌리 전체를 훑어 파일마다 에피소드를 매단 2단 트리를
+        그렸다. 그 방식은 이어붙이기에서 무너진다: 에피소드는 파일에 저장된
+        순서대로 놓이므로 ``I000 I003 I000 I005 …`` 처럼 지시문이 섞이고,
+        목록을 그대로 그리면 화면에서도 섞인다 (조작자 지적, 2026-09-11).
+
+        그래서 파일 순서를 그리지 않는다. 위의 Scene 콤보와 Instruction 목록이
+        고른 집합 -- 격자가 보여주는 바로 그 집합 -- 만 그린다. 둘은 **같은
+        목록의 두 뷰**이고, 아무것도 안 골랐으면 비어 있다.
+
+        열은 큐레이션에 필요한 것만 둔다: 번호 · 판정 · 프레임. 수집자·지시문은
+        고른 뒤 우측 카드에서 읽는다 (좁은 패널에서 열을 늘리면 다 잘린다).
+        """
+        # build_center 가 build_left 보다 먼저 돌아서, 갤러리 탭이 만들어질 때
+        # 목록 위젯은 아직 없다. 그때는 조용히 넘긴다 -- build_left 가 끝나고
+        # 첫 필터 적용에서 다시 그린다.
+        tree = getattr(self.win, "dataset_tree", None)
+        if tree is None:
             return
-        # ---- scene 파일 (scene-v1). 재생·재판정 UI 는 #31 갤러리에서 --
-        # 여기서는 목록·개수·quality 확인 + 삭제/트림 대상 선택용. 삭제는
-        # legacy 와 같이 삭제 후 renumber -- delete_episodes.
-        for path in iter_scene_files(root):
-            item = QTreeWidgetItem([path.name, "", "scene", ""])
-            item.setData(0, Qt.ItemDataRole.UserRole, str(path))
-            self.win.dataset_tree.addTopLevelItem(item)
-            try:
-                if (self.win.session.active_file_path is not None
-                        and path == self.win.session.active_file_path
-                        and self.win.session.active_episode_cache is not None):
-                    episodes = self.win.session.active_episode_cache
-                else:
-                    episodes = list_scene_episodes(path)
-            except Exception as e:  # noqa: BLE001
-                item.setText(1, f"({type(e).__name__})")
-                continue
-            for ep in episodes:
-                label = f"  {ep['name']} · {ep.get('instruction_id', '')}"
-                q = ep.get("quality_status") or (
-                    "-" if ep.get("success") is None
-                    else ("success" if ep["success"] else "failed"))
-                child = QTreeWidgetItem([
-                    label, str(ep.get("num_samples", "")), q,
-                    str(ep.get("collector", ""))])
-                child.setData(0, Qt.ItemDataRole.UserRole, ep["name"])
-                child.setToolTip(0, ep.get("instruction", ""))
-                item.addChild(child)
-            item.setText(1, tr("{n}개").format(n=len(episodes)))
-        for path in sorted(root.glob("*_demo.hdf5")):
-            item = QTreeWidgetItem([path.name, "", "", ""])
-            item.setData(0, Qt.ItemDataRole.UserRole, str(path))
-            self.win.dataset_tree.addTopLevelItem(item)
-            if self.win.session.active_file_path is not None and path == self.win.session.active_file_path:
-                if self.win.session.active_episode_cache is None:
-                    item.setText(1, tr("불러오는 중..."))
-                    continue
-                episodes = self.win.session.active_episode_cache
-            else:
-                try:
-                    with h5py.File(path, "r") as f:
-                        data = f["data"]
-                        episodes = [{"name": n,
-                                     "num_samples": int(data[n].attrs.get("num_samples", 0)),
-                                     "success": (None if data[n].attrs.get("success") is None
-                                                 else bool(data[n].attrs.get("success")))}
-                                    for n in data]
-                        episodes.sort(key=lambda d: int(d["name"].split("_")[1]))
-                except OSError as e:
-                    item.setText(1, f"({e})")
-                    continue
-            for ep in episodes:
-                res = "-" if ep["success"] is None else (tr("성공") if ep["success"] else tr("실패"))
-                child = QTreeWidgetItem([
-                    "  " + ep["name"], str(ep["num_samples"]), res,
-                    str(ep.get("collector", ""))])
-                child.setData(0, Qt.ItemDataRole.UserRole, ep["name"])
-                item.addChild(child)
-            item.setText(1, tr("{n}개").format(n=len(episodes)))
-        # 접은 채로 시작한다. 200줄 넘는 에피소드를 한 번에 펼쳐두면 정작 훑고
-        # 싶은 task 목록이 화면 밖으로 밀린다. 필요한 파일만 열어두면 된다.
-        self.win.dataset_tree.collapseAll()
-        if hasattr(self.win, "scene_combo"):
-            self.win.scene_ops.refresh_scene_combo()
-        if hasattr(self.win, "gallery_scene_combo"):
-            self.win.gallery_ops.refresh_gallery_scenes()
-        self.update_dataset_panel(self.selected_file())
+        tree.clear()
+        for ep in getattr(self.win, "_gallery_shown", []) or []:
+            uid = ep.get("episode_uid", "")
+            q = ep.get("quality_status") or (
+                "-" if ep.get("success") is None
+                else ("success" if ep["success"] else "failed"))
+            mark = {"success": "✓", "failed": "✗"}.get(q, "·")
+            item = QTreeWidgetItem([
+                f"{ep.get('instruction_id', '')}-{uid.rsplit('-', 1)[-1]}",
+                mark, str(ep.get("num_samples", "")),
+            ])
+            item.setData(0, Qt.ItemDataRole.UserRole, ep)
+            item.setToolTip(0, f"{uid}\n{ep.get('instruction', '')}\n"
+                               f"{ep.get('collector', '')}")
+            tree.addTopLevelItem(item)
+        self.show_tree_selection(getattr(self.win, "_gallery_selected", []))
+
+    def show_tree_selection(self, episodes) -> None:
+        """바깥이 정한 선택을 목록에 그린다. 신호를 내지 않는다."""
+        tree = getattr(self.win, "dataset_tree", None)
+        if tree is None:
+            return
+        names = {e.get("name") for e in (episodes or []) if e}
+        tree.blockSignals(True)
+        try:
+            for i in range(tree.topLevelItemCount()):
+                it = tree.topLevelItem(i)
+                ep = it.data(0, Qt.ItemDataRole.UserRole) or {}
+                it.setSelected(ep.get("name") in names)
+        finally:
+            tree.blockSignals(False)
+
+    def selected_episodes(self) -> list:
+        """목록 뷰에서 고른 에피소드 dict 들."""
+        tree = getattr(self.win, "dataset_tree", None)
+        out = []
+        for it in (tree.selectedItems() if tree is not None else []):
+            ep = it.data(0, Qt.ItemDataRole.UserRole)
+            if ep:
+                out.append(ep)
+        return out
 
     def selected_file(self) -> Path | None:
-        items = self.win.dataset_tree.selectedItems()
-        if not items:
-            return None
-        node = items[0] if items[0].parent() is None else items[0].parent()
-        p = node.data(0, Qt.ItemDataRole.UserRole)
+        """지금 보고 있는 파일. **Scene 콤보가 정본이다.**
+
+        목록 뷰가 에피소드만 담게 되면서 트리에는 파일 줄이 없다. 파일을
+        고르는 곳은 콤보 하나뿐이라 여기서 읽는다 -- 두 군데서 읽으면
+        "어느 파일에 대고 한 것인가" 가 갈린다.
+        """
+        cb = getattr(self.win, "gallery_scene_combo", None)
+        p = cb.currentData() if cb is not None else None
         return Path(p) if isinstance(p, str) else None
 
     def busy_reason(self) -> str:
@@ -176,91 +176,29 @@ class DatasetOps:
         return ""
 
     def on_dataset_selection(self) -> None:
-        items = self.win.dataset_tree.selectedItems()
-        item = items[0] if items else None
-        self._fill_right(item)
-        # 파일 행을 골라도 오른쪽 Dataset 칸은 갱신된다 -- 재생은 에피소드 행에서만.
-        self.update_dataset_panel(self.selected_file())
-        if self.win.session.stats:
+        """목록 뷰에서 골랐다 -- 공유 선택으로 올린다 (격자도 같이 표시된다)."""
+        self.win.gallery_ops.set_selection(self.selected_episodes(), source="tree")
+
+    def on_selection_changed(self) -> None:
+        """선택이 바뀌었다 (어느 뷰에서 왔든). 우측 패널과 분석을 맞춘다.
+
+        창이 다 만들어지기 전에도 불린다 -- build_center 안의 갤러리 탭이
+        첫 필터를 적용하는데, 그때 왼쪽 목록도 우측 패널도 아직 없다.
+        그 시점에는 그릴 곳이 없으므로 조용히 넘긴다.
+        """
+        if not hasattr(self.win, "right_fields"):
+            return
+        eps = getattr(self.win, "_gallery_selected", []) or []
+        ep = eps[0] if eps else None
+        path = self.selected_file()
+        self.fill_right_for(ep, path)
+        self.update_dataset_panel(path)
+        if self.win.session.stats and ep is not None and path is not None:
             self.win.stats_ops.refresh_rank_list()
-            if item is not None and item.parent() is not None:
-                self.win.stats_ops.show_analysis_for(
-                    item.parent().data(0, Qt.ItemDataRole.UserRole),
-                    item.data(0, Qt.ItemDataRole.UserRole))
-        if item is None or item.parent() is None:
-            return
-        path = item.parent().data(0, Qt.ItemDataRole.UserRole)
-        demo = item.data(0, Qt.ItemDataRole.UserRole)
-        if not path or not demo:
-            return
-        self.win.playback_ops.play_episode(path, demo)
+            self.win.stats_ops.show_analysis_for(str(path), ep["name"])
+
 
     # ------------------------------------------------------------------ select
-    def on_select_jerky(self) -> None:
-        """Selects the episodes that stand out *within their own task*.
-
-        Both ends: rushing and dawdling are different mistakes but both are
-        "not how this task is usually done". Compared within the task because
-        mean_da is distance over time, so between tasks it ranks how far the
-        arm must reach rather than how well it was driven.
-
-        Nothing is deleted here. The selection lands in the same tree the
-        operator deletes from, so they can play the takes first.
-        """
-        if not self.win.session.stats:
-            self.win.stats_ops.refresh_analysis()
-        if not self.win.session.stats:
-            return
-        flagged = {(e.path, e.demo) for e in self.win.session.stats if e.flagged}
-        self.win.dataset_tree.clearSelection()
-        n = 0
-        for i in range(self.win.dataset_tree.topLevelItemCount()):
-            parent = self.win.dataset_tree.topLevelItem(i)
-            path = parent.data(0, Qt.ItemDataRole.UserRole)
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                if (path, child.data(0, Qt.ItemDataRole.UserRole)) in flagged:
-                    child.setSelected(True)
-                    # 접혀 있으면 "N개 선택됨"만 뜨고 무엇이 골랐는지 안 보인다.
-                    parent.setExpanded(True)
-                    n += 1
-        self.win.log(f"[큐레이션] 같은 (scene·문장) 그룹 평균과 {TASK_DEV_LIMIT} 넘게 차이 나는 "
-                 f"에피소드 {n}개를 선택했습니다." + ("" if n else " (없음)"))
-        self.win.dataset_hint.setText(
-            tr("튀는 에피소드 {n}개 선택됨 — 재생으로 확인한 뒤 '에피소드 삭제'로 지웁니다.")
-            .format(n=n) if n else
-            tr("같은 (scene·문장) 그룹 평균과 {d} 넘게 차이 나는 에피소드가 없습니다 "
-               "(이 데이터셋은 균일합니다).").format(d=TASK_DEV_LIMIT))
-
-    def on_select_failed(self) -> None:
-        """Selects every episode marked failed, across all files.
-
-        This is the other half of marking-instead-of-discarding: failures pile
-        up during collection on purpose, and curation is where they go. Without
-        this the operator would ctrl-click them one at a time down a tree of a
-        hundred rows.
-        """
-        self.win.dataset_tree.clearSelection()
-        n = 0
-        # legacy 는 번역된 '실패', scene 은 quality_status 원문('failed')이
-        # 상태 컬럼에 실린다 -- 둘 다 잡아야 한다 (scene 실패가 선택되지
-        # 않던 실사용 버그).
-        fail_labels = {tr("실패"), "failed"}
-        for i in range(self.win.dataset_tree.topLevelItemCount()):
-            parent = self.win.dataset_tree.topLevelItem(i)
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                if child.text(2) in fail_labels:
-                    child.setSelected(True)
-                    parent.setExpanded(True)
-                    n += 1
-        self.win.log(f"[큐레이션] 실패로 표시된 에피소드 {n}개를 선택했습니다."
-                 + ("" if n else " (없음)"))
-        self.win.dataset_hint.setText(
-            tr("실패 {n}개 선택됨 — '에피소드 삭제'로 한 번에 지웁니다.").format(n=n)
-            if n else tr("실패로 표시된 에피소드가 없습니다."))
-
-    # ------------------------------------------------------------------ verdict
     def on_set_verdict_success(self) -> None:
         """Set the selected episodes' verdict to success (not a toggle)."""
         self._apply_verdict(True)
@@ -359,30 +297,22 @@ class DatasetOps:
 
     # ------------------------------------------------------------------ delete
     def on_delete_selected(self) -> None:
-        """Dataset 트리 선택을 삭제 목록에 넣는다 (지우지 않는다).
+        """고른 에피소드를 삭제 목록에 넣는다 (지우지 않는다).
 
-        실행은 왼쪽 패널의 "Delete marked" 하나뿐이다 -- 표시는 어디서든
-        자유롭게, 지우기는 확인창을 거치는 한 문으로.
+        선택은 공유 선택에서 읽는다 -- 목록 뷰와 격자가 같은 것을 가리키므로
+        어느 쪽에서 골랐든 같다.
         """
-        by_file: dict = {}
-        for item in self.win.dataset_tree.selectedItems():
-            if item.parent() is None:
-                continue
-            p = item.parent().data(0, Qt.ItemDataRole.UserRole)
-            by_file.setdefault(Path(p), []).append(item.data(0, Qt.ItemDataRole.UserRole))
-        if not by_file:
-            QMessageBox.information(self.win, tr("선택 필요"),
-                                    tr("삭제 목록에 넣을 에피소드를 선택하세요 (Ctrl/Shift로 여러 개)."))
+        eps = getattr(self.win, "_gallery_selected", []) or []
+        path = self.selected_file()
+        if not eps or path is None:
+            QMessageBox.information(
+                self.win, tr("선택 필요"),
+                tr("삭제 목록에 넣을 에피소드를 선택하세요 (Ctrl/Shift로 여러 개)."))
             return
-        n = sum(len(v) for v in by_file.values())
-        for path, names in by_file.items():
-            for name in names:
-                self.win.basket.add((path, name))
-        self.win.log(f"[삭제 목록] {n}개 표시 (실행은 'Delete marked')")
+        for ep in eps:
+            self.win.basket.add((path, ep["name"]))
         self.refresh_basket_ui()
-        if hasattr(self.win, "gallery_grid"):
-            self.win.gallery_grid.refresh_marks()
-
+        self.win.gallery_grid.refresh_marks()
     def refresh_basket_ui(self) -> None:
         """삭제 목록 라벨·실행 버튼을 장바구니 현황에 맞춘다.
 
@@ -777,49 +707,40 @@ class DatasetOps:
         f["ds_fps"].setText("-")
 
     # ------------------------------------------------------- 우측 패널
-    def _fill_right(self, item) -> None:
-        """고른 줄의 값과 그 scene 의 배치를 우측에 편다.
+    def fill_right_for(self, ep, path) -> None:
+        """고른 에피소드의 값과 그 scene 의 배치를 우측에 편다.
 
-        목록의 열은 패널이 좁으면 잘린다. 열을 없애지 않고 -- 여럿을 훑을
-        때는 목록이 맞다 -- 고른 한 줄만 여기서 온전히 읽히게 한다
-        (2026-09-07 조작자).
+        예전에는 트리 아이템을 받아 ``item.text(1)`` 처럼 **화면에 그려진 글자를
+        도로 읽었다.** 목록의 열이 바뀌면 조용히 어긋나는 구조였고, 실제로 열을
+        줄이면서 깨졌다. 이제 에피소드 dict 를 그대로 받는다 -- 목록·격자·통계가
+        모두 쓰는 그 모양이라 번역 계층이 필요 없고, 화면에 없는 값(지시문 문장,
+        수집자)도 파일을 다시 열지 않고 읽을 수 있다.
         """
         win = self.win
         card = getattr(win, "ds_episode_card", None)
         if card is None:
             return
-        if item is None:
+        if ep is None:
             card.set_fields([(tr("에피소드"), tr("미선택"))])
-            self._fill_scene_box(None)
+            self._fill_scene_box(str(path) if path else None)
             return
-        parent = item.parent()
-        if parent is None:
-            # 파일 줄 -- 에피소드 값은 없고 scene 만 보여준다.
-            card.set_fields([(tr("에피소드"), tr("파일을 골랐습니다"))])
-            self._fill_scene_box(item.data(0, Qt.ItemDataRole.UserRole))
-            return
-        path = parent.data(0, Qt.ItemDataRole.UserRole)
-        name = item.data(0, Qt.ItemDataRole.UserRole)
+        q = ep.get("quality_status") or (
+            "-" if ep.get("success") is None
+            else ("success" if ep["success"] else "failed"))
         fields = [
             (tr("파일"), Path(path).name if path else ""),
-            (tr("에피소드"), str(name or "")),
-            (tr("프레임"), item.text(1)),
-            (tr("결과"), item.text(2)),
-            (tr("수집자"), item.text(3) if item.columnCount() > 3 else ""),
+            (tr("에피소드"), str(ep.get("name", ""))),
+            (tr("uid"), str(ep.get("episode_uid", ""))),
+            (tr("프레임"), str(ep.get("num_samples", ""))),
+            (tr("결과"), q),
+            (tr("수집자"), str(ep.get("collector", ""))),
+            (tr("지시문"), str(ep.get("instruction_id", ""))),
+            (tr("문장"), str(ep.get("instruction", ""))),
+            (tr("시각"), str(ep.get("timestamp", ""))),
         ]
-        # 지시문·시각은 목록에 열이 없다 -- 여기서만 보인다.
-        try:
-            with h5py.File(path, "r") as f:
-                a = f[str(name)].attrs
-                fields += [
-                    (tr("지시문"), str(a.get("instruction_id", ""))),
-                    (tr("문장"), str(a.get("instruction", ""))),
-                    (tr("시각"), str(a.get("timestamp", ""))),
-                ]
-        except Exception:  # noqa: BLE001 -- 잠겼거나 legacy 파일이다
-            pass
         card.set_fields(fields)
-        self._fill_scene_box(path)
+        self._fill_scene_box(str(path) if path else None)
+
 
     def _fill_scene_box(self, path) -> None:
         """고른 scene 의 배치도와 기준 사진. 세션과 무관하다."""

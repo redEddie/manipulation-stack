@@ -3,7 +3,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QLabel, QMessageBox, QToolBar, QWidgetAction
 
-from mstack.data.episode_stats import TASK_DEV_LIMIT
 from mstack.gui.i18n import tr
 
 from apps.workspace.features.collection.page import KEY_MAP
@@ -114,7 +113,6 @@ def toolbar_context(win, key: str) -> list:
         ],
         "dataset": [
             (tr("새로고침"), win.dataset_ops.refresh_dataset_tree, ""),
-            (tr("실패만 선택"), win.dataset_ops.on_select_failed, ""),
         ],
         "doctor": [
             (tr("다시 검사"), win.doctor.rescan,
@@ -298,14 +296,6 @@ def build_menu(win) -> None:
     m.addAction(tr("새로고침"), win.dataset_ops.refresh_dataset_tree)
     m.addAction(tr("데이터 저장 경로 선택..."), win.dataset_ops.browse_root)
     m.addSeparator()
-    m.addAction(tr("구조 확인..."), win.playback_ops.on_show_structure)
-    m.addAction(tr("HDF5 트리 뷰어"), win._on_hdf5_tree)
-    m.addAction(tr("myHDF5 (웹)"), win.upload.on_myhdf5)
-    m.addSeparator()
-    m.addAction(tr("실패만 선택"), win.dataset_ops.on_select_failed)
-    m.addAction(tr("튀는 것만 선택 (scene·문장 그룹 평균과 ±{d} 밖)")
-                .format(d=TASK_DEV_LIMIT),
-                win.dataset_ops.on_select_jerky)
     m.addSeparator()
     m.addAction(tr("✓ Mark success"), win.dataset_ops.on_set_verdict_success)
     m.addAction(tr("✗ Mark failed"), win.dataset_ops.on_set_verdict_failed)

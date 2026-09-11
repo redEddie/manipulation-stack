@@ -106,6 +106,10 @@ class GalleryOps:
                  if want is None or e["instruction_id"] == want]
 
         self.win._gallery_shown = shown
+        # 좁힌 집합이 바뀌면 선택은 무효다 -- 안 보이는 것이 선택된 채로
+        # 남으면 판정·표시가 화면에 없는 에피소드에 걸린다.
+        self.win._gallery_selected = []
+        self.win.dataset_ops.refresh_episode_list()
         self.win.gallery_grid.proxy_dir = self.proxy_dir()
         self.win.gallery_grid.set_episodes(
             shown, self.win.gallery_cam_combo.currentData())
@@ -176,8 +180,33 @@ class GalleryOps:
         self._sync_pager()
 
     # ------------------------------------------------------------------ 선택
+    # ------------------------------------------------------------------ 선택
+    #
+    # 선택은 **창이 들고 두 뷰가 같이 그린다.** 목록 뷰(왼쪽 트리)와 영상
+    # 뷰(격자)가 같은 (씬·지시문) 집합을 보여주는데, 격자는 한 번에 12개만
+    # 보여준다. 선택이 격자 안에 살면 쪽을 넘길 때마다 사라지고, 트리 안에
+    # 살면 격자가 모른다. 어느 쪽에도 두지 않는 이유가 그것이다.
+    #
+    # _syncing 은 되먹임 방지다 -- 한쪽을 그리면 그 위젯이 또 신호를 내서
+    # 맴돈다.
+
+    def set_selection(self, episodes, source: str = "") -> None:
+        """선택을 정하고 두 뷰에 반영한다. ``source`` 쪽은 다시 그리지 않는다."""
+        if getattr(self, "_syncing", False):
+            return
+        self._syncing = True
+        try:
+            self.win._gallery_selected = [e for e in (episodes or []) if e]
+            if source != "grid":
+                self.win.gallery_grid.show_selection(self.win._gallery_selected)
+            if source != "tree":
+                self.win.dataset_ops.show_tree_selection(self.win._gallery_selected)
+            self.win.dataset_ops.on_selection_changed()
+        finally:
+            self._syncing = False
+
     def on_grid_selection(self, episodes) -> None:
-        self.win._gallery_selected = list(episodes)
+        self.set_selection(episodes, source="grid")
 
     def toggle_mark(self) -> None:
         """선택한 에피소드를 삭제 목록에 넣거나 뺀다 (지우지는 않는다).

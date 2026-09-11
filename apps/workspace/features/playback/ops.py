@@ -36,17 +36,15 @@ class PlaybackOps:
 
     # ------------------------------------------------------------------ open
     def on_open_trim(self) -> None:
-        items = [i for i in self.win.dataset_tree.selectedItems() if i.parent() is not None]
-        if not items:
-            QMessageBox.information(self.win, tr("선택 필요"),
-                                    tr("에피소드를 하나 선택하세요 (파일이 아니라)."))
+        """고른 에피소드를 Trim 탭에서 연다. 선택은 공유 선택에서 읽는다."""
+        eps = getattr(self.win, "_gallery_selected", []) or []
+        path = self.win.dataset_ops.selected_file()
+        if len(eps) != 1 or path is None:
+            QMessageBox.information(
+                self.win, tr("선택 필요"),
+                tr("끝을 다듬을 에피소드를 하나만 선택하세요."))
             return
-        it = items[0]
-        path = it.parent().data(0, Qt.ItemDataRole.UserRole)
-        self.show_trim_for(path, it.data(0, Qt.ItemDataRole.UserRole))
-        show_center_tab(self.win, "trim")
-
-    # ------------------------------------------------------------------ Trim
+        self.show_trim_for(str(path), eps[0]["name"])
     def show_trim_for(self, path: str, demo: str) -> None:
         """Dataset 트리와 Analysis 순위표가 공유하는 트림 진입점."""
         if not path or not demo:
@@ -357,20 +355,18 @@ class PlaybackOps:
                 self.win.procs.replay_process.state() != QProcess.ProcessState.NotRunning)
 
     def on_replay_selected(self) -> None:
-        if self.replay_running():      # 토글: 재생 중이면 중단 버튼이다
+        """실로봇 재생 -- 공유 선택에서 하나만."""
+        if self.replay_running():
             self.on_replay_stop()
             return
-        picks = [(Path(i.parent().data(0, Qt.ItemDataRole.UserRole)),
-                  i.data(0, Qt.ItemDataRole.UserRole))
-                 for i in self.win.dataset_tree.selectedItems()
-                 if i.parent() is not None]
-        if len(picks) != 1:
+        eps = getattr(self.win, "_gallery_selected", []) or []
+        path = self.win.dataset_ops.selected_file()
+        if len(eps) != 1 or path is None:
             QMessageBox.information(
                 self.win, tr("선택 필요"),
                 tr("실로봇 재생은 에피소드 하나만 선택하세요."))
             return
-        self.replay_on_robot(str(picks[0][0]), picks[0][1])
-
+        self.replay_on_robot(str(path), eps[0]["name"])
     def replay_on_robot(self, path: str, demo: str) -> None:
         """Dataset 트리와 Gallery 가 공유하는 실로봇 재생 진입점.
 

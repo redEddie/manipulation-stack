@@ -207,7 +207,14 @@ class InfoCard(QWidget):
         self._msg.setVisible(False)
         self._fields = [(str(k), "" if v is None else str(v)) for k, v in fields]
         while self._rows_col.count():
-            self._rows_col.takeAt(0).widget().deleteLater()
+            # setParent(None) 을 먼저 해야 한다. deleteLater 만 부르면 같은
+            # 틱에는 안 지워지고 부모가 남아 옛 줄이 그대로 그려진다 --
+            # doctor/sentence_builder.py 의 뱃지 겹침과 같은 함정이다.
+            # 실제로 우측 카드 맨 위에 지난 "미선택" 이 남아 있었다 (2026-09-11).
+            w = self._rows_col.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
         for label, value in fields:
             text = "" if value is None else str(value)
             if not text.strip():

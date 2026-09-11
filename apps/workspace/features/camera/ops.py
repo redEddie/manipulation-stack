@@ -357,6 +357,12 @@ class CameraOps:
                 self.win.log(f"[카메라노드] {line.rstrip()}")
 
     def on_camera_node_finished(self, code: int, _status) -> None:
+        # 종료 중에 finished 가 큐에 남아 뒤늦게 도착하면 창은 이미 C++ 쪽이
+        # 지워져 있다. 그때는 어떤 속성 접근도 RuntimeError 다 (AttributeError
+        # 가 아니라서 getattr 기본값으로도 안 넘어간다) -- set_replay_ui 와 같은
+        # 종류이고, 실제로 인수 테스트가 코어 덤프까지 갔다.
+        if self.win is None or sip.isdeleted(self.win):
+            return
         proc = self.win.sender()
         if proc is not self.win.procs.camera_node_process:
             # stop_camera_node() 나 ensure(재시작) 가 이미 손을 뗀 프로세스

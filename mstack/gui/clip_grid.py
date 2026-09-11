@@ -305,17 +305,7 @@ class ClipGrid(QWidget):
         self._load_page()
 
     def _load_page(self) -> None:
-        start = self.page * self.per_page
-        chunk = self.episodes[start:start + self.per_page]
-        for i, t in enumerate(self.tiles):
-            t.load(chunk[i] if i < len(chunk) else None, self.camera,
-                   self.proxy_dir)
-            t.undim()
-            t.selected = False
-            t.marked = bool(self.is_marked and t.ep is not None
-                            and self.is_marked(t.ep))
-            t._restyle()
-        self._rest = 0
+        self._load_page_quiet()
         self._emit_selection()
 
     def refresh_marks(self) -> None:
@@ -374,6 +364,51 @@ class ClipGrid(QWidget):
 
     def selected_episodes(self) -> list:
         return [t.ep for t in self.tiles if t.selected and t.ep is not None]
+
+    def page_of(self, ep) -> int:
+        """이 에피소드가 있는 쪽. 없으면 -1."""
+        name = (ep or {}).get("name")
+        for i, e in enumerate(self.episodes):
+            if e.get("name") == name:
+                return i // self.per_page
+        return -1
+
+    def show_selection(self, episodes) -> None:
+        """바깥이 정한 선택을 그린다. 신호를 내지 않는다.
+
+        선택을 격자가 아니라 **창이** 들고 있기 때문에 필요하다. 격자는 한
+        번에 12개만 보여주는데 목록 뷰는 걸러진 전부를 보여주므로, 선택이
+        격자 안에 있으면 쪽을 넘길 때마다 사라진다. 두 뷰가 같은 선택을
+        그리려면 선택이 둘 중 어느 쪽에도 살면 안 된다.
+
+        선택된 것이 지금 쪽에 없으면 **그 쪽으로 넘어간다** -- 목록에서 고른
+        것이 화면 밖에 있으면 "같이 선택된다" 는 말이 무의미하다. 여러 개가
+        여러 쪽에 걸쳐 있으면 첫 번째가 있는 쪽으로 간다.
+        """
+        names = {e.get("name") for e in (episodes or []) if e}
+        if names and not any(t.ep is not None and t.ep.get("name") in names
+                             for t in self.tiles):
+            pg = self.page_of(next(iter(episodes)))
+            if pg >= 0 and pg != self.page:
+                self.page = pg
+                self._load_page_quiet()
+        for t in self.tiles:
+            t.set_selected(t.ep is not None and t.ep.get("name") in names)
+
+    def _load_page_quiet(self) -> None:
+        """쪽만 갈아 끼운다 -- selection_changed 를 내지 않는다.
+        (show_selection 이 부르므로, 신호를 내면 선택이 되돌아와 맴돈다.)"""
+        start = self.page * self.per_page
+        chunk = self.episodes[start:start + self.per_page]
+        for i, t in enumerate(self.tiles):
+            t.load(chunk[i] if i < len(chunk) else None, self.camera,
+                   self.proxy_dir)
+            t.undim()
+            t.selected = False
+            t.marked = bool(self.is_marked and t.ep is not None
+                            and self.is_marked(t.ep))
+            t._restyle()
+        self._rest = 0
 
     def _emit_selection(self) -> None:
         self.selection_changed.emit(self.selected_episodes())
