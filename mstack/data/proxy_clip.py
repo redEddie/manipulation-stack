@@ -142,6 +142,43 @@ def camera_keys(obs) -> list:
                   and obs[k].shape[-1] in (1, 3, 4))
 
 
+#: 지운 기록을 남기는 파일. 캐시 디렉터리 안에 둔다.
+AUDIT_NAME = ".deleted.log"
+
+
+def _audit(proxy_dir, what: str, removed: int) -> None:
+    """클립을 지웠다는 사실을 캐시 옆에 남긴다.
+
+    **왜 필요한가.** 2026-09-11 에 scene_000 의 클립 120개가 세 번 사라졌는데
+    원인을 못 찾았다. 무효화 경로에 스택 추적을 걸고, 인수 스위트를 돌리고,
+    GUI 로그를 뒤지고, 데이터셋별로 캐시를 갈라 봐도 잡히지 않았다. 파일을
+    지우는 곳은 이 모듈의 두 함수뿐인데도 그랬다.
+
+    지우는 동작이 **아무 흔적도 남기지 않는 것**이 문제였다. 호출자가 GUI 면
+    거기 로그가 남지만, 스크립트·테스트·다른 프로세스에서 부르면 어디에도
+    안 남는다. 그래서 지우는 쪽에서 직접 남긴다 -- 캐시는 다시 구우면 되지만
+    "왜 없어졌나" 를 모르는 채로 두면 계속 다시 굽게 된다.
+
+    실패해도 조용히 넘긴다. 감사 기록을 못 남기는 것이 무효화를 막을 이유는
+    없다.
+    """
+    if not removed:
+        return
+    import time
+    import traceback
+
+    try:
+        where = " <- ".join(
+            f"{Path(f.filename).name}:{f.lineno}"
+            for f in traceback.extract_stack()[-5:-2])
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {what}  "
+                f"{removed}개  [{where}]\n")
+        with open(Path(proxy_dir) / AUDIT_NAME, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def invalidate_scene_proxies(scene_id: str, proxy_dir: Path = PROXY_DIR) -> int:
     """해당 scene 의 프록시를 전부 지운다. 반환: 지워진 파일 수.
 
@@ -156,6 +193,7 @@ def invalidate_scene_proxies(scene_id: str, proxy_dir: Path = PROXY_DIR) -> int:
             removed += 1
         except OSError:
             pass
+    _audit(proxy_dir, f"scene {scene_id}", removed)
     return removed
 
 
@@ -352,6 +390,7 @@ def invalidate_episode_proxies(episode_uid: str,
             removed += 1
         except OSError:
             pass
+    _audit(proxy_dir, f"episode {episode_uid}", removed)
     return removed
 
 

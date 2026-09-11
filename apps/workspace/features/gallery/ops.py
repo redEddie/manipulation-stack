@@ -51,7 +51,7 @@ class GalleryOps:
         self.win.gallery_status.setText(tr("불러오는 중... (첫 로드는 썸네일 생성으로 수 초)"))
         if self.win._gallery_loader is not None:
             self.win._gallery_loader.wait()
-        self.win._gallery_loader = GalleryLoadWorker(path)
+        self.win._gallery_loader = GalleryLoadWorker(path, self.thumbs_dir())
         self.win._gallery_loader.loaded.connect(self.on_gallery_loaded)
         self.win._gallery_loader.failed.connect(
             lambda m: self.win.gallery_status.setText(tr("갤러리 로드 실패: {m}").format(m=m)))
@@ -124,6 +124,12 @@ class GalleryOps:
             tr("{s}개 표시 (전체 {n}개 · success {ok}개) — 클릭: 선택, "
                "Ctrl+클릭: 여러 개{note}").format(
                    s=len(shown), n=len(eps), ok=n_ok, note=note))
+
+    def thumbs_dir(self):
+        """지금 데이터 경로의 썸네일 자리. 프록시와 같은 이유로 갈라 둔다."""
+        from mstack.gui.scene_gallery import thumbs_dir_for
+
+        return thumbs_dir_for(self.win.dataset_ops.dataset_root())
 
     def proxy_dir(self):
         """지금 데이터 경로의 프록시 디렉터리. 캐시 키에 데이터셋이 섞이면

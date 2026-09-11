@@ -44,7 +44,7 @@
       "지시문 전체 삭제",
       "3×3 워크스페이스 격자 편집..."
     ],
-    "Dataset": [
+    "Curation": [
       "새로고침",
       "데이터 저장 경로 선택...",
       "✓ Pass",
@@ -72,7 +72,7 @@
       "① Layout",
       "② Configure",
       "③ Collect",
-      "④ Dataset",
+      "④ Curation",
       "Doctor",
       "Statistics",
       "Upload",
@@ -83,11 +83,11 @@
       "기록 닥터",
       "진행 닥터",
       "스키마 닥터",
-      "Playback",
-      "Analysis",
-      "Trim",
-      "레이아웃",
       "Gallery",
+      "Trim",
+      "Analysis",
+      "Playback",
+      "레이아웃",
       "Point Cloud",
       "Depth",
       "하단 패널",
@@ -177,11 +177,11 @@
     "doc_record",
     "doc_progress",
     "doc_schema",
-    "playback",
-    "analysis",
-    "trim",
-    "layout",
     "gallery",
+    "trim",
+    "analysis",
+    "playback",
+    "layout",
     "cloud",
     "depth"
   ],
@@ -200,10 +200,10 @@
     ],
     "dataset": [
       "live",
-      "playback",
-      "analysis",
+      "gallery",
       "trim",
-      "gallery"
+      "analysis",
+      "playback"
     ],
     "doctor": [
       "doc_record",
@@ -213,10 +213,10 @@
     ],
     "stats": [
       "live",
-      "playback",
-      "analysis",
+      "gallery",
       "trim",
-      "gallery"
+      "analysis",
+      "playback"
     ],
     "upload": [
       "live"

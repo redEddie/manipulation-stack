@@ -292,7 +292,7 @@ def build_menu(win) -> None:
     m.addSeparator()
     m.addAction(tr("3×3 워크스페이스 격자 편집..."), win.layout_ref.on_edit_grid)
 
-    m = mb.addMenu(tr("Dataset"))
+    m = mb.addMenu(tr("Curation"))
     m.addAction(tr("새로고침"), win.gallery_ops.refresh_gallery_scenes)
     m.addAction(tr("데이터 저장 경로 선택..."), win.dataset_ops.browse_root)
     m.addSeparator()

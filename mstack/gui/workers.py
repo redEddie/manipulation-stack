@@ -78,18 +78,25 @@ class GalleryLoadWorker(QThread):
     loaded = pyqtSignal(str, list, object)  # scene_path, episodes(+thumb), ref_thumb|None
     failed = pyqtSignal(str)
 
-    def __init__(self, scene_path: str) -> None:
+    def __init__(self, scene_path: str, thumbs_dir=None) -> None:
         super().__init__()
         self.scene_path = scene_path
+        #: 데이터셋별 썸네일 자리. episode_uid 는 데이터셋 안에서만 유일해서
+        #: 한 곳에 섞으면 다른 데이터셋의 썸네일이 나온다 -- 프록시와 같은
+        #: 이유다 (mstack.data.proxy_clip.dataset_tag).
+        self.thumbs_dir = thumbs_dir
 
     def run(self) -> None:
         try:
             from mstack.scene.scene_format import read_scene_metadata
             from mstack.gui.scene_gallery import build_gallery, reference_thumb
 
-            episodes = build_gallery(self.scene_path)
+            from mstack.gui.scene_gallery import THUMBS_DIR
+
+            td = self.thumbs_dir or THUMBS_DIR
+            episodes = build_gallery(self.scene_path, td)
             sid = read_scene_metadata(Path(self.scene_path)).scene_id
-            ref = reference_thumb(self.scene_path, sid)
+            ref = reference_thumb(self.scene_path, sid, td)
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
             return
