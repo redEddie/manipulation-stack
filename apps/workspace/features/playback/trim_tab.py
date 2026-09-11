@@ -2,6 +2,7 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -27,7 +28,8 @@ def build_trim_tab(win) -> QWidget:
     조절·확정은 손이 선택·슬라이더에서 떠나는 오른쪽으로 뺀다. Nothing is
     written until 확정; every button before that only moves a pending count.
     """
-    #: 플롯 띠 하나의 높이. 5개를 다 켜도 450px 이라 영상이 밀려나지 않는다.
+    #: 플롯 띠 하나의 높이. 5개를 다 켜도 최대 2열이라 3행 = 276px 밖에
+    # 안 먹어 영상이 밀려나지 않는다 (2026-09-12 조작자 요청).
     PLOT_H = 92
 
     page = QWidget()
@@ -53,7 +55,23 @@ def build_trim_tab(win) -> QWidget:
         v.clear_frame(tr("에피소드를 선택하세요"))
         v.set_crop_guide(**win.cameras.crop_params[role])
         win.trim_views[role] = v
-        box.addWidget(v, 1)
+        # 프레임이 정사각이라 _rescale 이 maximumWidth 를 높이로 제한한다.
+        # 위젯 정렬(alignment)은 VideoView 의 Ignored 정책을 최소 크기로
+        # 뭉개므로, 스트레치 양쪽에 둔 셀 안에 넣어 상자 가운데에 두는
+        # 식으로 한다 (조작자, 2026-09-12). 셀의 세로 stretch 는 그대로라
+        # 남는 높이를 다 쓴다.
+        cell = QWidget()
+        cell_l = QHBoxLayout(cell)
+        cell_l.setContentsMargins(0, 0, 0, 0)
+        cell_l.setSpacing(0)
+        cell_l.addStretch(1)
+        # Qt 박스 레이아웃은 항목을 stretch 비율 몫 이상으로 키우지
+        # 않는다 -- 비율을 크게 줘야 프레임의 sizeHint 가 몫을 넘겨버려
+        # 스트레치가 무시되는 일이 없다. 최대폭(높이)에 닿으면 양쪽
+        # 스트레치가 남는 폭을 나눠 가져 정렬이 된다.
+        cell_l.addWidget(v, 10)
+        cell_l.addStretch(1)
+        box.addWidget(cell, 1)
         lab = QLabel(cap)
         lab.setStyleSheet("color:#888;")
         lab.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -73,8 +91,15 @@ def build_trim_tab(win) -> QWidget:
     win.trim_slider.setEnabled(False)
     win.trim_slider.valueChanged.connect(win.playback_ops.on_trim_scrub)
     srow.addWidget(win.trim_slider, 1)
+    # **고정 폭**이어야 한다. 이 라벨은 마지막 프레임에서 " ← 잘린 뒤 마지막"
+    # 을 덧붙이는데, 최소 폭만 주면 글자가 길어진 만큼 라벨이 넓어지고 그
+    # 폭을 슬라이더에서 뺏는다 -- 재생이 끝에 닿을 때마다 재생바가 줄었다
+    # 늘었다 한다 (조작자, 2026-09-12: "재생바는 길이가 무조건 불변이도록").
+    # 슬라이더 눈금이 움직이면 같은 지점을 두 번 짚을 수가 없다.
     win.trim_pos = QLabel("-/-")
-    win.trim_pos.setMinimumWidth(72)
+    win.trim_pos.setFixedWidth(190)
+    win.trim_pos.setAlignment(Qt.AlignmentFlag.AlignLeft
+                              | Qt.AlignmentFlag.AlignVCenter)
     srow.addWidget(win.trim_pos)
     outer.addLayout(srow)
 
@@ -94,7 +119,7 @@ def build_trim_tab(win) -> QWidget:
     prow.addWidget(QLabel(tr("플롯")))
     win.trim_plots = {}
     win.trim_plot_checks = {}
-    plot_box = QVBoxLayout()
+    plot_box = QGridLayout()
     plot_box.setSpacing(2)
     for title, dims in PANELS:
         plot = SeriesPlot(title)
@@ -102,15 +127,35 @@ def build_trim_tab(win) -> QWidget:
         plot.setMaximumHeight(PLOT_H)
         plot.setVisible(title == "gripper")
         win.trim_plots[title] = (plot, dims)
-        plot_box.addWidget(plot)
+        # 격자에 넣는 것은 _relayout 하나가 한다 -- 여기서도 넣으면 좌표 없는
+        # addWidget 이라 어느 칸으로 갈지 분명하지 않고, 어차피 곧 떼어낸다.
         chk = QCheckBox(title)
         chk.setChecked(title == "gripper")
-        chk.toggled.connect(
-            lambda on, p=plot: (p.setVisible(on)))
         win.trim_plot_checks[title] = chk
         prow.addWidget(chk)
     prow.addStretch(1)
     outer.addLayout(prow)
+
+    def _relayout() -> None:
+        # 숨긴 플롯이 격자 칸을 차지한 채 남으면 빈 구멍이 생긴다 -- 켜진
+        # 것만 PANELS 순서대로 2열로 다시 넣는다. removeWidget
+        # 만 쓰고 setParent 은 하지 않는다: 위젯이 격자에서 빠져도 부모가
+        # 살아 있어야 한다.
+        i = 0
+        for title, _dims in PANELS:
+            plot = win.trim_plots[title][0]
+            plot_box.removeWidget(plot)
+            plot.setVisible(False)
+        for title, _dims in PANELS:
+            if not win.trim_plot_checks[title].isChecked():
+                continue
+            plot = win.trim_plots[title][0]
+            plot_box.addWidget(plot, i // 2, i % 2)
+            plot.setVisible(True)
+            i += 1
+    for title, _dims in PANELS:
+        win.trim_plot_checks[title].toggled.connect(_relayout)
+    _relayout()
     outer.addLayout(plot_box)
 
     legend = QLabel(tr("실선 observation.state   ┄ 파선 observation.commanded_state"

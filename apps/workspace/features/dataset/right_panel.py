@@ -84,9 +84,10 @@ def build_dataset_right(win) -> QWidget:
                       "지점까지를 제안합니다 (최대 15프레임)"))
     sug.clicked.connect(win.playback_ops.trim_suggest)
     act_row.addWidget(sug)
-    win.trim_reset_btn = QPushButton(tr("정정"))
-    win.trim_reset_btn.setToolTip(tr("고른 프레임 수를 0으로 되돌립니다. "
-                                      "확정 전에는 파일이 바뀌지 않습니다."))
+    win.trim_reset_btn = QPushButton(tr("원래대로"))
+    win.trim_reset_btn.setToolTip(tr("고른 프레임 수를 0으로 되돌립니다 -- 자를 것이 "
+                                      "없는 상태로 돌아갑니다. 확정 전에는 파일이 "
+                                      "바뀌지 않습니다."))
     win.trim_reset_btn.setEnabled(False)
     win.trim_reset_btn.clicked.connect(win.playback_ops.trim_reset)
     act_row.addWidget(win.trim_reset_btn)

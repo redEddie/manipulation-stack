@@ -165,11 +165,25 @@ class PlaybackOps:
         self.trim_show_frame(i)
 
     def on_trim_play(self) -> None:
-        """잘린 뒤 구간만 훑는다 -- 확인하려는 것이 '새 끝'이기 때문이다."""
+        """에피소드를 처음부터 끝까지 튼다. 누르면 멈춘다.
+
+        2026-09-12 까지는 ``keep - 40`` 에서 ``keep`` 까지, 곧 새 끝 근처
+        2초만 훑었다. 확정 직전에 "여기가 새 끝이 맞나"를 보기에는 그게
+        맞지만, 조작자가 이 탭에서 실제로 하는 일은 그보다 앞이다 --
+        **이전 명령으로 찍힌 것인지, 녹화를 언제부터 늦게 끝냈는지**를
+        보려면 통째로 봐야 한다 ("재생이 전체 재생이 안 되요").
+        잘릴 구간은 플롯의 빨간 음영과 위치 표시로 그대로 보인다.
+        """
         if self.win.playback.trim_key is None:
             return
-        keep = self.trim_keep()
-        self.trim_seek(max(0, keep - 40))
+        t = self.win.playback.trim_timer
+        if t is not None and t.isActive():   # 누르면 멈춘다
+            t.stop()
+            self.win.trim_play_btn.setText(tr("재생"))
+            return
+        # 끝에 서 있으면 처음으로 되감고 튼다 -- 안 그러면 한 프레임 만에 선다.
+        if self.win.trim_slider.value() >= self.win.playback.trim_n - 1:
+            self.trim_seek(0)
         if self.win.playback.trim_timer is None:
             self.win.playback.trim_timer = QTimer(self.win)
             self.win.playback.trim_timer.setInterval(50)
@@ -178,8 +192,11 @@ class PlaybackOps:
         self.win.trim_play_btn.setText(tr("정지"))
 
     def trim_tick(self) -> None:
+        # 끝은 **원본 길이**다. trim_keep() 에서 멈추면 자를 양을 바꿀 때마다
+        # 재생이 끝나는 지점이 달라져서, 같은 에피소드를 두 번 틀면 다른
+        # 길이로 보인다.
         i = self.win.trim_slider.value() + 1
-        if i >= self.trim_keep():
+        if i >= self.win.playback.trim_n:
             self.win.playback.trim_timer.stop()
             self.win.trim_play_btn.setText(tr("재생"))
             return
