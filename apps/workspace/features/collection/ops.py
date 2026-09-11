@@ -66,7 +66,6 @@ class CollectionOps:
         self.win.stats_ops.bump("success", 1 if self.win.session.last_saved_success else -1)
         self.win.stats_ops.bump("failed", -1 if self.win.session.last_saved_success else 1)
         self.win._refresh_verdict_label()
-        self.win.stats_ops.refresh_stats()
 
     # --------------------------------------------------------------- session UI
     def set_running(self, running: bool) -> None:
@@ -630,7 +629,6 @@ class CollectionOps:
         self.win.log(f"[저장] {name} ({n_frames} frames)")
         self.win.right_fields["episode"].setText(name)
         self.win.dataset_ops.update_dataset_panel()
-        self.win.stats_ops.refresh_stats()
         # 방금 찍은 것이 분석에 빠져 있다고 표시만 해 둔다. 실제 스캔은
         # 세션이 끝난 뒤에 돈다 -- 기록 중인 파일은 saver 가 쥐고 있어서
         # 지금 읽으면 그 파일만 통째로 빠진 통계가 나온다
@@ -673,7 +671,6 @@ class CollectionOps:
         """
         self.win.stats_ops.bump("discarded")
         self.win.log(f"[버림] {n_frames} frames")
-        self.win.stats_ops.refresh_stats()
 
     def on_countdown(self, seconds) -> None:
         # 자동 진행이 없어졌으므로 카운트다운이 아니라 경과 시간이다.

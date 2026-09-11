@@ -590,7 +590,6 @@ class WorkspaceWindow(QMainWindow):
             self.doctor.refresh_progress()
             self.doctor.refresh_schema()
         elif key == "stats":
-            self.stats_ops.refresh_stats()
             self.stats_ops.refresh_history()
             # auto_ 를 쓴다 -- 세션 중에는 기록 중인 파일이 잠겨 있어서, 그냥
             # 스캔하면 지금 찍고 있는 것만 빠진 통계가 나온다.

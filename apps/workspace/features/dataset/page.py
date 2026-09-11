@@ -112,14 +112,14 @@ def build_dataset(win) -> QWidget:
     col.addWidget(trim_btn)
 
     vrow = QHBoxLayout()
-    win.verdict_ok_btn = QPushButton(tr("✓ Pass"))
+    win.verdict_ok_btn = QPushButton(tr("✓ Success"))
     win.verdict_ok_btn.setToolTip(tr(
         "선택한 에피소드의 판정을 성공/실패로 **정합니다**. 뒤집기가 아니라서 "
         "여러 개를 골라도 결과가 하나로 정해집니다. 되돌리려면 반대쪽을 누르세요. "
         "scene 변환은 success 만 내보냅니다."))
     win.verdict_ok_btn.clicked.connect(win.dataset_ops.on_set_verdict_success)
     vrow.addWidget(win.verdict_ok_btn)
-    win.verdict_fail_btn = QPushButton(tr("✗ Fail"))
+    win.verdict_fail_btn = QPushButton(tr("✗ Failed"))
     win.verdict_fail_btn.setToolTip(tr(
         "선택한 에피소드의 판정을 성공/실패로 **정합니다**. 뒤집기가 아니라서 "
         "여러 개를 골라도 결과가 하나로 정해집니다. 되돌리려면 반대쪽을 누르세요. "

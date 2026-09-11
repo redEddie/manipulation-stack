@@ -78,6 +78,10 @@ class DatasetOps:
         # **다른 폴더를 보고 있다고 믿게 된다** (2026-09-11).
         if hasattr(self.win, "gallery_scene_combo"):
             self.win.gallery_ops.refresh_gallery_scenes()
+        # 순위표도 이 경로를 따른다 -- "이 데이터셋" 의 정의가 이 경로의
+        # 폴더명이라, 여기서 갱신하지 않으면 경로를 바꾼 뒤 Statistics 로
+        # 갈 때까지 옛 폴더의 순위가 남는다.
+        self.win.stats_ops.refresh_history()
         self.refresh_dataset_tree()
 
     def browse_root(self) -> None:

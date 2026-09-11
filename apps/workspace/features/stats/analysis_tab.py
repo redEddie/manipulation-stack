@@ -140,6 +140,15 @@ def build_analysis_tab(win) -> QWidget:
     # 판정선만 한 줄로 남긴다. 나머지 정의는 헤더 툴팁 -- 조작자가 코드를
     # 열지 않고도 "몇이면 이상한가"를 알아야 하지만, 그게 목록을 밀어내면
     # 정작 봐야 할 후보가 안 보인다.
+    # 이 줄은 Statistics 패널의 '움직임 분석' 상자에 있었다. 쓰는 쪽은
+    # 여기(refresh_rank_list, on_select_flagged)인데 정작 Analysis 를 볼 때는
+    # 그 패널이 안 보였다 -- 몇 개 중 몇 개가 걸렸는지를 화면 밖에서 말하고
+    # 있었던 셈이다 (2026-09-12).
+    win.stats_hint = QLabel(tr("에피소드를 고르세요"))
+    win.stats_hint.setStyleSheet("color:#888;")
+    win.stats_hint.setWordWrap(True)
+    fcol.addWidget(win.stats_hint)
+
     cols_row = QHBoxLayout()
     cols = QLabel(tr("같은 (scene·문장) 그룹 평균과의 차 — ±{d} 밖이면 급함(빨강)/느림(파랑)")
                   .format(d=TASK_DEV_LIMIT))

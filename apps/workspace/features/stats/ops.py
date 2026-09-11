@@ -47,9 +47,6 @@ DISK_CRITICAL_GB = 10.0
 #: 개를 내므로 그것들을 한 번으로 뭉치는 것이 목적이다.
 ANALYSIS_DEBOUNCE_MS = 2000
 
-#: 최근 세션 목록에 보여줄 줄 수. 그 아래는 순위표가 요약한다.
-HISTORY_ROWS = 30
-
 
 def _bold_row(item) -> None:
     """트리 한 줄 전체를 굵게. 항목은 위젯이 아니라 칸마다 글꼴을 들고 있어
@@ -112,22 +109,6 @@ class StatsOps:
         """
         self.win.session.counters[key] += n
         self.win.session.cumulative[key] += n
-
-    def refresh_stats(self) -> None:
-        for stats, labels in ((self.win.session.counters, self.win.stats_labels),
-                              (self.win.session.cumulative, self.win.stats_total_labels)):
-            elapsed = time.monotonic() - stats["t0"]
-            for key in ("saved", "success", "failed", "discarded", "frames"):
-                labels[key].setText(str(stats[key]))
-            labels["elapsed"].setText(f"{elapsed / 60:.1f} min")
-            # 30초 미만에서는 분당 환산이 의미 없는 큰 수로 튄다.
-            rate = stats["saved"] / (elapsed / 60) if elapsed > 30 else 0.0
-            labels["rate"].setText(f"{rate:.2f}")
-        # 어느 task 의 숫자인지 헤더에 박아 둔다. task 를 여러 개 도는 동안
-        # 왼쪽 열이 무엇을 세고 있는지가 패널만 보고 답이 되어야 한다.
-        task = self.win._current_task_label(limit=20)
-        self.win.stats_task_header.setText(task or tr("이번 task"))
-        self.win.stats_task_header.setToolTip(self.win._current_task_label())
 
     # ------------------------------------------------------------ 디스크
     def refresh_disk(self) -> None:
@@ -210,7 +191,7 @@ class StatsOps:
         return Path(self.win.root_edit.text().strip() or ".").name
 
     def refresh_history(self) -> None:
-        """이력 파일을 읽어 순위표와 최근 세션 목록을 채운다.
+        """이력 파일을 읽어 수집자 순위표를 채운다.
 
         순위표는 **지금 데이터셋**만 센다. task 가 다르면 에피소드 하나에
         드는 시간이 다르므로, 다른 데이터셋의 속도와 한 줄에 세우면 비교가
@@ -238,27 +219,25 @@ class StatsOps:
             if me and pace.collector == me:
                 _bold_row(item)
             self.win.board_tree.addTopLevelItem(item)
-        self.win.board_hint.setText(
-            tr("{d} · 수집자 {n}명 · 세션 {s}개").format(
-                d=dataset or "-", n=len(board), s=sum(p.sessions for p in board))
-            if board else
-            tr("{d} 의 이력이 아직 없습니다 — 세션을 끝내면(Disconnect) 한 줄이 쌓입니다.")
-            .format(d=dataset or "-"))
+        if board:
+            self.win.board_hint.setText(tr("{d} · 수집자 {n}명 · 세션 {s}개").format(
+                d=dataset or "-", n=len(board), s=sum(p.sessions for p in board)))
+        else:
+            # 비어 있을 때 "아직 없습니다" 만 말하면 막다른 길이다. 실제로는
+            # **경로를 한 칸 위로 두었을 때** 가장 자주 빈다 -- 큐레이션 하려고
+            # 데이터 경로를 libero_datasets(부모)로 바꾸면 순위표가 통째로
+            # 사라진다 (2026-09-12 조작자: "갑자기 수집 속도 순위가 비었네요?
+            # 원래 좀 차있었는데"). 이력이 있는 폴더 이름을 대면 곧바로 답이
+            # 된다. 순위표는 데이터셋을 섞지 않는다는 규칙은 그대로다.
+            others = sorted({r.dataset for r in rows if r.dataset and r.dataset != dataset})
+            self.win.board_hint.setText(
+                tr("{d} 의 이력이 없습니다 — 이력이 있는 폴더: {o} "
+                   "(데이터 경로를 그 폴더로 두면 보입니다)").format(
+                       d=dataset or "-", o=", ".join(others))
+                if others else
+                tr("{d} 의 이력이 아직 없습니다 — 세션을 끝내면(Disconnect) 한 줄이 쌓입니다.")
+                .format(d=dataset or "-"))
 
-        self.win.history_tree.clear()
-        for rec in reversed(rows[-HISTORY_ROWS:]):
-            here = rec.run == self.win.run_id
-            item = QTreeWidgetItem([
-                (tr("이번 실행") if here else rec.started[5:16].replace("T", " ")),
-                rec.collector or "-",
-                str(rec.saved),
-                f"{rec.seconds / 60:.0f}m",
-                f"{rec.per_minute:.2f}",
-            ])
-            item.setToolTip(0, f"{rec.dataset} · {rec.scene or '-'} · {rec.started}")
-            if here:
-                _bold_row(item)
-            self.win.history_tree.addTopLevelItem(item)
 
     def on_summary(self, summary) -> None:
         # 해제는 여기서 하지 않는다 -- 정상 종료에만 오는 신호다. 실제 해제는

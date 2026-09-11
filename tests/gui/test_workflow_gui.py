@@ -174,12 +174,18 @@ a.refresh_analysis(force=True)          # 조작자가 [다시 분석] 을 눌�
 assert scans["n"] == 3, scans
 print("3b. 자동 재분석 게이트 OK (바뀐 것이 있을 때만, 세션 중엔 미룸)")
 
-# 순위표·최근 세션 상자가 Statistics 화면에 실제로 만들어지는가.
+# Statistics 는 수집자 순위표 **하나만** 있는 화면이다 (조작자, 2026-09-12).
+# 옮겨 간 것들이 슬그머니 돌아오면 여기서 걸린다.
 page_win = _Stub()
 build_stats(page_win)
-for attr in ("board_tree", "board_hint", "history_tree"):
+for attr in ("board_tree", "board_hint"):
     assert hasattr(page_win, attr), f"Statistics 에 {attr} 가 없다"
-assert not hasattr(page_win, "disk_label"), "디스크 상자는 상태바로 옮겼다"
-print("3c. Statistics 에 순위표·최근 세션 상자 OK")
+for gone, where in (("disk_label", "상태바"),
+                    ("stats_labels", "카메라 위 HUD"),
+                    ("stats_total_labels", "카메라 위 HUD"),
+                    ("history_tree", "순위표가 같은 파일을 접은 것"),
+                    ("stats_hint", "Analysis 탭")):
+    assert not hasattr(page_win, gone), f"{gone} 은 {where} 로 옮겼다"
+print("3c. Statistics 는 순위표만 OK")
 
 print("\n2026-09-06 GUI 개선 인수 통과")
