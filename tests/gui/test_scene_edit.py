@@ -282,26 +282,36 @@ if cur[0].get("quality_status") == QUALITY_SUCCESS:
     assert default == cw.QMessageBox.StandardButton.No, (wargs, wkw)
 print("9 통과: 표시 경로(장바구니, 확인창 X) + 실행 경로 확인창 문구 (재빌드 O, 툼스톤 X, 기본 No)")
 
-# ---- 10. 썸네일 캐시 무효화: scene 삭제/renumber 로 uid 가 재배정되면
-#    기존 썸네일이 잘못된 에피소드에 표시될 수 있다.
-from mstack.gui.scene_gallery import invalidate_scene_thumbs  # noqa: E402
+# ---- 10. scene 캐시 무효화는 문이 하나다. 예전에는 썸네일 jpg 와 프록시
+#    클립 두 캐시를 각각 무효화했는데, 갤러리가 프록시 격자로 바뀌면서
+#    썸네일을 읽는 곳이 없어졌다 (굽기만 하고 아무도 안 보는 캐시였고,
+#    씬을 처음 열 때마다 5~6.5초가 거기서 갔다). 2026-09-12 에 지웠다.
+#    되살아나면 여기서 걸린다.
+import importlib  # noqa: E402
 
-td = Path(tempfile.mkdtemp(prefix="thumbs_"))
-(td / "EP-S000-I000-E000.jpg").write_text("a")
-(td / "EP-S000-I000-E001.jpg").write_text("b")
-(td / "EP-S000-I001-E000.jpg").write_text("c")
-(td / "EP-S001-I000-E000.jpg").write_text("other")
-(td / "legacy.jpg").write_text("legacy")
-n = invalidate_scene_thumbs("S000", thumbs_dir=td)
-assert n == 3, n
-assert not (td / "EP-S000-I000-E000.jpg").exists()
-assert not (td / "EP-S000-I000-E001.jpg").exists()
-assert not (td / "EP-S000-I001-E000.jpg").exists()
-assert (td / "EP-S001-I000-E000.jpg").exists()
-assert (td / "legacy.jpg").exists()
-# 없는 scene 은 0개
-assert invalidate_scene_thumbs("S999", thumbs_dir=td) == 0
-print("10 통과: 썸네일 캐시 scene 단위 무효화 (다른 scene/비대상 파일 보존)")
+from unittest.mock import patch  # noqa: E402
+
+from mstack.data.proxy_clip import invalidate_scene_caches  # noqa: E402
+
+try:
+    importlib.import_module("mstack.gui.scene_gallery")
+except ModuleNotFoundError:
+    pass
+else:
+    raise AssertionError(
+        "썸네일 캐시가 되살아났다 -- 읽는 곳이 없는데 굽기만 하던 캐시다. "
+        "정말 필요해졌다면 이 계약부터 지우고 이유를 적어라.")
+
+pd = Path(tempfile.mkdtemp(prefix="proxy_"))
+for name in ("EP-S000-I000-E000__agentview_rgb.mp4",
+             "EP-S000-I001-E000__agentview_rgb.mp4",
+             "EP-S001-I000-E000__agentview_rgb.mp4"):
+    (pd / name).write_text("x")
+with patch("mstack.data.proxy_clip.proxy_dir_for", lambda root: pd):
+    c = invalidate_scene_caches("S000", "/nonexistent/dataset")
+assert c == {"proxies": 2}, c
+assert (pd / "EP-S001-I000-E000__agentview_rgb.mp4").exists()
+print("10 통과: scene 캐시 무효화 한 문 (프록시만), 썸네일 캐시는 없다")
 
 print("\nscene 편집(삭제·트림) 검증 통과")
 import os  # noqa: E402

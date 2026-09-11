@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from apps.workspace.features.collection.header import set_busy
 from mstack.data.episode_stats import (
     TASK_DEV_LIMIT,
     hdf5_files,
@@ -327,7 +328,15 @@ class StatsOps:
                 tr("{r} 에 *_demo.hdf5 / scene_*.hdf5 가 없습니다.").format(r=root))
             return
         t0 = time.monotonic()
-        self.win.session.stats = scan_dataset(files)
+        # UI 스레드에서 돈다 -- 파일 27개 1,987 에피소드에 1.6초다. 스레드로
+        # 옮기는 대신 그동안 그렇다고 말한다 (분석은 사람이 기다려도 되는
+        # 일이고, 결과를 곧바로 쓰는 곳이 많아 비동기로 만들면 "아직 없음"
+        # 갈래가 여기저기 생긴다).
+        set_busy(self.win, tr("{n}개 파일을 분석하는 중").format(n=len(files)))
+        try:
+            self.win.session.stats = scan_dataset(files)
+        finally:
+            set_busy(self.win)
         self.win.session.stats_stale = False
         self.win._summary = summarize(self.win.session.stats)
         dt = time.monotonic() - t0

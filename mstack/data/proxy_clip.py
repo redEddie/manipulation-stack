@@ -197,6 +197,20 @@ def invalidate_scene_proxies(scene_id: str, proxy_dir: Path = PROXY_DIR) -> int:
     return removed
 
 
+def invalidate_scene_caches(scene_id: str, dataset_root) -> dict:
+    """한 scene 의 **파생 캐시 전부**를 무효화한다. ``{"proxies": n}``.
+
+    삭제 경로가 세 군데였던 것과 같은 함정을 캐시에서도 피한다 -- 캐시마다
+    무효화를 따로 부르게 두면 반드시 한쪽을 빠뜨린다. 캐시가 늘면 여기 한
+    곳만 늘린다. (2026-09-12 에 썸네일 캐시를 지웠으므로 지금은 프록시
+    하나뿐이지만, 문은 그대로 하나로 둔다.)
+
+    삭제·renumber 뒤에 부른다. 트림은 uid 를 바꾸지 않으므로 이것이 아니라
+    ``invalidate_episode_proxies`` 를 쓴다.
+    """
+    return {"proxies": invalidate_scene_proxies(scene_id, proxy_dir_for(dataset_root))}
+
+
 def scene_id_of(episode_uid: str) -> str:
     """uid 에서 scene_id 를 뽑는다. 형식이 아니면 빈 문자열."""
     m = _UID_RE.match(episode_uid or "")

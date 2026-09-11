@@ -15,7 +15,7 @@ from mstack.gui.text_utils import repo_id_error
 from mstack.gui.i18n import tr
 from apps.workspace.features.dataset.right_panel import PHOTO_W
 from apps.workspace.shared.info import scene_fields
-from mstack.gui.scene_gallery import invalidate_scene_caches
+from mstack.data.proxy_clip import invalidate_scene_caches
 from mstack.gui.widgets.video_view import np_to_pixmap
 from mstack.scene.scene_format import (
     delete_scene_episodes,
@@ -502,16 +502,15 @@ class DatasetOps:
                 if is_scene:
                     delete_scene_episodes(path, names)
                     # renumber 로 uid 가 재배정되므로 해당 scene 의 파생 캐시를
-                    # (썸네일·프록시 클립) 전부 무효화한다. 삭제와 별도 try --
+                    # (프록시 클립) 전부 무효화한다. 삭제와 별도 try --
                     # 캐시 정리 실패가 "삭제 실패" 로 오표기되면 안 된다
                     # (삭제는 이미 성공했다).
                     try:
                         sid = read_scene_metadata(path).scene_id
                         c = invalidate_scene_caches(sid, self.dataset_root())
-                        if c["thumbs"] or c["proxies"]:
+                        if c["proxies"]:
                             self.win.log(
-                                f"[캐시] {path.name}: 썸네일 {c['thumbs']}개 · "
-                                f"프록시 {c['proxies']}개 무효화")
+                                f"[캐시] {path.name}: 프록시 {c['proxies']}개 무효화")
                     except Exception as e:  # noqa: BLE001
                         self.win.log(f"[캐시 정리 실패] {path.name}: {e}")
                 else:

@@ -1,4 +1,4 @@
-"""Gallery tab: scene episode thumbnails, filter, and activation."""
+"""Gallery tab: scene episode clips, filter, and activation."""
 
 from __future__ import annotations
 
@@ -7,13 +7,14 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTreeWidgetItem
 
+from apps.workspace.features.collection.header import set_busy
 from mstack.gui.i18n import tr
 from mstack.gui.workers import GalleryLoadWorker
 from mstack.scene.scene_format import iter_scene_files
 
 
 class GalleryOps:
-    """Gallery tab: scene episode thumbnails, filter, and activation."""
+    """Gallery tab: scene episode clips, filter, and activation."""
 
     def __init__(self, win) -> None:
         self.win = win
@@ -40,6 +41,7 @@ class GalleryOps:
         self.win._gallery_shown = []
         self.win._gallery_selected = []
         if not path:
+            set_busy(self.win)
             self.win.gallery_status.setText(tr("표시할 scene 파일이 없습니다"))
             return
         if self.win.session.active_file_path is not None and Path(path) == self.win.session.active_file_path:
@@ -48,16 +50,20 @@ class GalleryOps:
                 "수집 세션이 이 scene 파일을 사용 중입니다 — 세션을 종료하면 "
                 "갤러리가 열립니다. (현황은 Collect 페이지 slot 패널에)"))
             return
-        self.win.gallery_status.setText(tr("불러오는 중... (첫 로드는 썸네일 생성으로 수 초)"))
+        self.win.gallery_status.setText(tr("불러오는 중..."))
+        set_busy(self.win, tr("{f} 에피소드 목록을 읽는 중").format(f=Path(path).name))
         if self.win._gallery_loader is not None:
             self.win._gallery_loader.wait()
-        self.win._gallery_loader = GalleryLoadWorker(path, self.thumbs_dir())
+        self.win._gallery_loader = GalleryLoadWorker(path)
         self.win._gallery_loader.loaded.connect(self.on_gallery_loaded)
         self.win._gallery_loader.failed.connect(
-            lambda m: self.win.gallery_status.setText(tr("갤러리 로드 실패: {m}").format(m=m)))
+            lambda m: (set_busy(self.win),
+                       self.win.gallery_status.setText(
+                           tr("갤러리 로드 실패: {m}").format(m=m))))
         self.win._gallery_loader.start()
 
-    def on_gallery_loaded(self, path, episodes, ref_thumb) -> None:
+    def on_gallery_loaded(self, path, episodes, _unused=None) -> None:
+        set_busy(self.win)
         if path != self.win.gallery_scene_combo.currentData():
             return  # 로드 중 scene 을 바꿨다
         self.win._gallery_episodes = episodes
@@ -90,7 +96,6 @@ class GalleryOps:
                 lst.setCurrentItem(lst.topLevelItem(0))
         finally:
             lst.blockSignals(False)
-        self._ref_thumb = ref_thumb
         self.apply_gallery_filter()
 
     def apply_gallery_filter(self, *_args) -> None:
@@ -130,12 +135,6 @@ class GalleryOps:
             tr("{s}개 표시 (전체 {n}개 · success {ok}개) — 클릭: 선택, "
                "Ctrl+클릭: 여러 개{note}").format(
                    s=len(shown), n=len(eps), ok=n_ok, note=note))
-
-    def thumbs_dir(self):
-        """지금 데이터 경로의 썸네일 자리. 프록시와 같은 이유로 갈라 둔다."""
-        from mstack.gui.scene_gallery import thumbs_dir_for
-
-        return thumbs_dir_for(self.win.dataset_ops.dataset_root())
 
     def proxy_dir(self):
         """지금 데이터 경로의 프록시 디렉터리. 캐시 키에 데이터셋이 섞이면

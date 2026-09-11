@@ -46,6 +46,18 @@ def build_collect_header(win) -> QWidget:
     win.hud_slot = QLabel("")
     win.hud_slot.setStyleSheet("color:#cfd8dc; font-size:12px;")
     left.addWidget(win.hud_slot)
+    # 오래 걸리는 일이 도는 동안 그렇다고 말하는 자리. 수집과 상관없는
+    # 일(큐레이션 로드·프록시 굽기·분석 스캔)도 여기에 나온다 -- 이 띠가
+    # 화면에서 유일하게 스크롤되지 않는 줄이라 놓칠 수가 없다 (조작자,
+    # 2026-09-12: "로딩 동안 기다리라는 표시가 있으면 좋겠어요").
+    #
+    # 수집 HUD 의 글자(지시문·수집량)를 빌려 쓰지 않는다. 그쪽은 정본이
+    # CollectionOps._refresh_instruction 하나인데, 다른 곳에서 덮어쓰기
+    # 시작하면 수집 중에 지시문이 "불러오는 중" 으로 바뀌는 사고가 난다.
+    win.hud_busy = QLabel("")
+    win.hud_busy.setStyleSheet("color:#f1c40f; font-size:12px;")
+    win.hud_busy.setVisible(False)
+    left.addWidget(win.hud_busy)
     row.addLayout(left, 1)
 
     # 수집량 -- 이 띠에서 가장 큰 글자. 1m 거리에서 읽혀야 한다.
@@ -79,3 +91,25 @@ def set_header_state(win, state: str) -> None:
     bar.setStyleSheet(
         f"background-color:{STATE_COLORS.get(state, IDLE_COLOR)};")
     win.hud_state.setText(win.STATE_LABELS.get(state, state))
+
+
+def set_busy(win, text: str = "") -> None:
+    """상단 띠에 "지금 이것을 하고 있다"를 띄운다. ``text`` 가 비면 지운다.
+
+    끝났을 때 지우는 것을 잊으면 화면이 영영 거짓말을 하므로, 부르는 쪽은
+    반드시 ``try/finally`` 나 완료 슬롯에서 빈 문자열로 다시 부른다.
+    """
+    lab = getattr(win, "hud_busy", None)
+    if lab is None:
+        return
+    try:
+        lab.setText(f"⏳ {text}" if text else "")
+        lab.setVisible(bool(text))
+        if text:
+            # 백그라운드 스레드를 띄우기 **전에** 부르는 경우가 많다 --
+            # 이벤트 루프로 돌아가기 전에 한 번 그려야 글자가 보인다.
+            from PyQt6.QtWidgets import QApplication
+
+            QApplication.processEvents()
+    except RuntimeError:
+        pass  # 종료 중 C++ 쪽이 이미 사라졌다

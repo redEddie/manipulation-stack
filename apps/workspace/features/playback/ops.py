@@ -20,7 +20,7 @@ from mstack.data.proxy_clip import (
     episode_uid_at,
     invalidate_episode_proxies,
 )
-from mstack.gui.scene_gallery import invalidate_scene_caches
+from mstack.data.proxy_clip import invalidate_scene_caches
 from mstack.scene.scene_format import count_by_slot, read_scene_metadata
 
 from apps.workspace.constants import REPLAY_SCRIPT
@@ -36,8 +36,18 @@ class PlaybackOps:
 
     # ------------------------------------------------------------------ open
     def on_open_trim(self) -> None:
-        """메뉴·버튼 진입점 -- 선택을 읽어 Trim 탭을 여는 일은 sync 와 같다."""
+        """메뉴·버튼 진입점.
+
+        고르는 일은 ``sync_trim_to_selection`` 과 같지만, **탭까지 옮긴다.**
+        sync 쪽은 선택이 바뀔 때마다 불려서 탭을 옮기면 안 되고(보고 있던
+        화면을 뺏는다), 이쪽은 사람이 "끝 다듬기 (Trim 탭에서)" 를 직접
+        누른 것이다. 2026-09-12 까지 여기서 탭을 안 옮겨서, 버튼을 눌러도
+        아무 일도 안 일어나는 것처럼 보였다 (조작자 보고).
+        """
         self.sync_trim_to_selection()
+        eps = getattr(self.win, "_gallery_selected", []) or []
+        if len(eps) == 1 and self.win.dataset_ops.selected_file() is not None:
+            show_center_tab(self.win, "trim")
 
     def sync_trim_to_selection(self) -> None:
         """선택이 바뀌면 Trim 탭이 그 에피소드를 문다.
@@ -508,9 +518,8 @@ class PlaybackOps:
                     sid = self.win.scene_ops.session_scene_id()
                     c = (invalidate_scene_caches(
                         sid, self.win.dataset_ops.dataset_root()) if sid else None)
-                    if c and (c["thumbs"] or c["proxies"]):
-                        self.win.log(f"[캐시] {sid}: 썸네일 {c['thumbs']}개 · "
-                                     f"프록시 {c['proxies']}개 무효화")
+                    if c and c["proxies"]:
+                        self.win.log(f"[캐시] {sid}: 프록시 {c['proxies']}개 무효화")
                 except Exception as e:  # noqa: BLE001
                     self.win.log(f"[캐시 정리 실패] {e}")
         self.win.dataset_ops.refresh_dataset_tree()

@@ -46,7 +46,7 @@ import mstack.data.dataset_schema as ds  # noqa: E402
 import mstack.data.hub_upload_state as hub  # noqa: E402
 import mstack.gui.constants as gconst  # noqa: E402
 import mstack.gui.grid_overlay as go  # noqa: E402
-import mstack.gui.scene_gallery as gal  # noqa: E402
+import mstack.data.proxy_clip as proxy  # noqa: E402
 from apps.workspace.constants import LOG_DIR  # noqa: E402
 
 root = state_dir()
@@ -56,7 +56,7 @@ CHECKED = {
     "크롭": crop.CROP_PARAMS_DIR,
     "recents": gconst.RECENTS_PATH,
     "업로드 장부": hub.STATE_PATH,
-    "썸네일": gal.THUMBS_DIR,
+    "프록시 클립": proxy.PROXY_DIR,
     "스키마 설정": ds.DEFAULT_CONFIG_PATH,
     "세션 로그": LOG_DIR,
 }

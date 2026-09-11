@@ -71,37 +71,33 @@ class EpisodeLoadWorker(QThread):
 
 
 class GalleryLoadWorker(QThread):
-    """scene 갤러리(#31)용: 썸네일 캐시 생성 + 에피소드 요약을 UI 스레드
-    밖에서 읽는다. 첫 로드에서 에피소드 수만큼 프레임을 읽으므로(예: 50개
-    ≈ 수 초) 타이머 콜백에 넣지 않는다. 캐시가 차면 이후에는 목록 조회뿐."""
+    """scene 갤러리용 에피소드 목록을 UI 스레드 밖에서 읽는다.
 
-    loaded = pyqtSignal(str, list, object)  # scene_path, episodes(+thumb), ref_thumb|None
+    2026-09-12 까지 여기서 에피소드마다 첫 프레임을 HDF5 에서 읽어 썸네일
+    jpg 를 구웠다. 그런데 갤러리가 프록시 클립 격자(clip_grid)로 바뀌면서
+    그 jpg 를 **읽는 곳이 한 군데도 남지 않았다** -- 굽기만 하고 아무도 안
+    보는 캐시였다. 씬을 처음 열 때마다 5~6.5초가 통째로 거기서 갔다
+    (에피소드당 70ms; gzip 청크가 19프레임 깊이라 한 장을 위해 19장을
+    푼다). 지워서 0.03초가 됐다. 격자는 프록시 mp4 의 첫 프레임을 직접
+    보여주므로 잃은 것이 없다.
+    """
+
+    loaded = pyqtSignal(str, list, object)  # scene_path, episodes, None
     failed = pyqtSignal(str)
 
-    def __init__(self, scene_path: str, thumbs_dir=None) -> None:
+    def __init__(self, scene_path: str) -> None:
         super().__init__()
         self.scene_path = scene_path
-        #: 데이터셋별 썸네일 자리. episode_uid 는 데이터셋 안에서만 유일해서
-        #: 한 곳에 섞으면 다른 데이터셋의 썸네일이 나온다 -- 프록시와 같은
-        #: 이유다 (mstack.data.proxy_clip.dataset_tag).
-        self.thumbs_dir = thumbs_dir
 
     def run(self) -> None:
         try:
-            from mstack.scene.scene_format import read_scene_metadata
-            from mstack.gui.scene_gallery import build_gallery, reference_thumb
+            from mstack.scene.scene_format import list_scene_episodes
 
-            from mstack.gui.scene_gallery import THUMBS_DIR
-
-            td = self.thumbs_dir or THUMBS_DIR
-            episodes = build_gallery(self.scene_path, td)
-            sid = read_scene_metadata(Path(self.scene_path)).scene_id
-            ref = reference_thumb(self.scene_path, sid, td)
+            episodes = list_scene_episodes(Path(self.scene_path))
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
             return
-        self.loaded.emit(self.scene_path, episodes, ref)
-
+        self.loaded.emit(self.scene_path, episodes, None)
 
 
 class CameraPreviewWorker(QThread):
