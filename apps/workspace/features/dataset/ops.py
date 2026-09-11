@@ -314,24 +314,29 @@ class DatasetOps:
         self.refresh_basket_ui()
         self.win.gallery_grid.refresh_marks()
     def refresh_basket_ui(self) -> None:
-        """삭제 목록 라벨·실행 버튼을 장바구니 현황에 맞춘다.
+        """삭제 목록의 개수를 화면에 반영한다.
 
-        위젯은 build_dataset 이후에만 있다 -- 갤러리 표시 등 빌드 전 경로에서
-        불릴 수 있으므로 hasattr 로 감싼다.
+        실행 버튼에 **개수를 박아 둔다** (``Delete 3``). 확인창을 열기 전에
+        몇 개가 날아가는지 보여야 한다 -- 표시는 여러 화면에서 하고 실행은
+        여기 하나라, 누르는 시점에는 무엇을 표시했는지 기억이 흐려져 있다.
         """
         if not hasattr(self.win, "basket_label"):
             return
         n = len(self.win.basket)
-        text = ""
-        if n:
-            text = tr("삭제 목록 {n}개").format(n=n)
-            cur = self.win.gallery_scene_combo.currentData()
-            if cur:
-                k = self.win.basket.count_for(cur)
-                if k:
-                    text += tr(" (이 씬 {k}개)").format(k=k)
-        self.win.basket_label.setText(text)
-        self.win.basket_exec_btn.setEnabled(n > 0)
+        path = self.win.gallery_scene_combo.currentData() if hasattr(
+            self.win, "gallery_scene_combo") else None
+        here = self.win.basket.count_for(path) if path else 0
+        if not n:
+            self.win.basket_label.setText("")
+        else:
+            msg = tr("삭제 목록 {n}개").format(n=n)
+            if here and here != n:
+                msg += tr(" (이 씬 {k}개)").format(k=here)
+            self.win.basket_label.setText(msg)
+        if hasattr(self.win, "basket_exec_btn"):
+            self.win.basket_exec_btn.setText(
+                tr("Delete {n}").format(n=n) if n else tr("Delete"))
+            self.win.basket_exec_btn.setEnabled(n > 0)
 
     def on_clear_marks(self) -> None:
         """삭제 목록 표시를 전부 해제한다 (에피소드는 지우지 않는다)."""

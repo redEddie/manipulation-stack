@@ -112,14 +112,14 @@ def build_dataset(win) -> QWidget:
     col.addWidget(trim_btn)
 
     vrow = QHBoxLayout()
-    win.verdict_ok_btn = QPushButton(tr("✓ Mark success"))
+    win.verdict_ok_btn = QPushButton(tr("✓ Pass"))
     win.verdict_ok_btn.setToolTip(tr(
         "선택한 에피소드의 판정을 성공/실패로 **정합니다**. 뒤집기가 아니라서 "
         "여러 개를 골라도 결과가 하나로 정해집니다. 되돌리려면 반대쪽을 누르세요. "
         "scene 변환은 success 만 내보냅니다."))
     win.verdict_ok_btn.clicked.connect(win.dataset_ops.on_set_verdict_success)
     vrow.addWidget(win.verdict_ok_btn)
-    win.verdict_fail_btn = QPushButton(tr("✗ Mark failed"))
+    win.verdict_fail_btn = QPushButton(tr("✗ Fail"))
     win.verdict_fail_btn.setToolTip(tr(
         "선택한 에피소드의 판정을 성공/실패로 **정합니다**. 뒤집기가 아니라서 "
         "여러 개를 골라도 결과가 하나로 정해집니다. 되돌리려면 반대쪽을 누르세요. "
@@ -157,7 +157,7 @@ def build_dataset(win) -> QWidget:
     win.basket_label.setWordWrap(True)
     col.addWidget(win.basket_label)
     brow = QHBoxLayout()
-    win.basket_exec_btn = QPushButton(tr("Delete marked"))
+    win.basket_exec_btn = QPushButton(tr("Delete"))
     win.basket_exec_btn.setStyleSheet(
         "background-color:#c0392b; color:white; padding:6px;")
     win.basket_exec_btn.setToolTip(tr(
@@ -166,7 +166,7 @@ def build_dataset(win) -> QWidget:
         "표시는 격자·순위표 어디서든 하고, 지우는 것은 이 버튼 하나뿐입니다."))
     win.basket_exec_btn.clicked.connect(win.dataset_ops.on_delete_marked)
     brow.addWidget(win.basket_exec_btn)
-    win.basket_clear_btn = QPushButton(tr("Clear marks"))
+    win.basket_clear_btn = QPushButton(tr("Clear"))
     win.basket_clear_btn.clicked.connect(win.dataset_ops.on_clear_marks)
     brow.addWidget(win.basket_clear_btn)
     col.addLayout(brow)
