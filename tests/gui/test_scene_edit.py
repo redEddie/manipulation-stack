@@ -8,6 +8,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+# **mstack 임포트보다 먼저** 상태 폴더를 격리한다. 이 테스트는 파일을 지우고
+# 캐시를 무효화하므로, 단독 실행에서 조작자의 진짜 캐시를 건드리면 안 된다
+# (2026-09-11 에 그래서 S000 프록시 120개가 네 번 지워졌다).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import isolate_state  # noqa: E402
+
+isolate_state()
+
 import h5py
 import numpy as np
 

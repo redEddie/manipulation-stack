@@ -1,5 +1,17 @@
-"""Analysis 그룹 기준 = (scene, 문장) 검증 -- 같은 문장이라도 scene 이 다르면
-별도 그룹, legacy 는 문장 단위."""
+"""Analysis 큐레이션 후보의 범위 계약 -- 그룹 콤보는 **없고**, 왼쪽 패널
+(Scene 콤보 + Instruction 목록)이 (씬 → 지시문) 범위를 정한다 (조작자,
+2026-09-11).
+
+2026-09-12 에 바꾼 이유: 같은 (씬 → 지시문) 축이 Analysis 의 그룹 콤보와
+왼쪽 패널 두 군데에 있었다. 큐레이션은 오직 (씬 → 지시문) 안에서만 하므로
+Analysis 는 왼쪽 패널을 따른다. 정렬 콤볏도 뺐다 -- 왼쪽 목록·격자·Analysis 가
+같은 집합을 다른 순서로 보여주면 어느 것이 어느 것인지 헷갈리므로, 순위표는
+에피소드 번호 순으로 고정이다. 튀는 것은 '평균과 차이' 열 색과 '튀는 것만
+선택' 버튼이 잡는다.
+
+아래 scan_dataset 부분은 예전 그대로다: (scene, 문장) 그룹 분리 자체는
+변하지 않았다 -- 바뀐 것은 GUI 가 그 그룹을 **자기 콤보로** 고르지 않고
+왼쪽 패널 선택을 따른다는 것뿐이다."""
 import subprocess
 import sys
 import tempfile
@@ -64,10 +76,10 @@ assert any(r_["scene"] == "S001" and r_["task"] == sentence for r_ in rows)
 assert any(r_["scene"] == "S000" and r_["task"] == sentence for r_ in rows)
 print(f"통과: (scene,문장) 그룹 분리 -- 그룹 {len(by_group)}개, S001 느린 궤적이 S000 기준으로 튀지 않음")
 
-# ---- GUI: 큐레이션 후보의 그룹 콤보 필터 ----
+# ---- GUI: 후보 목록은 왼쪽 패널(Scene 콤보 + Instruction 목록)을 따른다 ----
 sys.path.insert(0, WT + "/apps")
 sys.argv = ["t"]
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QTreeWidgetItem  # noqa: E402
 
 app = QApplication(sys.argv)
 import collect_workspace as cw  # noqa: E402
@@ -78,40 +90,86 @@ cw.SystemOps.startup_tuning = lambda self: None   # pkexec 비밀번호 창 차�
 cw.QMessageBox.warning = staticmethod(lambda *a, **k: None)
 win = cw.WorkspaceWindow(None)
 win.session.stats = stats
-win.stats_ops.refresh_group_combo()
-# 콤보 구성이 바뀌었다 (2026-09-11): [그룹...] 구분선 [(전체 - 섞입니다)].
-# (전체) 를 맨 아래로 내린 것은 태스크가 다르면 길이·속도가 다른 것이
-# 정상이라 섞인 목록으로는 비교가 성립하지 않아서다 -- 5열 중 정규화된 것은
-# '평균과 차이' 하나뿐이고, '길이(초)' 로 정렬해 위에서부터 지우면 원래 긴
-# 태스크를 지운다.
-#
-# 동사(pick-inside) 묶음은 **두지 않는다.** 같은 동작이라도 소품 사이 거리가
-# 다르면 시간이 크게 달라지는데, (scene·문장) 으로 묶는 이유가 바로 그 배치를
-# 고정하기 위해서다. 다시 생기면 여기서 걸린다.
-data = [win.group_combo.itemData(k) for k in range(win.group_combo.count())]
-groups = [d for d in data if d and d[0] == "group"]
-assert len(groups) == len(by_group), (len(groups), len(by_group))
-assert data[-1] is None, "(전체) 는 맨 아래여야 한다"
-assert not any(d and d[0] == "skill" for d in data), (
-    "동사 묶음이 되살아났다 -- 소품 거리가 시간을 좌우하므로 편차 비교 단위로 "
-    "쓸 수 없다. 커버리지는 audit_scene_diversity.py 가 낸다")
-assert "섞" in win.group_combo.itemText(len(data) - 1), \
-    win.group_combo.itemText(len(data) - 1)
-i = next(k for k in range(win.group_combo.count())
-         if win.group_combo.itemData(k) == ("group", ("S001", sentence)))
-assert i > 0
-win.group_combo.setCurrentIndex(i)          # -> _refresh_rank_list
-shown = [win.rank_tree.topLevelItem(k).data(0, cw.Qt.ItemDataRole.UserRole)
-         for k in range(win.rank_tree.topLevelItemCount())]
-assert shown and all(p.endswith("scene_001.hdf5") for p, _ in shown), shown
-assert len(shown) == len(s1)
-win.group_combo.setCurrentIndex(win.group_combo.count() - 1)      # (전체)
+
+# **계약 1: 범위 축은 왼쪽 패널 하나뿐이다.** 그룹 콤보가 다시 생기면 걸린다.
+assert not hasattr(win, "group_combo"), \
+    "그룹 축이 두 군데가 됐다 -- 왼쪽 패널(씬 → 지시문)이 정본"
+# 정렬은 **남아 있어야 한다.** 상황에 따라 이상치를 찾는 수단이다
+# (조작자, 2026-09-12): "늘어짐" 은 녹화를 늦게 끝낸 것을, "짧음" 은 2~3틱짜리를
+# 위로 끌어올린다. 다만 **기본은 에피소드 순**이다 -- 왼쪽 목록·격자와 같은
+# 순서라야 세 화면을 오갈 때 헷갈리지 않고, 기준을 바꾼 것이 눈에 띈다.
+assert hasattr(win, "rank_combo"), "정렬 수단이 사라졌다"
+assert win.rank_combo.currentData() is None, (
+    "기본 정렬이 에피소드 순이 아니다: %r" % win.rank_combo.currentData())
+assert win.rank_combo.count() >= 5, win.rank_combo.count()
+# 그룹 열은 없앴다 -- 한 지시문 안에서만 보므로 같은 값만 반복한다.
+assert win.rank_tree.columnCount() == 4, win.rank_tree.columnCount()
+
+scene1 = d / "scene_001.hdf5"
+
+# 왼쪽 패널을 (씬=S001, 지시문=I000) 으로 놓는다 -- 갤러리 로더 대신 직접.
+# Gallery 가 채우는 것과 같은 모양: instruction 목록 첫 줄은 (전체)=None,
+# 그 다음 줄에 instruction_id.
+win.gallery_scene_combo.addItem("scene_001", str(scene1))
+win.gallery_scene_combo.setCurrentIndex(win.gallery_scene_combo.count() - 1)
+eps1 = list_scene_episodes(scene1)
+win._gallery_shown = eps1
+lst = win.instruction_list
+lst.blockSignals(True)
+lst.clear()
+all_it = QTreeWidgetItem(["(all instructions)", str(len(eps1))])
+all_it.setData(0, cw.Qt.ItemDataRole.UserRole, None)
+lst.addTopLevelItem(all_it)
+iid_it = QTreeWidgetItem([f"I000  {sentence[:44]}", str(len(eps1))])
+iid_it.setData(0, cw.Qt.ItemDataRole.UserRole, "I000")
+lst.addTopLevelItem(iid_it)
+lst.setCurrentItem(all_it)
+lst.blockSignals(False)
+
+# (전체) 지시문 + scene_001 선택: 파일 좁히기만 한다.
+out = win.stats_ops.filtered_stats()
+assert len(out) == len(s1), (len(out), len(s1))
+assert all(e.path == str(scene1) for e in out), [e.path for e in out]
+
+# 지시문 I000 으로 좁히면: _gallery_shown 의 문장과 같은 task 만 남는다.
+# S001 의 지시문이 I000 이고 문장이 sentence 하나뿐이므로 집합은 그대로다.
+lst.setCurrentItem(iid_it)
+out_i = win.stats_ops.filtered_stats()
+assert len(out_i) == len(s1), (len(out_i), len(s1))
+
+# _gallery_shown 이 비어 있으면 지시문 필터는 걸지 않는다 (깨진 상태로
+# 전부 날리지 않는다).
+win._gallery_shown = []
+out_empty = win.stats_ops.filtered_stats()
+assert len(out_empty) == len(s1), (len(out_empty), len(s1))
+win._gallery_shown = eps1
+
+# 순위표: 4열, 에피소드 번호 순, 선택된 (씬 → 지시문) 집합만.
+win.stats_ops.refresh_rank_list()
+n_rows = win.rank_tree.topLevelItemCount()
+assert n_rows == len(s1), (n_rows, len(s1))
+keys = [win.rank_tree.topLevelItem(k).data(0, cw.Qt.ItemDataRole.UserRole)
+        for k in range(n_rows)]
+assert all(p == str(scene1) for p, _ in keys), keys
+import re  # noqa: E402
+
+nums = [int(re.search(r"(\d+)", demo).group(1)) for _, demo in keys]
+assert nums == sorted(nums), nums                # 에피소드 번호 순 고정
+for k in range(n_rows):
+    assert win.rank_tree.topLevelItem(k).columnCount() == 4   # 'task' 열은 없다
+
+# scene 콤보 선택을 빼면 전 파일이 범위가 된다 (지시문은 (전체) 인 채).
+win.gallery_scene_combo.setCurrentIndex(-1)
+out_all = win.stats_ops.filtered_stats()
+assert len(out_all) == len(stats), (len(out_all), len(stats))
+win.stats_ops.refresh_rank_list()
 assert win.rank_tree.topLevelItemCount() == len(stats)
-print("통과: 큐레이션 후보 그룹 콤보 -- 동사/그룹/전체, 한 그룹만 / 전체 복귀")
+
+print("통과: 후보 목록은 왼쪽 패널이 범위를 정한다 -- 콤보 없음, 에피소드 번호 순, 4열")
 import os  # noqa: E402
 
 # os._exit 는 버퍼를 비우지 않는다 -- 먼저 비운다. 없으면 이 파일의
 # 출력이 통째로 사라져서, 검사가 실제로 돌았는지 사람이 볼 수 없다
-# (스위트는 종료 코드만 보므로 통과로 지나간다).
+# (스위트는 종료 코드만 본다).
 sys.stdout.flush()
 os._exit(0)

@@ -36,15 +36,28 @@ class PlaybackOps:
 
     # ------------------------------------------------------------------ open
     def on_open_trim(self) -> None:
-        """고른 에피소드를 Trim 탭에서 연다. 선택은 공유 선택에서 읽는다."""
+        """메뉴·버튼 진입점 -- 선택을 읽어 Trim 탭을 여는 일은 sync 와 같다."""
+        self.sync_trim_to_selection()
+
+    def sync_trim_to_selection(self) -> None:
+        """선택이 바뀌면 Trim 탭이 그 에피소드를 문다.
+
+        하나만 골랐을 때만 문다 -- 트림은 한 개짜리 조작이고, 여러 개를 고른
+        채로 아무거나 물면 어느 것을 자르는지 알 수 없다. 0개거나 2개 이상이면
+        지금 것을 그대로 두고, 화면에 '하나만 고르세요' 를 띄운다.
+        """
         eps = getattr(self.win, "_gallery_selected", []) or []
         path = self.win.dataset_ops.selected_file()
         if len(eps) != 1 or path is None:
-            QMessageBox.information(
-                self.win, tr("선택 필요"),
-                tr("끝을 다듬을 에피소드를 하나만 선택하세요."))
+            warn = getattr(self.win, "trim_warn", None)
+            if warn is not None:
+                warn.setText(tr("하나만 고르세요"))
             return
-        self.show_trim_for(str(path), eps[0]["name"])
+        try:
+            self.show_trim_for(str(path), eps[0]["name"])
+        except Exception as e:  # noqa: BLE001 -- 트림 준비 실패가 선택을 죽이면 안 된다
+            self.win.log(tr("[트림] 열기 실패: {e}").format(e=e))
+
     def show_trim_for(self, path: str, demo: str) -> None:
         """Dataset 트리와 Analysis 순위표가 공유하는 트림 진입점."""
         if not path or not demo:
@@ -164,14 +177,25 @@ class PlaybackOps:
 
     def trim_update(self) -> None:
         """Recomputes every label, guard and shading from the pending count."""
+        # 우측 패널 위젯은 build_center(Trim 탭) 뒤의 build_right 에서 만들어진다
+        # -- Trim 탭을 짓는 도중에 이 메서드가 불리므로 없을 수 있고, 그때는
+        # 가운데 패널 쪽(플롯·슬라이더)만 갱신한다.
+        reset_btn = getattr(self.win, "trim_reset_btn", None)
+        count = getattr(self.win, "trim_count", None)
+        apply_btn = getattr(self.win, "trim_apply_btn", None)
+        warn = getattr(self.win, "trim_warn", None)
         has = self.win.playback.trim_key is not None
         self.win.trim_play_btn.setEnabled(has and self.win.playback.trim_frames.get("agent") is not None)
         self.win.trim_slider.setEnabled(has)
-        self.win.trim_reset_btn.setEnabled(bool(self.win.playback.trim_n_pending))
+        if reset_btn is not None:
+            reset_btn.setEnabled(bool(self.win.playback.trim_n_pending))
         if not has:
-            self.win.trim_count.setText(tr("에피소드를 고르세요"))
-            self.win.trim_apply_btn.setEnabled(False)
-            self.win.trim_warn.setText("")
+            if count is not None:
+                count.setText(tr("에피소드를 고르세요"))
+            if apply_btn is not None:
+                apply_btn.setEnabled(False)
+            if warn is not None:
+                warn.setText("")
             for plot, _ in self.win.trim_plots.values():
                 plot.set_cut(None)
             return
@@ -182,19 +206,22 @@ class PlaybackOps:
             tr("{d} · {n}프레임 ({s:.1f}s) · 마지막 그리퍼 동작 −{g}프레임").format(
                 d=demo, n=self.win.playback.trim_n, s=self.win.playback.trim_n / 20.0,
                 g=plan.gripper_tail if plan.gripper_tail is not None else "?"))
-        self.win.trim_count.setText(
-            tr("{a} → {b} 프레임   (−{n})").format(a=self.win.playback.trim_n, b=keep, n=n_trim)
-            if n_trim else tr("{a} 프레임 — 자를 구간 없음").format(a=self.win.playback.trim_n))
+        if count is not None:
+            count.setText(
+                tr("{a} → {b} 프레임   (−{n})").format(a=self.win.playback.trim_n, b=keep, n=n_trim)
+                if n_trim else tr("{a} 프레임 — 자를 구간 없음").format(a=self.win.playback.trim_n))
         for plot, _ in self.win.trim_plots.values():
             plot.set_cut(keep if n_trim else None)
         blocked = plan_trim(path, [demo], n_trim)[0].blocked if n_trim else None
-        self.win.trim_apply_btn.setEnabled(bool(n_trim) and not blocked)
-        if blocked:
-            self.win.trim_warn.setText(tr("⚠ {b}").format(b=blocked))
-        elif plan.already:
-            self.win.trim_warn.setText(tr("이미 다듬은 이력: {a}").format(a=plan.already))
-        else:
-            self.win.trim_warn.setText("")
+        if apply_btn is not None:
+            apply_btn.setEnabled(bool(n_trim) and not blocked)
+        if warn is not None:
+            if blocked:
+                warn.setText(tr("⚠ {b}").format(b=blocked))
+            elif plan.already:
+                warn.setText(tr("이미 다듬은 이력: {a}").format(a=plan.already))
+            else:
+                warn.setText("")
 
     def trim_apply(self) -> None:
         if self.win.playback.trim_key is None or not self.trim_pending():

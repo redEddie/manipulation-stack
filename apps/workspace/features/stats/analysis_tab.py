@@ -2,11 +2,11 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QComboBox,
     QPushButton,
     QSlider,
     QSplitter,
@@ -17,9 +17,9 @@ from PyQt6.QtWidgets import (
 
 from mstack.data.episode_stats import STILL_VEL, TASK_DEV_LIMIT
 from mstack.gui.i18n import tr
-from mstack.gui.plot_widgets import BarStrip, Histogram, SeriesPlot
 
 from apps.workspace.shared.sizing import shrinkable_combo
+from mstack.gui.plot_widgets import BarStrip, Histogram, SeriesPlot
 
 
 def build_analysis_tab(win) -> QWidget:
@@ -76,31 +76,30 @@ def build_analysis_tab(win) -> QWidget:
 
     filt = QGroupBox(tr("큐레이션 후보"))
     fcol = QVBoxLayout(filt)
-    row = QHBoxLayout()
-    row.addWidget(QLabel(tr("기준")))
+    # 후보 목록의 **범위**(씬 → 지시문)는 왼쪽 패널이 정본이다 (Scene 콤보 +
+    # Instruction 목록). 여기에 따로 그룹 콤보를 두면 같은 축이 두 군데
+    # 생긴다 (조작자, 2026-09-11).
+    #
+    # **정렬은 남긴다.** 상황에 따라 이상치를 찾는 수단이다 (조작자,
+    # 2026-09-12): "늘어짐" 은 녹화를 늦게 끝낸 것을, "짧음" 은 2~3틱짜리를
+    # 위로 끌어올린다. 다만 기본은 **에피소드 순**이다 -- 왼쪽 목록·격자와
+    # 같은 순서라야 세 화면을 오갈 때 헷갈리지 않고, 기준을 바꾼 것이 눈에
+    # 띈다 (예전 기본값은 '급함' 이라 처음부터 다른 순서인 줄 모르고 볼 수
+    # 있었다).
+    sort_row = QHBoxLayout()
+    sort_row.addWidget(QLabel(tr("정렬")))
     win.rank_combo = QComboBox()
-    # 정렬 키는 전부 아래 표에 칼럼으로도 나온다 -- 정렬 기준을 바꿔야만
-    # 보이는 "점수" 칸이 있으면 지금 무슨 수를 보고 있는지 알 수 없다.
-    for label, key in (("평균과 차이 큰 순 = 급한 순 (권장)", "fast"),
-                       ("평균과 차이 작은 순 = 느린 순", "slow"),
-                       ("멈춤 비율 높은 순", "still"),
-                       ("길이 짧은 순", "short"),
-                       ("길이 긴 순", "long")):
-        win.rank_combo.addItem(tr(label), key)
+    shrinkable_combo(win.rank_combo)
+    for label, key in ((tr("에피소드 순"), None),
+                       (tr("급함"), "fast"),
+                       (tr("늘어짐"), "slow"),
+                       (tr("멈춤 많음"), "still"),
+                       (tr("짧음"), "short"),
+                       (tr("긺"), "long")):
+        win.rank_combo.addItem(label, key)
     win.rank_combo.currentIndexChanged.connect(win.stats_ops.refresh_rank_list)
-    row.addWidget(win.rank_combo, 1)
-    fcol.addLayout(row)
-
-    # 그룹(scene·문장) 필터 -- 편차는 이미 그룹 단위로 계산되지만, 후보
-    # 목록도 한 그룹만 놓고 보아야 "이 작업 안에서 어떤 테이크가 튀나"가
-    # 읽힌다 (파일 선택은 scene 단위까지만 좁혀 주었다).
-    grow = QHBoxLayout()
-    grow.addWidget(QLabel(tr("그룹")))
-    win.group_combo = QComboBox()
-    shrinkable_combo(win.group_combo)
-    win.group_combo.currentIndexChanged.connect(win.stats_ops.refresh_rank_list)
-    grow.addWidget(win.group_combo, 1)
-    fcol.addLayout(grow)
+    sort_row.addWidget(win.rank_combo, 1)
+    fcol.addLayout(sort_row)
 
     len_row = QHBoxLayout()
     len_row.addWidget(QLabel(tr("길이(초)")))
@@ -119,9 +118,9 @@ def build_analysis_tab(win) -> QWidget:
     fcol.addLayout(len_row)
 
     win.rank_tree = QTreeWidget()
-    win.rank_tree.setColumnCount(5)
+    win.rank_tree.setColumnCount(4)
     win.rank_tree.setHeaderLabels([tr("에피소드"), tr("평균과 차이"), tr("멈춤%"),
-                                    tr("길이"), tr("task")])
+                                    tr("길이")])
     win.rank_tree.setRootIsDecorated(False)
     win.rank_tree.setColumnWidth(0, 150)
     for c in range(1, 4):
@@ -132,8 +131,7 @@ def build_analysis_tab(win) -> QWidget:
                "+ 는 그 작업의 보통 테이크보다 급하게, - 는 느리게 움직인 것.\n"
                "±{d} 를 넘으면 빨강/파랑").format(d=TASK_DEV_LIMIT),
             tr("속도가 {v} rad/frame 미만이던 프레임 비율 — 망설임").format(v=STILL_VEL),
-            tr("에피소드 길이 (초)"),
-            tr("language instruction"))):
+            tr("에피소드 길이 (초)"))):
         win.rank_tree.headerItem().setToolTip(c, tip)
     win.rank_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
     win.rank_tree.itemSelectionChanged.connect(win.scene_planning.on_rank_selected)

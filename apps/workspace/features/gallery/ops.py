@@ -108,6 +108,12 @@ class GalleryOps:
                  if want is None or e["instruction_id"] == want]
 
         self.win._gallery_shown = shown
+        # Analysis 도 이 범위를 따른다. 여기서 불러야 하는 이유: 지시문 목록과
+        # Scene 콤보 변경은 **둘 다 이 함수로만** 들어오고, on_selection_changed
+        # 는 에피소드를 클릭했을 때만 불린다 -- 거기에만 걸면 지시문을 바꿔도
+        # 순위표가 옛것을 그대로 보여준다 (kimi 조사, 2026-09-12).
+        if self.win.session.stats:
+            self.win.stats_ops.refresh_rank_list()
         # 좁힌 집합이 바뀌면 선택은 무효다 -- 안 보이는 것이 선택된 채로
         # 남으면 판정·표시가 화면에 없는 에피소드에 걸린다.
         self.win._gallery_selected = []
