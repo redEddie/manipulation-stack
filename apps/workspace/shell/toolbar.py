@@ -307,7 +307,8 @@ def build_menu(win) -> None:
                 .format(d=TASK_DEV_LIMIT),
                 win.dataset_ops.on_select_jerky)
     m.addSeparator()
-    m.addAction(tr("선택 재판정 (성공↔실패)"), win.dataset_ops.on_relabel_selected)
+    m.addAction(tr("✓ Mark success"), win.dataset_ops.on_set_verdict_success)
+    m.addAction(tr("✗ Mark failed"), win.dataset_ops.on_set_verdict_failed)
     m.addAction(tr("선택 재생 (실로봇)"), win.playback_ops.on_replay_selected)
     m.addAction(tr("끝 다듬기 (Trim 탭에서)"), win.playback_ops.on_open_trim)
     m.addSeparator()

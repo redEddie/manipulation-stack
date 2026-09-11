@@ -57,6 +57,8 @@ h264 장치를 못 찾고(``h264_v4l2m2m``), mp4v 로 떨어지면 ``VIDEOWRITER
 from __future__ import annotations
 
 import os
+import hashlib
+import os
 import re
 from pathlib import Path
 
@@ -95,6 +97,31 @@ _IMAGE_NDIM = 4
 
 #: uid 안에 scene_id 가 들어가는 형식 -- ``EP-<scene>-<instr>-E<idx>``.
 _UID_RE = re.compile(r"^EP-([^-]+)-")
+
+
+def dataset_tag(dataset_root) -> str:
+    """데이터셋 뿌리를 구분하는 짧은 꼬리표. 캐시의 하위 디렉터리 이름이 된다.
+
+    **왜 필요한가.** ``episode_uid`` 는 한 데이터셋 안에서만 유일하다 --
+    ``EP-S000-I004-E000`` 은 어느 데이터셋에나 있을 수 있다. 캐시를 uid 로만
+    키하면 데이터 경로를 바꿨을 때 **다른 데이터셋의 영상을 보여준다.**
+    2026-09-11 에 실제로 그랬다: 경로가 ``libero_datasets/sangtae`` 로 바뀐
+    화면이 ``fr3-tabletop`` 의 클립을 틀고 있었다.
+
+    같은 이유로 무효화도 위험했다. scene 무효화는 ``EP-<scene>-*`` 글롭인데,
+    뿌리가 섞이면 **다른 데이터셋의 캐시를 지운다** -- 같은 날 fr3-tabletop 의
+    클립 120개가 두 번 사라진 것이 이것이었다.
+
+    이름을 그대로 쓰지 않고 경로 해시를 붙이는 이유는 폴더 이름이 겹칠 수
+    있어서다 (``a/scene`` 과 ``b/scene``). 이름은 사람이 읽으라고 남긴다.
+    """
+    p = Path(dataset_root).expanduser().resolve()
+    return f"{p.name}-{hashlib.sha1(str(p).encode()).hexdigest()[:8]}"
+
+
+def proxy_dir_for(dataset_root, base: Path = None) -> Path:
+    """이 데이터셋의 프록시가 쌓이는 곳. 호출부는 이것만 넘기면 된다."""
+    return Path(base or PROXY_DIR) / dataset_tag(dataset_root)
 
 
 def proxy_path(episode_uid: str, obs_key: str,

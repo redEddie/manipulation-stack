@@ -25,6 +25,18 @@ from mstack.data.dataset_schema import OBS_AGENTVIEW_RGB
 from mstack.scene.scene_format import EPISODE_GROUP_RE, list_scene_episodes
 
 THUMBS_DIR = state_dir() / "thumbs"
+
+
+def thumbs_dir_for(dataset_root, base: Path = None) -> Path:
+    """이 데이터셋의 썸네일이 쌓이는 곳.
+
+    프록시 클립과 같은 충돌이 여기에도 있었다 -- ``episode_uid`` 는 데이터셋
+    안에서만 유일해서, 데이터 경로를 바꾸면 다른 데이터셋의 썸네일을 보여주고
+    scene 무효화가 남의 캐시를 지웠다 (``proxy_clip.dataset_tag`` 참고).
+    """
+    from mstack.data.proxy_clip import dataset_tag
+
+    return Path(base or THUMBS_DIR) / dataset_tag(dataset_root)
 THUMB_WIDTH = 240
 
 
@@ -107,7 +119,7 @@ def reference_thumb(scene_path: Path, scene_id: str,
     return str(out)
 
 
-def invalidate_scene_caches(scene_id: str) -> dict:
+def invalidate_scene_caches(scene_id: str, dataset_root) -> dict:
     """한 scene 의 **파생 캐시 전부**를 무효화한다. ``{"thumbs", "proxies"}``.
 
     캐시가 둘(썸네일·프록시 클립)인데 무효화를 각각 부르게 두면 반드시 한쪽을
@@ -118,7 +130,7 @@ def invalidate_scene_caches(scene_id: str) -> dict:
     ``proxy_clip.invalidate_episode_proxies`` 를 쓴다 (썸네일은 첫 프레임이라
     트림에 변하지 않는다).
     """
-    from mstack.data.proxy_clip import invalidate_scene_proxies
+    from mstack.data.proxy_clip import invalidate_scene_proxies, proxy_dir_for
 
-    return {"thumbs": invalidate_scene_thumbs(scene_id),
-            "proxies": invalidate_scene_proxies(scene_id)}
+    return {"thumbs": invalidate_scene_thumbs(scene_id, thumbs_dir_for(dataset_root)),
+            "proxies": invalidate_scene_proxies(scene_id, proxy_dir_for(dataset_root))}

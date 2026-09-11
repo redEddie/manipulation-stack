@@ -30,7 +30,10 @@ from mstack.data.proxy_clip import encode_clip, proxy_path  # noqa: E402
 import mstack.gui.clip_grid as cg  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="clipgrid_"))
-cg.proxy_path = lambda uid, cam, d=TMP: proxy_path(uid, cam, d)
+# 몽키패치하지 않는다 -- 격자가 자기 proxy_dir 을 갖는 것이 실제 경로다.
+# 데이터셋마다 캐시 자리가 다르기 때문이다: episode_uid 는 데이터셋 안에서만
+# 유일해서, 한 곳에 섞으면 다른 데이터셋의 영상이 나온다 (2026-09-11 에 실제로
+# libero_datasets/sangtae 를 보던 화면이 fr3-tabletop 의 클립을 틀었다).
 
 
 def make(uid, n_frames):
@@ -54,6 +57,7 @@ print(f"1. 합성 클립 {SHORT}프레임 / {LONG}프레임 + 프록시 없는 �
 
 # ------------------------------------------------------- 로드 · 없는 프록시
 g = cg.ClipGrid(cols=2, rows=2)
+g.proxy_dir = TMP
 g.resize(400, 300)
 g.set_episodes(eps)
 opened = [t for t in g.tiles if t.cap is not None]
@@ -72,6 +76,7 @@ print("2. 프록시 없는 타일이 죽지 않고 그렇다고 말함 OK")
 # 똑같아 보인다 -- 둘 다 안 움직이는 그림이라서다. 3프레임짜리를 찾는 것이
 # 이 화면의 목적 중 하나인데 그것이 빈 칸에 묻힌다.
 g2 = cg.ClipGrid(cols=2, rows=2)
+g2.proxy_dir = TMP
 g2.resize(400, 300)
 g2.set_episodes([eps[0], eps[1], make("EP-S000-I000-E002", 30),
                  make("EP-S000-I000-E003", 30)])

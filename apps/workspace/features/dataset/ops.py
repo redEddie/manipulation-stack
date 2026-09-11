@@ -260,57 +260,49 @@ class DatasetOps:
             tr("실패 {n}개 선택됨 — '에피소드 삭제'로 한 번에 지웁니다.").format(n=n)
             if n else tr("실패로 표시된 에피소드가 없습니다."))
 
-    # ------------------------------------------------------------------ relabel
-    def on_relabel_selected(self) -> None:
-        """scene 에피소드의 quality_status 를 성공↔실패로 뒤집는다.
+    # ------------------------------------------------------------------ verdict
+    def on_set_verdict_success(self) -> None:
+        """Set the selected episodes' verdict to success (not a toggle)."""
+        self._apply_verdict(True)
 
-        scene 체계의 큐레이션 수단이다 (삭제 없음, 변환이 success 만 내보냄).
-        소유권 규칙은 삭제와 동일: 세션이 파일을 쥐고 있으면 saver 스레드
-        경유, 아니면 직접 쓴다 (SceneWriter.set_quality_status 와 같은 필드).
-        success/failed 이외의 상태(bad_data 등)는 건드리지 않는다.
-        """
-        by_file: dict = {}
-        for item in self.win.dataset_tree.selectedItems():
-            if item.parent() is None:
-                continue
-            p = Path(item.parent().data(0, Qt.ItemDataRole.UserRole))
-            by_file.setdefault(p, []).append(item.data(0, Qt.ItemDataRole.UserRole))
-        by_file = {p: v for p, v in by_file.items() if p.name.startswith("scene_")}
-        if not by_file:
-            QMessageBox.information(
-                self.win, tr("선택 필요"),
-                tr("재판정할 scene 에피소드를 선택하세요 (legacy 파일은 세션 중 "
-                   "판정 버튼을 사용)."))
-            return
-        if self.relabel_episodes(by_file):
-            self.refresh_dataset_tree()
+    def on_set_verdict_failed(self) -> None:
+        """Set the selected episodes' verdict to failed (not a toggle)."""
+        self._apply_verdict(False)
 
-    def on_gallery_relabel(self) -> None:
+    def _apply_verdict(self, success: bool) -> None:
+        """Selection comes from the grid (gallery_ops.selected_keys) --
+        that is the single source of truth for selection. After the
+        verdict is written, redraw both the tree and the gallery."""
         by_file: dict = {}
         for path, name in self.win.gallery_ops.selected_keys():
             by_file.setdefault(Path(path), []).append(name)
         if not by_file:
             QMessageBox.information(self.win, tr("선택 필요"),
-                                    tr("재판정할 에피소드를 선택하세요."))
+                                    tr("판정할 에피소드를 선택하세요."))
             return
-        if self.relabel_episodes(by_file):
-            self.win.gallery_ops.refresh_gallery()
+        if self.set_verdict(by_file, success):
             self.refresh_dataset_tree()
+            self.win.gallery_ops.refresh_gallery()
 
-    def relabel_episodes(self, by_file: dict) -> bool:
-        """재판정 공용 코어 -- Dataset 트리와 Gallery 가 같은 것을 쓴다.
+    def set_verdict(self, by_file: dict, success: bool) -> bool:
+        """Shared verdict core -- SETS the given value (does not flip).
 
-        세션이 파일을 쥐고 있으면 HDF5 를 다시 열지 않는다. 같은 프로세스에서
-        쓰기 중인 파일을 재오픈하면 h5py 가 거부하므로, 대신 saver 가 이미 연
-        파일 핸들을 재사용하도록 큐 명령으로 복낸다. 판정값은 saver 가 채워주는
-        ``active_episode_cache`` 에서 읽는다.
+        With many episodes selected the outcome must be predictable, so
+        the success argument decides regardless of the current value.
+        Ownership rule is the same as deletion: when the session holds
+        the file, the command goes through the saver queue
+        (cmd_set_episode_success) instead of reopening the HDF5; the
+        verdict is read from the active_episode_cache the saver
+        maintains. States other than success/failed (bad_data etc.)
+        are left untouched.
         """
         busy = self.busy_reason()
         if busy:
-            QMessageBox.warning(self.win, tr("재판정 불가"),
+            QMessageBox.warning(self.win, tr("판정 불가"),
                                 tr("{job}이(가) 진행 중입니다.").format(job=busy))
             return False
-        flipped = skipped_state = skipped_cache = 0
+        new_q = "success" if success else "failed"
+        set_n = skipped_state = skipped_cache = 0
         cache: dict[str, dict] = {}
         if self.win.session.active_file_path is not None and self.win.session.active_episode_cache is not None:
             cache = {e["name"]: e for e in self.win.session.active_episode_cache}
@@ -318,54 +310,50 @@ class DatasetOps:
             owned = self.win.session.active_file_path is not None and path == self.win.session.active_file_path
             try:
                 if owned:
-                    # 세션 소유 파일: h5py 재오픈 없이 캐시에서 읽고 saver 큐로 쓴다.
+                    # Session-owned file: read from cache, write via the saver queue.
                     for name in names:
                         e = cache.get(name)
                         if e is None:
                             skipped_cache += 1
-                            self.win.log(f"[재판정] {path.name} / {name}: 캐시에 없어 건너뜀")
+                            self.win.log(f"[판정] {path.name} / {name}: 캐시에 없어 건너뜀")
                             continue
                         q = str(e.get("quality_status", ""))
                         if "quality_status" not in e:
-                            # 캐시 요약에 quality_status 가 없으면 success 로 판단.
-                            success = e.get("success")
-                            if success is True:
+                            # Cache summary without quality_status: fall back to success.
+                            s = e.get("success")
+                            if s is True:
                                 q = "success"
-                            elif success is False:
+                            elif s is False:
                                 q = "failed"
                         if q not in ("success", "failed"):
                             skipped_state += 1
                             continue
-                        new_ok = q != "success"
-                        self.win.worker.cmd_set_episode_success(name, new_ok)
-                        flipped += 1
+                        self.win.worker.cmd_set_episode_success(name, success)
+                        set_n += 1
                 else:
-                    # 비소유 파일. 호출 경로(on_relabel_selected 의 scene 필터,
-                    # scene 전용 Gallery)가 scene 파일만 넘기므로 legacy 분기는
-                    # 두지 않는다 -- 도달 불가한 분기는 규약이 어긋난 채 썩는다.
+                    # Not owned. Callers (verdict buttons, Dataset menu) only
+                    # pass scene files, so there is deliberately no legacy branch.
                     with h5py.File(path, "a") as f:
                         for name in names:
                             q = str(f[name].attrs.get("quality_status", ""))
                             if q not in ("success", "failed"):
                                 skipped_state += 1
                                 continue
-                            new_ok = q != "success"
-                            f[name].attrs["quality_status"] = (
-                                "success" if new_ok else "failed")
-                            f[name].attrs["success"] = new_ok
-                            flipped += 1
+                            f[name].attrs["quality_status"] = new_q
+                            f[name].attrs["success"] = success
+                            set_n += 1
             except Exception as e:  # noqa: BLE001
-                QMessageBox.critical(self.win, tr("재판정 실패"),
+                QMessageBox.critical(self.win, tr("판정 실패"),
                                      f"{path.name}\n{type(e).__name__}: {e}")
                 return False
-        parts = [f"[재판정] {flipped}개 뒤집음"]
+        parts = [f"[판정] {set_n} -> {new_q}"]
         if skipped_state:
             parts.append(f"{skipped_state}개 건너뜀 (success/failed 아님)")
         if skipped_cache:
             parts.append(f"{skipped_cache}개 건너뜀 (세션 캐시에 없음)")
         self.win.log(", ".join(parts))
-        # 판정이 바뀌면 순위표의 빨강(실패) 표시도 바뀌어야 한다.
-        if flipped:
+        # A changed verdict changes the red (failed) marks in the rank list too.
+        if set_n:
             self.win.stats_ops.mark_stats_stale()
         return True
 
@@ -581,7 +569,7 @@ class DatasetOps:
                     # (삭제는 이미 성공했다).
                     try:
                         sid = read_scene_metadata(path).scene_id
-                        c = invalidate_scene_caches(sid)
+                        c = invalidate_scene_caches(sid, self.dataset_root())
                         if c["thumbs"] or c["proxies"]:
                             self.win.log(
                                 f"[캐시] {path.name}: 썸네일 {c['thumbs']}개 · "
@@ -623,7 +611,8 @@ class DatasetOps:
                 self.win, tr("파일 없음"),
                 tr("{r} 에 .hdf5 가 없습니다.").format(r=self.dataset_root()))
             return
-        ProxyBuildDialog(self.win, paths, self.busy_reason()).exec()
+        ProxyBuildDialog(self.win, paths, self.busy_reason(),
+                         self.win.gallery_ops.proxy_dir()).exec()
 
     def on_delete_file(self) -> None:
         """Deletes a whole <task>_demo.hdf5. Never offered for the file a

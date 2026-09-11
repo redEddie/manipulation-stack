@@ -31,7 +31,12 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from mstack.data.proxy_clip import DEFAULT_CRF, DEFAULT_SCALE, scan_file
+from mstack.data.proxy_clip import (
+    DEFAULT_CRF,
+    DEFAULT_SCALE,
+    PROXY_DIR,
+    scan_file,
+)
 from mstack.gui.i18n import tr
 from mstack.gui.workers import ProxyBuildWorker
 
@@ -52,9 +57,11 @@ _SEC_PER_CLIP = 10.2 * 60 / 480
 
 
 class ProxyBuildDialog(QDialog):
-    def __init__(self, win, paths, busy_label: str = "") -> None:
+    def __init__(self, win, paths, busy_label: str = "", proxy_dir=None) -> None:
         super().__init__(win)
         self.win = win
+        # 데이터셋마다 캐시 자리가 다르다 (proxy_clip.dataset_tag).
+        self.proxy_dir = proxy_dir
         self.worker = None
         self.setWindowTitle(tr("프록시 클립 만들기"))
         self.resize(720, 520)
@@ -124,7 +131,7 @@ class ProxyBuildDialog(QDialog):
             it.setText(0, p.name)
             it.setData(0, Qt.ItemDataRole.UserRole, str(p))
             try:
-                sc = scan_file(p)
+                sc = scan_file(p, self.proxy_dir or PROXY_DIR)
                 n = len(sc["missing"])
                 # 0 의 뜻이 둘이다 -- 다 만들었거나, 파일이 비었거나.
                 note = "" if n else (tr("이미 있음") if sc["episodes"]
@@ -178,7 +185,8 @@ class ProxyBuildDialog(QDialog):
         self.crf_spin.setEnabled(False)
         self.start_btn.setText(tr("중단"))
         self.worker = ProxyBuildWorker(
-            paths, self.scale_spin.value() / 100.0, self.crf_spin.value(), self)
+            paths, self.scale_spin.value() / 100.0, self.crf_spin.value(),
+            self.proxy_dir or PROXY_DIR, self)
         self.worker.progress.connect(self.on_progress)
         self.worker.file_done.connect(self.on_file_done)
         self.worker.done.connect(self.on_done)

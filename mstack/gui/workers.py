@@ -259,9 +259,11 @@ class ProxyBuildWorker(QThread):
     #: 전부 끝났을 때 -- {"made", "failed", "bytes", "stopped"}
     done = pyqtSignal(dict)
 
-    def __init__(self, paths, scale: float, crf: int, parent=None) -> None:
+    def __init__(self, paths, scale: float, crf: int, proxy_dir=None,
+                 parent=None) -> None:
         super().__init__(parent)
         self.paths = [str(p) for p in paths]
+        self.proxy_dir = proxy_dir
         self.scale = float(scale)
         self.crf = int(crf)
         self._stop = False
@@ -272,7 +274,7 @@ class ProxyBuildWorker(QThread):
         self._stop = True
 
     def run(self) -> None:
-        from mstack.data.proxy_clip import build_file, plan_file
+        from mstack.data.proxy_clip import PROXY_DIR, build_file, plan_file
 
         # 전체 개수를 먼저 센다. 진행바가 "남은 일" 을 알아야 하고, plan_file
         # 은 이미지 없이 attrs 만 읽으므로 싸다.
@@ -280,7 +282,7 @@ class ProxyBuildWorker(QThread):
         total = 0
         for p in self.paths:
             try:
-                n = len(plan_file(p))
+                n = len(plan_file(p, self.proxy_dir) if self.proxy_dir else plan_file(p))
             except Exception:  # noqa: BLE001 -- 못 여는 파일은 0개로 두고 넘어간다
                 n = 0
             per_file[p] = n
@@ -300,6 +302,7 @@ class ProxyBuildWorker(QThread):
 
             try:
                 r = build_file(p, scale=self.scale, crf=self.crf,
+                               proxy_dir=self.proxy_dir or PROXY_DIR,
                                progress=_prog, should_stop=lambda: self._stop)
             except Exception as e:  # noqa: BLE001 -- 한 파일이 전체를 멈추지 않는다
                 r = {"made": 0, "failed": per_file[p], "bytes": 0,

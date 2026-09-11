@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QListWidgetItem
+
 from mstack.gui.i18n import tr
 from mstack.gui.workers import GalleryLoadWorker
 from mstack.scene.scene_format import iter_scene_files
@@ -58,51 +61,52 @@ class GalleryOps:
         if path != self.win.gallery_scene_combo.currentData():
             return  # 로드 중 scene 을 바꿨다
         self.win._gallery_episodes = episodes
-        # instruction 필터 항목 재구성 (선택 유지)
-        cur = self.win.gallery_filter_combo.currentData()
-        self.win.gallery_filter_combo.blockSignals(True)
-        self.win.gallery_filter_combo.clear()
-        self.win.gallery_filter_combo.addItem(tr("(모든 instruction)"), None)
-        for iid, instr in sorted({(e["instruction_id"], e["instruction"])
-                                  for e in episodes}):
-            self.win.gallery_filter_combo.addItem(f"{iid} · {instr[:44]}", iid)
-        idx = self.win.gallery_filter_combo.findData(cur)
-        self.win.gallery_filter_combo.setCurrentIndex(max(0, idx))
-        self.win.gallery_filter_combo.blockSignals(False)
+        # instruction 목록 재구성 (선택 유지)
+        lst = self.win.instruction_list
+        cur = lst.currentItem()
+        cur_iid = cur.data(Qt.ItemDataRole.UserRole) if cur else None
+        counts: dict = {}
+        for e in episodes:
+            counts[e["instruction_id"]] = counts.get(e["instruction_id"], 0) + 1
+        lst.blockSignals(True)
+        try:
+            lst.clear()
+            first = QListWidgetItem(tr("(all instructions)"))
+            first.setData(Qt.ItemDataRole.UserRole, None)
+            lst.addItem(first)
+            for iid, instr in sorted({(e["instruction_id"], e["instruction"])
+                                      for e in episodes}):
+                it = QListWidgetItem(f"{iid}  {instr[:40]}  {counts[iid]}")
+                it.setData(Qt.ItemDataRole.UserRole, iid)
+                lst.addItem(it)
+            for row in range(lst.count()):
+                it = lst.item(row)
+                if it.data(Qt.ItemDataRole.UserRole) == cur_iid:
+                    lst.setCurrentItem(it)
+                    break
+            else:
+                lst.setCurrentItem(lst.item(0))
+        finally:
+            lst.blockSignals(False)
         self._ref_thumb = ref_thumb
         self.apply_gallery_filter()
 
     def apply_gallery_filter(self, *_args) -> None:
-        """지시문·길이로 목록을 줄여 격자에 넘긴다.
+        """지시문으로 목록을 줄여 격자에 넘긴다.
 
         큐레이션은 **먼저 줄이고 그 다음에 본다.** 60개를 한꺼번에 훑는 것이
-        아니라 (씬 → 지시문 → 길이) 로 좁혀 12칸에 담기게 만든 뒤, 그 12개를
+        아니라 (씬 → 지시문) 으로 좁혀 12칸에 담기게 만든 뒤, 그 12개를
         나란히 돌려 이상한 것을 고른다.
         """
-        from apps.workspace.features.gallery.tab import SHORT_FRAMES
-
-        want = self.win.gallery_filter_combo.currentData()
-        mode = self.win.gallery_len_combo.currentData()
+        it = self.win.instruction_list.currentItem()
+        want = it.data(Qt.ItemDataRole.UserRole) if it else None
         eps = self.win._gallery_episodes
-        lens = sorted(e.get("num_samples", 0) for e in eps)
-        # "긴 것" 은 고정값이 아니라 이 씬의 분포로 정한다 -- 작업마다 정상
-        # 길이가 다르므로 절대 프레임 수로 자르면 어떤 씬에서는 전부 걸린다.
-        long_cut = lens[int(len(lens) * 0.8)] if lens else 0
 
-        shown = []
-        for e in eps:
-            if want is not None and e["instruction_id"] != want:
-                continue
-            n = e.get("num_samples", 0)
-            if mode == "short" and n > SHORT_FRAMES:
-                continue
-            if mode == "long" and n <= long_cut:
-                continue
-            if mode == "failed" and e.get("quality_status") == "success":
-                continue
-            shown.append(e)
+        shown = [e for e in eps
+                 if want is None or e["instruction_id"] == want]
 
         self.win._gallery_shown = shown
+        self.win.gallery_grid.proxy_dir = self.proxy_dir()
         self.win.gallery_grid.set_episodes(
             shown, self.win.gallery_cam_combo.currentData())
         self._sync_pager()
@@ -115,12 +119,18 @@ class GalleryOps:
                "Ctrl+클릭: 여러 개{note}").format(
                    s=len(shown), n=len(eps), ok=n_ok, note=note))
 
-    @staticmethod
-    def _has_clip(e) -> bool:
+    def proxy_dir(self):
+        """지금 데이터 경로의 프록시 디렉터리. 캐시 키에 데이터셋이 섞이면
+        다른 데이터셋의 영상이 나온다 (proxy_clip.dataset_tag 참고)."""
+        from mstack.data.proxy_clip import proxy_dir_for
+
+        return proxy_dir_for(self.win.dataset_ops.dataset_root())
+
+    def _has_clip(self, e) -> bool:
         from mstack.data.proxy_clip import proxy_path
 
         uid = e.get("episode_uid", "")
-        return bool(uid) and proxy_path(uid, "agentview_rgb").exists()
+        return bool(uid) and proxy_path(uid, "agentview_rgb", self.proxy_dir()).exists()
 
     # ------------------------------------------------------------------ 재생
     def toggle_play(self) -> None:
@@ -129,8 +139,16 @@ class GalleryOps:
             g.stop()
             self.win.gallery_play_btn.setText(tr("▶ Play"))
         else:
-            g.start()
+            mult = self.win.gallery_speed_combo.currentData() or 1.0
+            g.start(20.0 * float(mult))
             self.win.gallery_play_btn.setText(tr("■ Stop"))
+
+    def on_speed_changed(self, *_args) -> None:
+        """배속 변경. 타이머 주기만 바꾼다 -- 프레임을 건너뛰지 않는다."""
+        g = self.win.gallery_grid
+        mult = self.win.gallery_speed_combo.currentData() or 1.0
+        if g.playing:
+            g.start(20.0 * float(mult))
 
     def rewind(self) -> None:
         self.win.gallery_grid.rewind_all()

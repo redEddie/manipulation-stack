@@ -225,7 +225,8 @@ class PlaybackOps:
         # uid 도 번호도 안 바뀌었으니 scene 통째가 아니라 이 에피소드만.
         try:
             uid = episode_uid_at(path, demo)
-            n_px = invalidate_episode_proxies(uid) if uid else 0
+            n_px = (invalidate_episode_proxies(
+                uid, self.win.gallery_ops.proxy_dir()) if uid else 0)
             if n_px:
                 self.win.log(f"[캐시] {uid}: 프록시 {n_px}개 무효화")
         except Exception as e:  # noqa: BLE001 -- 캐시 정리 실패가 트림 실패는 아니다
@@ -482,7 +483,8 @@ class PlaybackOps:
                     # 파일은 saver 가 잠그고 있다 -- 다시 열지 않고 세션 설정에서
                     # scene_id 를 얻는다 (_session_scene_id).
                     sid = self.win.scene_ops.session_scene_id()
-                    c = invalidate_scene_caches(sid) if sid else None
+                    c = (invalidate_scene_caches(
+                        sid, self.win.dataset_ops.dataset_root()) if sid else None)
                     if c and (c["thumbs"] or c["proxies"]):
                         self.win.log(f"[캐시] {sid}: 썸네일 {c['thumbs']}개 · "
                                      f"프록시 {c['proxies']}개 무효화")

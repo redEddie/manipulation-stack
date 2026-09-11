@@ -1,5 +1,8 @@
-"""에피소드 재판정 경로 검증.
+"""에피소드 판정(set_verdict) 경로 검증.
 
+
+2026-09-11 계약 변경: 성공<->실패 **뒤집기**에서 주어진 값으로 **정하기**로
+바꿨다 (뒤집기는 다중 선택의 결과를 예측할 수 없어서). 검증 내용은 같다:
 - owned 파일(세션이 쥔 파일): h5py.File 재오픈 없이 saver 큐로만 전달.
 - 캐시에 없는 이름: 건너뜀 집계 + 로그, 예외 없음.
 - 비소유 파일: scene 직접 수정 (호출 경로가 scene 만 넘긴다 -- legacy 분기 없음).
@@ -72,8 +75,8 @@ h5py.File = fail_h5py_File
 try:
     win.session.active_file_path = scene
     win.session.active_episode_cache = eps
-    ok = win.dataset_ops.relabel_episodes(
-        {scene: [success_ep["name"], bad_data_ep["name"]]})
+    ok = win.dataset_ops.set_verdict(
+        {scene: [success_ep["name"], bad_data_ep["name"]]}, False)
     assert ok
     # bad_data 는 success/failed 가 아니므로 skipped 되고 saver 호출은 1개뿐
     assert len(stub_saver.calls) == 1
@@ -88,7 +91,11 @@ stub_saver.calls.clear()
 logs: list = []
 win.log = lambda msg: logs.append(str(msg))
 win.session.active_episode_cache = [success_ep]
-ok = win.dataset_ops.relabel_episodes({scene: [success_ep["name"], bad_data_ep["name"]]})
+# 2026-09-11 계약 변경: 뒤집기(relabel_episodes) 에서 set_verdict 로 바꿨다.
+# 뒤집기는 여러 개를 고르면 결과를 예측할 수 없어(성공 3 + 실패 2 를 고르면
+# 성공 2 + 실패 3) 명시 값으로 **정하는** 방식이 됐다 -- 아래 단언도 옛
+# "바뀌었는지"에서 "정한 값으로 바뀌었는지"를 보는 것으로 갱신했다.
+ok = win.dataset_ops.set_verdict({scene: [success_ep["name"], bad_data_ep["name"]]}, False)
 assert ok
 assert len(stub_saver.calls) == 1
 assert stub_saver.calls[0] == (success_ep["name"], False)
@@ -99,21 +106,21 @@ assert any("1개 건너뜀 (세션 캐시에 없음)" in m for m in logs), logs
 print("2 통과: 캐시에 없는 이름은 건너뜀 집계 + 로그")
 
 # ---- 3. 비소유 scene 파일 경로 회귀 ----
-# legacy 는 이 함수에 도달하지 않는다 (_on_relabel_selected 의 scene 필터,
-# scene 전용 Gallery) -- 도달 불가 분기를 검증하는 테스트는 두지 않는다.
+# 비소유 직접 쓰기 경로. (legacy 는 호출 경로가 scene 만 넘기므로 이 함수에
+# 도달하지 않는다 -- 도달 불가 분기를 검증하는 테스트는 두지 않는다.)
 win.session.active_file_path = None
 win.session.active_episode_cache = None
 
 eps = list_scene_episodes(scene)
 target_scene = eps[0]
 old_q = target_scene["quality_status"]
-ok = win.dataset_ops.relabel_episodes({scene: [target_scene["name"]]})
+want = old_q != "success"
+ok = win.dataset_ops.set_verdict({scene: [target_scene["name"]]}, want)
 assert ok
 eps_after = list_scene_episodes(scene)
 new_q = next(e["quality_status"] for e in eps_after
              if e["name"] == target_scene["name"])
-assert new_q != old_q
-assert new_q in ("success", "failed")
+assert new_q == ("success" if want else "failed")
 print("3 통과: 비소유 scene 파일 직접 수정 회귀")
 
 print("\n재판정 경로 검증 통과")

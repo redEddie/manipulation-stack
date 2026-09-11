@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from mstack.data.proxy_clip import proxy_path
+from mstack.data.proxy_clip import PROXY_DIR, proxy_path
 
 #: 기본 격자 (열 x 행). 조작자 요구: 최소 10개가 한 눈에 (2026-09-10).
 DEFAULT_COLS, DEFAULT_ROWS = 4, 3
@@ -114,7 +114,7 @@ class _Tile(QFrame):
         self.clicked.emit(self, ev.modifiers())
 
     # ------------------------------------------------------------------ 클립
-    def load(self, ep, camera: str) -> None:
+    def load(self, ep, camera: str, proxy_dir=None) -> None:
         """``ep`` 는 ``list_scene_episodes`` 가 주는 dict 그대로. None 이면 빈 타일.
 
         키를 번역하지 않는다 -- 갤러리·트리·통계가 모두 그 모양을 쓰는데
@@ -137,7 +137,7 @@ class _Tile(QFrame):
             self._restyle()
             return
         uid = ep.get("episode_uid", "")
-        p = proxy_path(uid, camera)
+        p = proxy_path(uid, camera, proxy_dir or PROXY_DIR)
         if not uid or not Path(p).exists():
             self.view.setText("no proxy")
             self.view.setStyleSheet("background:#111; color:#666;")
@@ -255,6 +255,10 @@ class ClipGrid(QWidget):
         super().__init__(parent)
         self.cols, self.rows = cols, rows
         self.camera = "agentview_rgb"
+        #: 이 격자가 볼 프록시 디렉터리. 데이터셋마다 다르다 -- uid 는 데이터셋
+        #: 안에서만 유일해서, 한 곳에 섞으면 다른 데이터셋의 영상이 나온다
+        #: (mstack.data.proxy_clip.dataset_tag 참고). 창이 꽂는다.
+        self.proxy_dir = None
         self.episodes: list = []
         self.page = 0
         self._rest = 0
@@ -304,7 +308,8 @@ class ClipGrid(QWidget):
         start = self.page * self.per_page
         chunk = self.episodes[start:start + self.per_page]
         for i, t in enumerate(self.tiles):
-            t.load(chunk[i] if i < len(chunk) else None, self.camera)
+            t.load(chunk[i] if i < len(chunk) else None, self.camera,
+                   self.proxy_dir)
             t.undim()
             t.selected = False
             t.marked = bool(self.is_marked and t.ep is not None

@@ -6,13 +6,13 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QListWidget,
     QPushButton,
     QTreeWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from mstack.data.episode_stats import TASK_DEV_LIMIT
 from mstack.gui.i18n import tr
 
 
@@ -43,11 +43,21 @@ def build_dataset(win) -> QWidget:
         srow = QHBoxLayout()
         srow.addWidget(QLabel(tr("Scene")))
         srow.addWidget(win.gallery_scene_combo, 1)
+        b = QPushButton("↻")
+        b.setMaximumWidth(32)
+        b.setToolTip(tr("scene 목록·썸네일 새로고침"))
+        b.clicked.connect(win.gallery_ops.refresh_gallery_scenes)
+        srow.addWidget(b)
         col.addLayout(srow)
-        irow = QHBoxLayout()
-        irow.addWidget(QLabel(tr("Instruction")))
-        irow.addWidget(win.gallery_filter_combo, 1)
-        col.addLayout(irow)
+        # 지시문은 **항상 펼쳐진 목록**이다 (2026-09-11) -- 콤보는 닫힌
+        # 상태로 놓으면 지금 무엇이 골라졌는지, 또 어떤 지시문이 있는지가
+        # 안 보인다. 라벨은 목록 위 한 줄 (가로 배치 말고 세로).
+        col.addWidget(QLabel(tr("Instruction")))
+        win.instruction_list = QListWidget()
+        win.instruction_list.setMaximumHeight(160)     # 4~8줄
+        win.instruction_list.currentItemChanged.connect(
+            win.gallery_ops.apply_gallery_filter)
+        col.addWidget(win.instruction_list)
     else:
         col.addWidget(QLabel(tr("Scene 목록은 Gallery 탭을 연 뒤 나타납니다")))
     # 비활성 '에피소드 검색' 입력칸을 뺐다 (2026-09-06). 검색/필터는 아직
@@ -77,15 +87,10 @@ def build_dataset(win) -> QWidget:
     # 패널에서는 뺐다 (2026-09-11) -- 삭제로 가는 문을 하나로 모으는 것이
     # 목적이므로 이 행에는 읽기/고르기만 남긴다.
     row = QHBoxLayout()
-    for text, slot, tip in (("새로고침", win.dataset_ops.refresh_dataset_tree,
-                             "데이터 폴더를 다시 읽어 목록을 새로 그립니다."),
-                            ("실패만 선택", win.dataset_ops.on_select_failed,
-                             "success=False 로 표시된 에피소드를 모두 선택합니다.\n"
-                             "선택만 하고 지우지 않습니다.")):
-        b = QPushButton(tr(text))
-        b.setToolTip(tr(tip).format(d=TASK_DEV_LIMIT))
-        b.clicked.connect(slot)
-        row.addWidget(b)
+    b = QPushButton(tr("새로고침"))
+    b.setToolTip(tr("데이터 폴더를 다시 읽어 목록을 새로 그립니다."))
+    b.clicked.connect(win.dataset_ops.refresh_dataset_tree)
+    row.addWidget(b)
     col.addLayout(row)
 
     line = QFrame()
@@ -101,13 +106,22 @@ def build_dataset(win) -> QWidget:
     trim_btn.clicked.connect(win.playback_ops.on_open_trim)
     col.addWidget(trim_btn)
 
-    relabel_btn = QPushButton(tr("선택 재판정 (성공↔실패)"))
-    relabel_btn.setToolTip(tr(
-        "scene 에피소드 전용. 선택한 에피소드의 quality_status 를 성공↔실패로 "
-        "뒤집습니다.\nscene 체계에서 삭제를 대신하는 큐레이션 수단입니다 -- "
-        "변환은 success 만 내보냅니다.\nbad_data 등 다른 상태는 건드리지 않습니다."))
-    relabel_btn.clicked.connect(win.dataset_ops.on_relabel_selected)
-    col.addWidget(relabel_btn)
+    vrow = QHBoxLayout()
+    win.verdict_ok_btn = QPushButton(tr("✓ Mark success"))
+    win.verdict_ok_btn.setToolTip(tr(
+        "선택한 에피소드의 판정을 성공/실패로 **정합니다**. 뒤집기가 아니라서 "
+        "여러 개를 골라도 결과가 하나로 정해집니다. 되돌리려면 반대쪽을 누르세요. "
+        "scene 변환은 success 만 내보냅니다."))
+    win.verdict_ok_btn.clicked.connect(win.dataset_ops.on_set_verdict_success)
+    vrow.addWidget(win.verdict_ok_btn)
+    win.verdict_fail_btn = QPushButton(tr("✗ Mark failed"))
+    win.verdict_fail_btn.setToolTip(tr(
+        "선택한 에피소드의 판정을 성공/실패로 **정합니다**. 뒤집기가 아니라서 "
+        "여러 개를 골라도 결과가 하나로 정해집니다. 되돌리려면 반대쪽을 누르세요. "
+        "scene 변환은 success 만 내보냅니다."))
+    win.verdict_fail_btn.clicked.connect(win.dataset_ops.on_set_verdict_failed)
+    vrow.addWidget(win.verdict_fail_btn)
+    col.addLayout(vrow)
 
     # 재생 중에는 이 버튼 자체가 '■ 재생 중단' 으로 바뀐다 -- 별도 중단
     # 버튼은 화면 밖으로 밀려 안 보이는 일이 있었다.
@@ -124,6 +138,15 @@ def build_dataset(win) -> QWidget:
     # 문이 넷이던 것을 하나로 모으는 것이 목적 -- 격자·트리·순위표 어디서든
     # "삭제 목록에 넣기"는 자유롭고, 실제로 지우는 것은 아래 빨간 버튼
     # 하나뿐이다. 표시는 되돌릴 수 있으니 즉시, 실행은 장바구니를 거친다.
+    # 삭제 표시는 격자 선택과 한 쌍이다 (2026-09-11) -- 갤러리 탭에서
+    # 옮겨 왔다. 실제 삭제는 아래 빨간 버튼 하나뿐.
+    win.mark_btn = QPushButton(tr("🗑 Mark for delete"))
+    win.mark_btn.setToolTip(tr(
+        "선택한 에피소드를 삭제 목록에 넣습니다. 이미 들어 있으면 "
+        "뺍니다. 지금 지우지는 않습니다 -- 실행은 왼쪽 패널의 "
+        "삭제 실행 하나뿐입니다."))
+    win.mark_btn.clicked.connect(win.gallery_ops.toggle_mark)
+    col.addWidget(win.mark_btn)
     win.basket_label = QLabel("")
     win.basket_label.setStyleSheet("color:#c0392b;")
     win.basket_label.setWordWrap(True)

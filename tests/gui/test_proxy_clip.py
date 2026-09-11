@@ -120,3 +120,39 @@ assert not proxy_path("EP-S003-I001-E000", "eye_in_hand_rgb", TMP).exists()
 print(f"7. scene 통째 무효화 ({removed}개, 다른 scene 은 보존) OK")
 
 print("\n프록시 클립 캐시 통과")
+
+
+# --------------------------------------- 데이터셋마다 캐시 자리가 달라야 한다
+# episode_uid 는 **한 데이터셋 안에서만** 유일하다. 두 데이터 경로에 같은
+# scene_id 가 있으면 uid 가 그대로 겹친다. 2026-09-11 에 실제로 그랬다:
+# 데이터 경로를 libero_datasets/sangtae 로 바꾼 화면이 fr3-tabletop 의 클립을
+# 틀고 있었고(둘 다 EP-S000-I004-E000 을 갖는다), scene 무효화가
+# EP-S000-* 글롭으로 **다른 데이터셋의 클립 120개를 두 번 지웠다.**
+from mstack.data.proxy_clip import dataset_tag, proxy_dir_for  # noqa: E402
+
+a = "/data/sets/fr3-tabletop"
+b = "/data/sets/sangtae"
+assert dataset_tag(a) != dataset_tag(b)
+assert proxy_dir_for(a, TMP) != proxy_dir_for(b, TMP)
+# 이름이 같아도 경로가 다르면 갈린다
+assert dataset_tag("/x/scene") != dataset_tag("/y/scene"), "이름만 쓰면 겹친다"
+# 같은 경로는 표기가 달라도 같은 자리 (끝 슬래시·상대경로·~)
+assert dataset_tag(a) == dataset_tag(a + "/")
+# 사람이 읽을 수 있게 폴더 이름이 앞에 남는다
+assert dataset_tag(a).startswith("fr3-tabletop-"), dataset_tag(a)
+
+# 같은 uid 라도 데이터셋이 다르면 다른 파일이다
+uid = "EP-S000-I004-E000"
+pa = proxy_path(uid, "agentview_rgb", proxy_dir_for(a, TMP))
+pb = proxy_path(uid, "agentview_rgb", proxy_dir_for(b, TMP))
+assert pa != pb, "데이터셋이 달라도 같은 파일을 가리킨다 -- 남의 영상이 나온다"
+pa.parent.mkdir(parents=True, exist_ok=True)
+pb.parent.mkdir(parents=True, exist_ok=True)
+pa.write_bytes(b"x")
+pb.write_bytes(b"y")
+# 한쪽 scene 무효화가 다른 데이터셋을 건드리면 안 된다
+assert invalidate_scene_proxies("S000", proxy_dir_for(a, TMP)) == 1
+assert not pa.exists() and pb.exists(), "다른 데이터셋의 캐시를 지웠다"
+print(f"8. 데이터셋별 캐시 분리 ({dataset_tag(a)} / {dataset_tag(b)}) OK")
+
+print("\n프록시 클립 캐시 통과 (데이터셋 분리 포함)")
