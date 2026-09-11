@@ -112,7 +112,7 @@ def toolbar_context(win, key: str) -> list:
              tr("지시문 목록에서 아직 목표를 못 채운 지시문 중 번호가 가장 낮은 것으로")),
         ],
         "dataset": [
-            (tr("새로고침"), win.dataset_ops.refresh_dataset_tree, ""),
+            (tr("새로고침"), win.gallery_ops.refresh_gallery_scenes, ""),
         ],
         "doctor": [
             (tr("다시 검사"), win.doctor.rescan,
@@ -293,7 +293,7 @@ def build_menu(win) -> None:
     m.addAction(tr("3×3 워크스페이스 격자 편집..."), win.layout_ref.on_edit_grid)
 
     m = mb.addMenu(tr("Dataset"))
-    m.addAction(tr("새로고침"), win.dataset_ops.refresh_dataset_tree)
+    m.addAction(tr("새로고침"), win.gallery_ops.refresh_gallery_scenes)
     m.addAction(tr("데이터 저장 경로 선택..."), win.dataset_ops.browse_root)
     m.addSeparator()
     m.addSeparator()

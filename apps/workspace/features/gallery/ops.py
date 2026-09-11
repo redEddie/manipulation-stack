@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QListWidgetItem
+from PyQt6.QtWidgets import QTreeWidgetItem
 
 from mstack.gui.i18n import tr
 from mstack.gui.workers import GalleryLoadWorker
@@ -64,28 +64,30 @@ class GalleryOps:
         # instruction 목록 재구성 (선택 유지)
         lst = self.win.instruction_list
         cur = lst.currentItem()
-        cur_iid = cur.data(Qt.ItemDataRole.UserRole) if cur else None
+        cur_iid = cur.data(0, Qt.ItemDataRole.UserRole) if cur else None
         counts: dict = {}
         for e in episodes:
             counts[e["instruction_id"]] = counts.get(e["instruction_id"], 0) + 1
         lst.blockSignals(True)
         try:
             lst.clear()
-            first = QListWidgetItem(tr("(all instructions)"))
-            first.setData(Qt.ItemDataRole.UserRole, None)
-            lst.addItem(first)
+            first = QTreeWidgetItem([tr("(all instructions)"),
+                                     str(len(episodes))])
+            first.setData(0, Qt.ItemDataRole.UserRole, None)
+            lst.addTopLevelItem(first)
             for iid, instr in sorted({(e["instruction_id"], e["instruction"])
                                       for e in episodes}):
-                it = QListWidgetItem(f"{iid}  {instr[:40]}  {counts[iid]}")
-                it.setData(Qt.ItemDataRole.UserRole, iid)
-                lst.addItem(it)
-            for row in range(lst.count()):
-                it = lst.item(row)
-                if it.data(Qt.ItemDataRole.UserRole) == cur_iid:
+                it = QTreeWidgetItem([f"{iid}  {instr[:44]}", str(counts[iid])])
+                it.setData(0, Qt.ItemDataRole.UserRole, iid)
+                it.setToolTip(0, instr)
+                lst.addTopLevelItem(it)
+            for row in range(lst.topLevelItemCount()):
+                it = lst.topLevelItem(row)
+                if it.data(0, Qt.ItemDataRole.UserRole) == cur_iid:
                     lst.setCurrentItem(it)
                     break
             else:
-                lst.setCurrentItem(lst.item(0))
+                lst.setCurrentItem(lst.topLevelItem(0))
         finally:
             lst.blockSignals(False)
         self._ref_thumb = ref_thumb
@@ -99,7 +101,7 @@ class GalleryOps:
         나란히 돌려 이상한 것을 고른다.
         """
         it = self.win.instruction_list.currentItem()
-        want = it.data(Qt.ItemDataRole.UserRole) if it else None
+        want = it.data(0, Qt.ItemDataRole.UserRole) if it else None
         eps = self.win._gallery_episodes
 
         shown = [e for e in eps

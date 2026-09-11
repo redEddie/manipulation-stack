@@ -6,7 +6,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QListWidget,
     QPushButton,
     QTreeWidget,
     QVBoxLayout,
@@ -52,12 +51,21 @@ def build_dataset(win) -> QWidget:
         # 지시문은 **항상 펼쳐진 목록**이다 (2026-09-11) -- 콤보는 닫힌
         # 상태로 놓으면 지금 무엇이 골라졌는지, 또 어떤 지시문이 있는지가
         # 안 보인다. 라벨은 목록 위 한 줄 (가로 배치 말고 세로).
-        col.addWidget(QLabel(tr("Instruction")))
-        win.instruction_list = QListWidget()
-        win.instruction_list.setMaximumHeight(160)     # 4~8줄
+        # Episode 목록과 **같은 위젯·같은 모양**이다 (2026-09-11 조작자 지적).
+        # 둘 다 "고르는 목록" 인데 하나는 QListWidget, 하나는 QTreeWidget 이라
+        # 머리글도 줄 간격도 달라 보였다. 세로도 반씩 나눠 갖는다 (둘 다
+        # stretch 1) -- 지시문이 6~8개면 목록이 넘치고 에피소드는 60줄이라,
+        # 한쪽만 늘리면 다른 쪽이 스크롤로 밀린다.
+        win.instruction_list = QTreeWidget()
+        win.instruction_list.setColumnCount(2)
+        win.instruction_list.setHeaderLabels([tr("Instruction"), tr("N")])
+        win.instruction_list.setRootIsDecorated(False)
+        win.instruction_list.setColumnWidth(0, 150)
+        win.instruction_list.header().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive)
         win.instruction_list.currentItemChanged.connect(
             win.gallery_ops.apply_gallery_filter)
-        col.addWidget(win.instruction_list)
+        col.addWidget(win.instruction_list, 1)
     else:
         col.addWidget(QLabel(tr("Scene 목록은 Gallery 탭을 연 뒤 나타납니다")))
     # 비활성 '에피소드 검색' 입력칸을 뺐다 (2026-09-06). 검색/필터는 아직
@@ -84,12 +92,11 @@ def build_dataset(win) -> QWidget:
     # 구조 확인·HDF5 트리·myHDF5·튀는 것만 선택은 메뉴에 같은 항목이 있어
     # 패널에서는 뺐다 (2026-09-11) -- 삭제로 가는 문을 하나로 모으는 것이
     # 목적이므로 이 행에는 읽기/고르기만 남긴다.
-    row = QHBoxLayout()
-    b = QPushButton(tr("새로고침"))
-    b.setToolTip(tr("데이터 폴더를 다시 읽어 목록을 새로 그립니다."))
-    b.clicked.connect(win.dataset_ops.refresh_dataset_tree)
-    row.addWidget(b)
-    col.addLayout(row)
+    # 아래쪽 '새로고침' 버튼은 없앴다 (2026-09-11 조작자 지적). Scene 줄의
+    # ↻ 와 둘이었는데, 하는 일이 갈렸다: ↻ 는 scene 파일을 다시 훑어 목록과
+    # 썸네일까지 새로 읽고, 아래 것은 이미 읽어 둔 것으로 목록만 다시 그렸다.
+    # 목록은 이제 갤러리 로드 결과에서 파생되므로 그것만 다시 그리는 일은
+    # 뜻이 없다 -- 다시 읽어야 하면 ↻ 가 맞다.
 
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)

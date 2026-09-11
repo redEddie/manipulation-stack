@@ -64,6 +64,9 @@ class _Stub(QMainWindow):
         self.layout_ref = _NoOp()
         self.stats_ops = _NoOp()
         self.doctor = _NoOp()
+        # 큐레이션이 갤러리 쪽 ops 를 부르게 됐다 (2026-09-11) -- 새로고침이
+        # scene 목록·썸네일을 다시 읽는 쪽으로 합쳐졌다.
+        self.gallery_ops = _NoOp()
 
     def __getattr__(self, name):
         if name.startswith("_"):

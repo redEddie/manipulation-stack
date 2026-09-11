@@ -350,15 +350,14 @@ class StatsOps:
         if lo > hi:
             lo, hi = hi, lo
         self.win.len_label.setText(f"{lo:.1f}~{hi:.1f}s")
-        # 선택 출처는 Dataset 트리 하나뿐이다. 파일 행을 고륾면 그 파일만,
-        # 에피소드 행을 고륾면 그 부모 파일만 남긴다.
-        path = None
-        # 공유 선택에서 읽는다 -- 목록 뷰와 격자가 같은 것을 가리킨다.
-        sel = getattr(self.win, "_gallery_selected", []) or []
-        if sel:
-            node = sel[0] if sel[0].parent() is None else sel[0].parent()
-            v = node.data(0, Qt.ItemDataRole.UserRole)
-            path = v if isinstance(v, str) and v.endswith(".hdf5") else None
+        # 지금 보고 있는 파일로 좁힌다. 파일은 Scene 콤보가 정본이다 --
+        # 선택은 에피소드 dict 목록이라 파일 정보를 들고 있지 않다.
+        # (예전에는 트리 아이템이라 item.parent() 로 파일을 거슬러 올라갔다.
+        #  선택 출처만 바꾸고 이 줄을 안 고쳐서 dict 에 .parent() 를 불렀다 --
+        #  2026-09-11 조작자가 "AttributeError: 'dict' object has no attribute
+        #  'parent'" 로 보고했다.)
+        fp = self.win.dataset_ops.selected_file()
+        path = str(fp) if fp is not None else None
         out = [e for e in self.win.session.stats if lo <= e.seconds <= hi]
         out = [e for e in out if path is None or e.path == path]
         grp = self.win.group_combo.currentData() if hasattr(self.win, "group_combo") else None
