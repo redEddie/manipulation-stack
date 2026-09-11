@@ -98,7 +98,6 @@ def build_analysis_tab(win) -> QWidget:
     grow.addWidget(QLabel(tr("그룹")))
     win.group_combo = QComboBox()
     shrinkable_combo(win.group_combo)
-    win.group_combo.addItem(tr("(전체)"), None)
     win.group_combo.currentIndexChanged.connect(win.stats_ops.refresh_rank_list)
     grow.addWidget(win.group_combo, 1)
     fcol.addLayout(grow)
@@ -156,7 +155,8 @@ def build_analysis_tab(win) -> QWidget:
     fcol.addLayout(cols_row)
 
     btns = QHBoxLayout()
-    for text, slot in ((tr("재생해서 확인"), win.playback_ops.on_rank_play),
+    for text, slot in ((tr("튀는 것만 선택"), win.stats_ops.on_select_flagged),
+                       (tr("재생해서 확인"), win.playback_ops.on_rank_play),
                        (tr("🗑 Mark for delete"), win.stats_ops.on_rank_delete)):
         b = QPushButton(text)
         b.clicked.connect(slot)

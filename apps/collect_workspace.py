@@ -573,6 +573,11 @@ class WorkspaceWindow(QMainWindow):
             # Scene 탭이 **이미 현재**일 때 다시 눌러도 currentChanged 가
             # 안 와서 낡은 번호가 남는다 (2026-09-07 실기: S000).
             self.scene_ops.refresh_composer_context()
+        elif key == "dataset":
+            # 이 화면에 온 이유는 "찍은 것을 보고 고른다" 다 -- 카메라가 아니라
+            # 격자를 띄운다 (Layout·Configure·Doctor 와 같은 규칙: 활동에
+            # 들어오는 것 자체가 그 활동의 화면을 연다).
+            show_center_tab(self, "gallery")
         elif key == "doctor":
             # 이 화면에 온 이유는 "어디가 잘못됐나" 다 -- 카메라가 아니라
             # 검사 결과를 띄운다 (Configure 가 계획 현황을 띄우는 것과 같은

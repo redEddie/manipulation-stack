@@ -79,18 +79,35 @@ cw.QMessageBox.warning = staticmethod(lambda *a, **k: None)
 win = cw.WorkspaceWindow(None)
 win.session.stats = stats
 win.stats_ops.refresh_group_combo()
-assert win.group_combo.count() == 1 + len(by_group)
+# 콤보 구성이 바뀌었다 (2026-09-11): [그룹...] 구분선 [(전체 - 섞입니다)].
+# (전체) 를 맨 아래로 내린 것은 태스크가 다르면 길이·속도가 다른 것이
+# 정상이라 섞인 목록으로는 비교가 성립하지 않아서다 -- 5열 중 정규화된 것은
+# '평균과 차이' 하나뿐이고, '길이(초)' 로 정렬해 위에서부터 지우면 원래 긴
+# 태스크를 지운다.
+#
+# 동사(pick-inside) 묶음은 **두지 않는다.** 같은 동작이라도 소품 사이 거리가
+# 다르면 시간이 크게 달라지는데, (scene·문장) 으로 묶는 이유가 바로 그 배치를
+# 고정하기 위해서다. 다시 생기면 여기서 걸린다.
+data = [win.group_combo.itemData(k) for k in range(win.group_combo.count())]
+groups = [d for d in data if d and d[0] == "group"]
+assert len(groups) == len(by_group), (len(groups), len(by_group))
+assert data[-1] is None, "(전체) 는 맨 아래여야 한다"
+assert not any(d and d[0] == "skill" for d in data), (
+    "동사 묶음이 되살아났다 -- 소품 거리가 시간을 좌우하므로 편차 비교 단위로 "
+    "쓸 수 없다. 커버리지는 audit_scene_diversity.py 가 낸다")
+assert "섞" in win.group_combo.itemText(len(data) - 1), \
+    win.group_combo.itemText(len(data) - 1)
 i = next(k for k in range(win.group_combo.count())
-         if win.group_combo.itemData(k) == ("S001", sentence))
+         if win.group_combo.itemData(k) == ("group", ("S001", sentence)))
 assert i > 0
 win.group_combo.setCurrentIndex(i)          # -> _refresh_rank_list
 shown = [win.rank_tree.topLevelItem(k).data(0, cw.Qt.ItemDataRole.UserRole)
          for k in range(win.rank_tree.topLevelItemCount())]
 assert shown and all(p.endswith("scene_001.hdf5") for p, _ in shown), shown
 assert len(shown) == len(s1)
-win.group_combo.setCurrentIndex(0)          # (전체)
+win.group_combo.setCurrentIndex(win.group_combo.count() - 1)      # (전체)
 assert win.rank_tree.topLevelItemCount() == len(stats)
-print("통과: 큐레이션 후보 그룹 콤보 -- 한 그룹만 / 전체 복귀")
+print("통과: 큐레이션 후보 그룹 콤보 -- 동사/그룹/전체, 한 그룹만 / 전체 복귀")
 import os  # noqa: E402
 
 # os._exit 는 버퍼를 비우지 않는다 -- 먼저 비운다. 없으면 이 파일의

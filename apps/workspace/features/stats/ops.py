@@ -350,19 +350,24 @@ class StatsOps:
         if lo > hi:
             lo, hi = hi, lo
         self.win.len_label.setText(f"{lo:.1f}~{hi:.1f}s")
-        # 지금 보고 있는 파일로 좁힌다. 파일은 Scene 콤보가 정본이다 --
-        # 선택은 에피소드 dict 목록이라 파일 정보를 들고 있지 않다.
-        # (예전에는 트리 아이템이라 item.parent() 로 파일을 거슬러 올라갔다.
-        #  선택 출처만 바꾸고 이 줄을 안 고쳐서 dict 에 .parent() 를 불렀다 --
-        #  2026-09-11 조작자가 "AttributeError: 'dict' object has no attribute
-        #  'parent'" 로 보고했다.)
-        fp = self.win.dataset_ops.selected_file()
-        path = str(fp) if fp is not None else None
+        # **왼쪽에서 고른 것으로 좁히지 않는다.** Analysis 는 다른 질문에
+        # 답하는 자리다 (조작자, 2026-09-11): Gallery 가 "지금 이 지시문에
+        # 이상한 게 있나" 라면, 여기는 "목표보다 많이 모았는데 무엇을
+        # 버릴까" 다. 후자는 좁혀 놓고 보면 안 된다 -- 자기 필터(동사 묶음 ·
+        # (scene·문장) 그룹 · 길이 범위)로 스스로 좁힌다.
+        #
+        # 한동안 트리 선택의 파일로 좁히고 있었는데, 선택이 에피소드 dict 가
+        # 되면서 item.parent() 가 깨졌다("'dict' object has no attribute
+        # 'parent'"). 고치면서 selected_file() 로 바꿨더니 이번에는 늘 지금
+        # 씬으로 좁혀져 독립성이 사라졌다 -- 아예 뺀다.
+        path = None
         out = [e for e in self.win.session.stats if lo <= e.seconds <= hi]
         out = [e for e in out if path is None or e.path == path]
         grp = self.win.group_combo.currentData() if hasattr(self.win, "group_combo") else None
         if grp is not None:
-            out = [e for e in out if e.group == grp]
+            _kind, val = grp
+            out = [e for e in out
+                   if e.group == val]
         return out
 
     def refresh_group_combo(self) -> None:
@@ -370,22 +375,34 @@ class StatsOps:
         가능하면 유지한다 (새로고침마다 (전체) 로 튀지 않게)."""
         if not hasattr(self.win, "group_combo"):
             return
-        keep = self.win.group_combo.currentData()
-        groups = sorted({e.group for e in self.win.session.stats})
-        self.win.group_combo.blockSignals(True)
-        self.win.group_combo.clear()
-        self.win.group_combo.addItem(tr("(전체)"), None)
-        for g in groups:
-            n = sum(1 for e in self.win.session.stats if e.group == g)
+        cb = self.win.group_combo
+        keep = cb.currentData()
+        stats = self.win.session.stats
+        cb.blockSignals(True)
+        cb.clear()
+        # **(전체) 는 맨 아래로 내린다.** 태스크가 다르면 길이·속도가 다른 것이
+        # 정상이라, 섞어 놓은 목록은 비교가 성립하지 않는다 (조작자,
+        # 2026-09-11). 편차(task_dev)만은 자기 그룹 평균 대비라 섞어도
+        # 읽히므로 없애지는 않는다.
+        #
+        # 동사(pick-inside 등) 묶음은 두지 않는다. 같은 동작이라도 소품 사이
+        # 거리가 다르면 시간이 크게 달라지는데, (scene·문장) 으로 묶는 이유가
+        # 바로 그 배치를 고정하기 위해서다 -- 동사로 묶으면 그 고정이 풀려
+        # 편차 지표가 뜻을 잃는다 (조작자, 2026-09-11). 커버리지를 보고 싶으면
+        # scripts/analyze/audit_scene_diversity.py 가 이미 스킬별로 낸다.
+        for g in sorted({e.group for e in stats}):
+            n = sum(1 for e in stats if e.group == g)
             label = (f"{g[0]} · {g[1]}" if g[0] else g[1])
-            self.win.group_combo.addItem(f"{label}  ({n})", g)
+            cb.addItem(f"{label}  ({n})", ("group", g))
+        cb.insertSeparator(cb.count())
+        cb.addItem(tr("(전체 - 태스크가 섞입니다)"), None)
         idx = 0
-        for i in range(self.win.group_combo.count()):
-            if self.win.group_combo.itemData(i) == keep:
+        for i in range(cb.count()):
+            if cb.itemData(i) == keep:
                 idx = i
                 break
-        self.win.group_combo.setCurrentIndex(idx)
-        self.win.group_combo.blockSignals(False)
+        cb.setCurrentIndex(idx)
+        cb.blockSignals(False)
 
     def refresh_rank_list(self) -> None:
         if not self.win.session.stats:
@@ -444,6 +461,33 @@ class StatsOps:
             self.win.da_hist.set_values(
                 [e.mean_da for e in self.win.session.stats],
                 [(self.win._summary["p50"], tr("중앙값")), (stat.mean_da, tr("이 에피소드"))])
+
+    def on_select_flagged(self) -> None:
+        """지금 순위표에 보이는 것 중 **밴드 밖**을 전부 고른다.
+
+        전역 선택이 아니라 **보이는 것 안에서**다. 예전에 "튀는 것만 선택" 이
+        전 파일을 훑어 고르던 때가 있었는데(2026-09-11 에 제거), 화면에 없는
+        것까지 고르는 셈이라 무엇이 골라졌는지 알 수 없었다. 이제 그룹 콤보가
+        좁혀 놓은 범위 안에서만 고른다 -- 같은 (scene·문장) 안에서라야 편차가
+        비교 가능하다는 것이 애초에 그룹을 나눈 이유다.
+
+        고르기만 하고 지우지 않는다. 지우는 문은 여전히 하나다 -- 여기서
+        고른 뒤 "🗑 Mark for delete" 로 표시하고 왼쪽에서 실행한다.
+        """
+        tree = self.win.rank_tree
+        tree.clearSelection()
+        n = 0
+        for i in range(tree.topLevelItemCount()):
+            it = tree.topLevelItem(i)
+            key = it.data(0, Qt.ItemDataRole.UserRole)
+            st = next((e for e in self.win.session.stats if e.key == key), None)
+            if st is not None and st.flagged:
+                it.setSelected(True)
+                n += 1
+        self.win.stats_hint.setText(
+            tr("밴드(±{d}) 밖 {n}개를 골랐습니다 -- 🗑 Mark for delete 로 "
+               "표시한 뒤 왼쪽에서 지웁니다.").format(d=TASK_DEV_LIMIT, n=n)
+            if n else tr("이 그룹에는 밴드 밖이 없습니다."))
 
     def on_rank_delete(self) -> None:
         """순위표 선택을 삭제 목록에 **표시**한다 (실행이 아니다).
