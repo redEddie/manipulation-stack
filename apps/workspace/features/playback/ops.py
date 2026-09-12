@@ -77,6 +77,7 @@ class PlaybackOps:
             return
         self.win.playback.trim_key = (path, demo)
         self.win.playback.trim_n_pending = 0
+        self.win.playback.trim_undo.clear()   # 다른 에피소드의 걸음은 못 되돌린다
         try:
             series = load_series(path, demo)
         except Exception as e:  # noqa: BLE001
@@ -111,19 +112,40 @@ class PlaybackOps:
     def trim_keep(self) -> int:
         return max(0, self.win.playback.trim_n - self.trim_pending())
 
+    def _trim_push(self) -> None:
+        """지금 자를 양을 되돌리기 더미에 쌓는다. 값을 바꾸기 **전에** 부른다."""
+        self.win.playback.trim_undo.append(self.win.playback.trim_n_pending)
+        del self.win.playback.trim_undo[:-50]          # 더미가 무한정 자라지 않게
+
+    def trim_undo(self) -> None:
+        """행동취소 -- 마지막 한 걸음만 되돌린다.
+
+        [원래대로] 와 다르다: 원래대로는 0 으로 되돌리고, 이쪽은 −5 를 한 번
+        잘못 눌렀을 때 그 한 번만 무른다 (조작자, 2026-09-12: "자를 구간을
+        설정했다가 취소하고 싶을 수 있잖아? 행동취소 버튼을 만들자"). 확정
+        전이라 어느 쪽도 파일은 건드리지 않는다.
+        """
+        if self.win.playback.trim_key is None or not self.win.playback.trim_undo:
+            return
+        self.win.playback.trim_n_pending = self.win.playback.trim_undo.pop()
+        self.trim_update()
+        self.trim_seek(self.trim_keep() - 1)
+
     def trim_add(self, n: int) -> None:
         """+/- 를 누른 만큼 옮긴다. 0 아래로는 못 간다 -- 원본보다 길어질 수 없다."""
         if self.win.playback.trim_key is None:
             return
+        self._trim_push()
         self.win.playback.trim_n_pending = max(0, self.win.playback.trim_n_pending + n)
         self.trim_update()
         self.trim_seek(self.trim_keep() - 1)
 
     def trim_reset(self) -> None:
-        """정정 -- 고른 것을 통째로 0으로. 한 단계씩 물리는 것보다, 잘못 짚었을 때
-        처음부터 다시 보는 쪽이 실제 흐름에 맞는다."""
+        """원래대로 -- 고른 것을 통째로 0으로. 한 걸음씩 무르는 것은
+        [행동취소](trim_undo)가 한다."""
         if self.win.playback.trim_key is None:
             return
+        self._trim_push()
         self.win.playback.trim_n_pending = 0
         self.trim_update()
         self.trim_seek(self.trim_keep() - 1)
@@ -132,6 +154,7 @@ class PlaybackOps:
         if self.win.playback.trim_key is None:
             return
         n = suggest_trim(*self.win.playback.trim_key)
+        self._trim_push()
         self.win.playback.trim_n_pending = n
         self.win.log(f"[트림] 추천 {n}프레임" + ("" if n else " (이미 조용하게 끝납니다)"))
         self.trim_update()
@@ -155,8 +178,11 @@ class PlaybackOps:
             if arr is None or len(arr) == 0:
                 continue
             v.set_frame(arr[min(i, len(arr) - 1)])
-        mark = tr(" ← 잘린 뒤 마지막") if i == keep - 1 else (
-            tr("  (잘려나갈 구간)") if i >= keep else "")
+        # 예전에는 여기서 마지막 남는 프레임에 " ← 잘린 뒤 마지막" 을 붙였다.
+        # 뺐다 -- 그 프레임에 정확히 서 있을 때만 나오는 글자라 무슨 뜻인지
+        # 알 수 없었고 (조작자, 2026-09-12: "의미하는 바를 전혀 알 수 없어"),
+        # 같은 것을 재생바의 빨간 선이 늘 보여 준다.
+        mark = tr("  (잘려나갈 구간)") if i >= keep else ""
         self.win.trim_pos.setText(f"{i + 1}/{self.win.playback.trim_n}{mark}")
         for plot, _ in self.win.trim_plots.values():
             plot.set_cursor(i)
@@ -186,10 +212,25 @@ class PlaybackOps:
             self.trim_seek(0)
         if self.win.playback.trim_timer is None:
             self.win.playback.trim_timer = QTimer(self.win)
-            self.win.playback.trim_timer.setInterval(50)
             self.win.playback.trim_timer.timeout.connect(self.trim_tick)
+        self.apply_trim_speed()
         self.win.playback.trim_timer.start()
         self.win.trim_play_btn.setText(tr("정지"))
+
+    def trim_speed(self) -> float:
+        combo = getattr(self.win, "trim_speed_combo", None)
+        data = combo.currentData() if combo is not None else None
+        return float(data) if data else 1.0
+
+    def apply_trim_speed(self) -> None:
+        """배속은 타이머 주기로 낸다 -- 3배(60Hz)까지는 프레임을 건너뛸 필요가
+        없어, 빠르게 훑을 때도 놓치는 프레임이 없다 (Playback 탭과 같은 규약)."""
+        t = self.win.playback.trim_timer
+        if t is not None:
+            t.setInterval(max(5, int(round(1000 / PLAYBACK_FPS / self.trim_speed()))))
+
+    def on_trim_speed_changed(self) -> None:
+        self.apply_trim_speed()
 
     def trim_tick(self) -> None:
         # 끝은 **원본 길이**다. trim_keep() 에서 멈추면 자를 양을 바꿀 때마다
@@ -216,6 +257,9 @@ class PlaybackOps:
         self.win.trim_slider.setEnabled(has)
         if reset_btn is not None:
             reset_btn.setEnabled(bool(self.win.playback.trim_n_pending))
+        undo_btn = getattr(self.win, "trim_undo_btn", None)
+        if undo_btn is not None:
+            undo_btn.setEnabled(has and bool(self.win.playback.trim_undo))
         if not has:
             if count is not None:
                 count.setText(tr("에피소드를 고르세요"))
@@ -225,6 +269,7 @@ class PlaybackOps:
                 warn.setText("")
             for plot, _ in self.win.trim_plots.values():
                 plot.set_cut(None)
+            self.win.trim_slider.set_cut(None)
             return
         path, demo = self.win.playback.trim_key
         n_trim, keep = self.trim_pending(), self.trim_keep()
@@ -239,6 +284,9 @@ class PlaybackOps:
                 if n_trim else tr("{a} 프레임 — 자를 구간 없음").format(a=self.win.playback.trim_n))
         for plot, _ in self.win.trim_plots.values():
             plot.set_cut(keep if n_trim else None)
+        # 재생바에도 같은 선을 긋는다. 자를 양을 바꿀 때 **눈에 보이는 것**이
+        # 이것뿐이다 -- 위치 라벨은 그 프레임에 서 있을 때만 말해 준다.
+        self.win.trim_slider.set_cut(keep - 1 if n_trim else None)
         blocked = plan_trim(path, [demo], n_trim)[0].blocked if n_trim else None
         if apply_btn is not None:
             apply_btn.setEnabled(bool(n_trim) and not blocked)
@@ -381,12 +429,23 @@ class PlaybackOps:
         self.win.play_pos.setText(f"{i + 1}/{self.win.play_slider.maximum() + 1}")
 
     # -------------------------------------------------------------- analysis
-    def on_rank_play(self) -> None:
+    def on_rank_trim(self) -> None:
+        """순위표에서 고른 것을 **Trim 탭**에서 본다.
+
+        Playback 탭으로 보내던 것을 옮겼다 (조작자, 2026-09-12). 순위표에서
+        확인하고 싶은 것은 "이 테이크를 어떻게 할까"이고, 그 자리에서 바로
+        할 수 있는 일(끝 다듬기·판정)은 Trim 쪽에 있다. 행을 고르는 것만으로
+        이미 ``show_trim_for`` 가 물려 있으므로(on_rank_selected), 여기서
+        하는 일은 **탭을 옮기는 것**이다 -- 탭 전환을 선택에 묶으면 곡선만
+        보려던 사람의 화면을 뺏는다.
+        """
         items = self.win.rank_tree.selectedItems()
         if not items:
             return
         path, demo = items[0].data(0, Qt.ItemDataRole.UserRole)
-        self.play_episode(path, demo)
+        if self.win.playback.trim_key != (path, demo):
+            self.show_trim_for(path, demo)
+        show_center_tab(self.win, "trim")
 
     # --------------------------------------------------------------- gallery
     def on_gallery_replay(self) -> None:

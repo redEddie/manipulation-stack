@@ -1,0 +1,161 @@
+"""Trim 탭의 조작들 -- 2026-09-12 조작자 요청 다섯 가지를 못박는다.
+
+1. 재생바에 **잘릴 지점**이 빨간 선으로 그려진다 (−5/−1 을 누르면 따라 움직인다)
+2. " ← 잘린 뒤 마지막" 문구는 **돌아오지 않는다** (뜻이 읽히지 않아 뺐다)
+3. [행동취소] 는 마지막 한 걸음만, [원래대로] 는 통째로 0 으로
+4. Trim 에도 배속이 있다 (Playback 탭에 있던 것과 같은 값)
+5. 플롯을 한 번에 켜고 끄는 [전체]/[해제]
+
+그리고 Analysis 의 [Trim 에서 재생] 이 **Trim 탭**을 연다 (예전엔 Playback).
+
+로봇도 카메라도 필요 없다 (offscreen). 합성 scene 파일 하나로 돈다.
+"""
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import h5py
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import helpers  # noqa: E402
+helpers.isolate_state()
+
+from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
+
+N_FRAMES = 60
+
+
+def _make(root: Path) -> None:
+    with h5py.File(root / "scene_000.hdf5", "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["scene_id"] = "S000"
+        meta.attrs["objects"] = json.dumps(["OBJ-CUP-WHT-02"])
+        meta.attrs["layout"] = json.dumps(
+            {"grid": [3, 3], "placements": {"OBJ-CUP-WHT-02": {"zone": [0, 0]}}})
+        for i in range(2):
+            g = f.create_group(f"episode_{i:03d}")
+            g.attrs.update({
+                "scene_id": "S000", "instruction_id": "I000",
+                "instruction": "pick up the white cup",
+                "episode_uid": f"EP-S000-I000-E{i:03d}", "episode_id": i,
+                "quality_status": "success", "collector": "tester",
+                "num_samples": N_FRAMES,
+            })
+            t = np.linspace(0, 1, N_FRAMES, dtype=np.float32)
+            arm = np.stack([t * (j + 1) * 0.1 for j in range(7)], axis=1)
+            g.create_dataset("actions", data=arm)
+            obs = g.create_group("obs")
+            obs.create_dataset("joint_states", data=arm)
+            obs.create_dataset("gripper_states",
+                               data=np.zeros((N_FRAMES, 1), np.float32))
+
+
+def main() -> None:
+    import apps.collect_workspace as cw
+    from mstack.gui.widgets import CutSlider
+
+    app = QApplication.instance() or QApplication([])
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _make(root)
+        path = str(root / "scene_000.hdf5")
+        win = cw.WorkspaceWindow(None)
+        win.root_edit.setText(str(root))
+        win.dataset_ops.on_root_changed()
+        win._set_activity("dataset")
+        ops = win.playback_ops
+
+        # ---------------------------------------------- 1. 잘림 선
+        assert isinstance(win.trim_slider, CutSlider), type(win.trim_slider)
+        ops.show_trim_for(path, "episode_000")
+        assert win.playback.trim_n == N_FRAMES, win.playback.trim_n
+        assert win.trim_slider.cut() is None, "자를 것이 없는데 선이 그려졌다"
+        ops.trim_add(5)
+        assert ops.trim_keep() == N_FRAMES - 5
+        assert win.trim_slider.cut() == N_FRAMES - 6, win.trim_slider.cut()
+        ops.trim_add(5)
+        assert win.trim_slider.cut() == N_FRAMES - 11, "선이 따라 움직이지 않는다"
+        print("1. 재생바의 빨간 잘림선 OK")
+
+        # ---------------------------------------------- 2. 사라진 문구
+        ops.trim_seek(ops.trim_keep() - 1)
+        assert "잘린 뒤 마지막" not in win.trim_pos.text(), win.trim_pos.text()
+        src = (Path(__file__).resolve().parents[2] /
+               "apps/workspace/features/playback/ops.py").read_text(encoding="utf-8")
+        assert 'tr(" ← 잘린 뒤 마지막")' not in src, "빼기로 한 문구가 돌아왔다"
+        print("2. '잘린 뒤 마지막' stay-gone OK")
+
+        # ---------------------------------------------- 3. 행동취소 / 원래대로
+        assert win.trim_undo_btn.isEnabled(), "되돌릴 걸음이 있는데 꺼져 있다"
+        ops.trim_undo()
+        assert ops.trim_pending() == 5, ops.trim_pending()      # 한 걸음만
+        ops.trim_add(1)
+        ops.trim_reset()
+        assert ops.trim_pending() == 0
+        ops.trim_undo()
+        assert ops.trim_pending() == 6, "원래대로도 되돌릴 수 있어야 한다"
+        while win.playback.trim_undo:
+            ops.trim_undo()
+        assert ops.trim_pending() == 0 and not win.trim_undo_btn.isEnabled()
+        # 다른 에피소드를 물면 이전 걸음은 못 되돌린다
+        ops.trim_add(3)
+        ops.show_trim_for(path, "episode_001")
+        assert win.playback.trim_undo == [] and ops.trim_pending() == 0
+        print("3. 행동취소 / 원래대로 OK")
+
+        # ---------------------------------------------- 4. 배속
+        labels = [win.trim_speed_combo.itemText(i)
+                  for i in range(win.trim_speed_combo.count())]
+        assert labels == ["0.5x", "1x", "2x", "3x"], labels
+        ops.on_trim_play()                      # 타이머를 만든다
+        base = win.playback.trim_timer.interval()
+        assert base == 50, base                 # 20Hz
+        win.trim_speed_combo.setCurrentIndex(labels.index("2x"))
+        assert win.playback.trim_timer.interval() == 25, \
+            win.playback.trim_timer.interval()
+        ops.on_trim_play()                      # 멈춘다
+        assert not win.playback.trim_timer.isActive()
+        print("4. Trim 배속 OK")
+
+        # ---------------------------------------------- 5. 플롯 전체 / 해제
+        checks = win.trim_plot_checks
+        assert [t for t, c in checks.items() if c.isChecked()] == ["gripper"]
+        btns = {b.text(): b for b in win.center_tab_widgets["trim"].findChildren(
+            type(win.trim_play_btn))}
+        assert "전체" in btns and "해제" in btns, sorted(btns)
+        btns["전체"].click()
+        assert all(c.isChecked() for c in checks.values())
+        btns["해제"].click()
+        assert not any(c.isChecked() for c in checks.values())
+        btns["전체"].click()
+        print("5. 플롯 전체/해제 OK")
+
+        # ------------------------------------- 6. [Trim 에서 재생] 은 Trim 으로
+        win.stats_ops.refresh_analysis(force=True)
+        assert win.rank_tree.topLevelItemCount() >= 1, "순위표가 비었다"
+        first = win.rank_tree.topLevelItem(0).text(0)
+        assert first.startswith("S000 · episode_"), first   # 짧은 scene 이름
+        assert "scene_000" not in first, first
+        win.rank_tree.setCurrentItem(win.rank_tree.topLevelItem(0))
+        from apps.workspace.shared.tabs import show_center_tab
+        show_center_tab(win, "analysis")
+        ops.on_rank_trim()
+        cur = win.center_tabs.currentWidget()
+        assert cur is win.center_tab_widgets["trim"], \
+            "Playback 이 아니라 Trim 으로 가야 한다"
+        print("6. Trim 에서 재생 OK · 후보 목록의 짧은 이름 OK")
+
+        for loader in (win.playback.trim_loader,):
+            if loader is not None:
+                loader.wait(3000)
+    print("test_trim_controls OK")
+
+
+main()

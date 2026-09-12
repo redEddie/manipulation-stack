@@ -19,7 +19,7 @@ from mstack.data.episode_stats import STILL_VEL, TASK_DEV_LIMIT
 from mstack.gui.i18n import tr
 
 from apps.workspace.shared.sizing import shrinkable_combo
-from mstack.gui.plot_widgets import BarStrip, Histogram, SeriesPlot
+from mstack.gui.plot_widgets import DistStrip, Histogram, SeriesPlot
 
 
 def build_analysis_tab(win) -> QWidget:
@@ -37,7 +37,7 @@ def build_analysis_tab(win) -> QWidget:
     left = QWidget()
     lcol = QVBoxLayout(left)
     lcol.setContentsMargins(0, 0, 0, 0)
-    win.analysis_summary = QLabel(tr("Statistics 패널에서 '다시 분석'을 누르세요."))
+    win.analysis_summary = QLabel(tr("툴바의 [다시 분석] 을 누르세요."))
     win.analysis_summary.setWordWrap(True)
     win.analysis_summary.setStyleSheet("font-weight:bold;")
     lcol.addWidget(win.analysis_summary)
@@ -66,9 +66,18 @@ def build_analysis_tab(win) -> QWidget:
     rcol = QVBoxLayout(right)
     rcol.setContentsMargins(0, 0, 0, 0)
 
-    win.dim_bars = BarStrip()
-    dim_box = QGroupBox(tr("차원별 σ(Δa) — 전체 평균"))
-    QVBoxLayout(dim_box).addWidget(win.dim_bars)
+    # 차원별 σ(Δa). 막대 하나(전체 평균)가 아니라 **분포**를 그린다 -- 평균이
+    # 같아도 테이크마다 두 배씩 흔들리는 차원이 있고, 큐레이션에서 묻는 것은
+    # 그 흔들림이다 (조작자, 2026-09-12). 모수는 **지금 목록**이다: 큐레이션은
+    # (씬 → 지시문) 안에서만 하므로, 전체 데이터셋으로 재면 작업이 다른
+    # 에피소드들의 퍼짐이 섞여 비교가 흐려진다.
+    win.dim_bars = DistStrip()
+    dim_box = QGroupBox(tr("차원별 σ(Δa) 분포 — 지금 목록"))
+    dim_col = QVBoxLayout(dim_box)
+    dim_col.addWidget(win.dim_bars)
+    dim_legend = QLabel(tr("가는 선 p10~p90   ▬ 평균±σ   ▮ 빨강 = 평균"))
+    dim_legend.setStyleSheet("color:#888;")
+    dim_col.addWidget(dim_legend)
     rcol.addWidget(dim_box)
 
     win.da_hist = Histogram(tr("에피소드 평균 |Δa| 분포"))
@@ -163,7 +172,7 @@ def build_analysis_tab(win) -> QWidget:
 
     btns = QHBoxLayout()
     for text, slot in ((tr("튀는 것만 선택"), win.stats_ops.on_select_flagged),
-                       (tr("재생해서 확인"), win.playback_ops.on_rank_play),
+                       (tr("Trim 에서 재생"), win.playback_ops.on_rank_trim),
                        (tr("🗑 Mark for delete"), win.stats_ops.on_rank_delete)):
         b = QPushButton(text)
         b.clicked.connect(slot)

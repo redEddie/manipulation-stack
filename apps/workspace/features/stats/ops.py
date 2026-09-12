@@ -7,6 +7,7 @@ import shutil
 import time
 from pathlib import Path
 
+import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import (
@@ -326,8 +327,6 @@ class StatsOps:
                 a=s["len_min"], b=s["len_max"], v=s["verdict"]))
         self.win.log(f"[분석] {len(files)}개 파일 / {s['n']}개 에피소드 ({dt:.2f}s) — {s['verdict']}")
 
-        self.win.dim_bars.set_rows(
-            [(f"joint{i + 1}", float(s["per_dim_sigma"][i]), "") for i in range(7)])
         means = [e.mean_da for e in self.win.session.stats]
         self.win.da_hist.set_values(means, [(s["p50"], tr("중앙값")), (s["p99"], "p99")])
 
@@ -391,8 +390,14 @@ class StatsOps:
         rows = sorted(self.filtered_stats(), key=score)[:60]
         self.win.rank_tree.clear()
         for e in rows:
+            # scene 은 **짧은 이름**으로 적는다: "scene_022" 가 아니라 "S022"
+            # (조작자, 2026-09-12). 파일에 적힌 scene_id 가 원래 그 형식이고
+            # (metadata/scene_id = "S022"), 목록의 첫 칸은 150px 뿐이라 긴
+            # 이름은 정작 구분해야 할 episode 번호를 밀어낸다. scene_id 가
+            # 없는 legacy 파일만 파일명으로 돌아간다.
+            where = e.scene or Path(e.path).stem[:22]
             item = QTreeWidgetItem([
-                f"{Path(e.path).stem[:22]} · {e.demo}",
+                f"{where} · {e.demo}",
                 f"{e.task_dev:+.4f}", f"{100 * e.still_frac:.0f}%",
                 f"{e.seconds:.1f}s"])
             item.setData(0, Qt.ItemDataRole.UserRole, (e.path, e.demo))
@@ -408,6 +413,23 @@ class StatsOps:
         self.win.stats_hint.setText(
             tr("{n}개 중 {m}개 표시 (에피소드 번호 순)").format(
                 n=len(self.filtered_stats()), m=len(rows)))
+        self.refresh_dim_dist()
+
+    def refresh_dim_dist(self) -> None:
+        """차원별 σ(Δa) 분포 -- 모수는 **지금 걸러진 목록**이다.
+
+        전체 데이터셋으로 재면 작업이 다른 에피소드의 퍼짐이 섞인다. 큐레이션은
+        (씬 → 지시문) 안에서만 하므로 (조작자, 2026-09-11), 비교도 그 안에서
+        해야 "이 차원이 이 작업에서 유난히 흔들린다"가 된다. 그래서 목록이
+        다시 그려질 때마다 함께 다시 그린다.
+        """
+        eps = [e for e in self.filtered_stats() if e.per_dim_sigma is not None]
+        if not eps:
+            self.win.dim_bars.set_rows([])
+            return
+        sig = np.stack([e.per_dim_sigma for e in eps])
+        self.win.dim_bars.set_rows(
+            [(f"joint{i + 1}", sig[:, i]) for i in range(min(7, sig.shape[1]))])
 
     def show_analysis_for(self, path: str, demo: str) -> None:
         """Dataset 트리와 순위표가 공유하는 곡선 표시 경로."""

@@ -1,7 +1,7 @@
 """Small QPainter plot widgets — no plotting dependency.
 
 pyqtgraph/matplotlib/QtCharts are all absent from this venv, and what these
-panels need is a line chart, a bar strip and a histogram. Painting them
+panels need is a line chart, a distribution strip and a histogram. Painting them
 directly keeps the install as it is and stays fast enough to redraw on every
 playback tick.
 
@@ -182,19 +182,41 @@ class SeriesPlot(QWidget):
             x -= 8
 
 
-class BarStrip(QWidget):
-    """Labelled horizontal bars — per-dimension σ, task rollups, and the like."""
+class DistStrip(QWidget):
+    """차원별 **분포** 띠 -- 막대 하나가 아니라 퍼짐까지 그린다.
+
+    예전에는 BarStrip 이 차원마다 σ(Δa) 의 *전체 평균* 하나만 막대로 그렸다.
+    막대 일곱 개는 "joint4 가 제일 크다"까지는 말해 주지만, 큐레이션에서
+    실제로 묻는 것은 "이 차원이 에피소드마다 얼마나 흔들리나"다 -- 평균이
+    같아도 어떤 차원은 테이크마다 두 배씩 차이가 난다 (조작자, 2026-09-12:
+    "bar가 아니라 분포형태면 좋겠어. 평균을 빨간막대로 표현하고 표준편차
+    또는 10%같은거 양 옆으로").
+
+    한 줄에 그리는 것 셋:
+
+    * 가는 선  = p10 ~ p90  (에피소드 10%~90% 구간)
+    * 굵은 띠  = 평균 ± σ
+    * 빨간 눈금 = 평균
+
+    가로 축은 모든 줄이 공유한다 (0 ~ 전체 p90 최대). 줄마다 축이 다르면
+    차원끼리 비교가 안 되는데, 비교가 이 패널의 유일한 용도다.
+    """
+
+    #: 평균 눈금 색. 플롯의 잘림선·경고와 같은 빨강.
+    MEAN_COLOR = "#c0392b"
+    ROW_H = 20
 
     def __init__(self, unit: str = "") -> None:
         super().__init__()
-        self._rows: list[tuple[str, float, str]] = []
+        self._rows: list[tuple[str, np.ndarray]] = []
         self.unit = unit
         self.setMinimumHeight(80)
 
     def set_rows(self, rows: list) -> None:
-        """rows: [(label, value, color_hex_or_empty)]"""
-        self._rows = rows
-        self.setMinimumHeight(max(60, 18 * len(rows) + 8))
+        """rows: ``[(label, values)]`` -- values 는 그 차원의 **에피소드별** 값."""
+        self._rows = [(str(label), np.asarray(vals, dtype=float))
+                      for label, vals in rows]
+        self.setMinimumHeight(max(60, self.ROW_H * len(self._rows) + 26))
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -203,23 +225,51 @@ class BarStrip(QWidget):
         pal = self.palette()
         fg = pal.windowText().color()
         p.fillRect(self.rect(), pal.base())
-        if not self._rows:
+        rows = [(lab, v) for lab, v in self._rows if v.size]
+        if not rows:
             return
         f = QFont(); f.setPointSize(8); p.setFont(f)
-        vmax = max((v for _l, v, _c in self._rows), default=1.0) or 1.0
+        stats = []
+        for label, v in rows:
+            stats.append((label, float(v.mean()), float(v.std()),
+                          float(np.percentile(v, 10)), float(np.percentile(v, 90))))
+        vmax = max(max(hi, mu + sd) for _l, mu, sd, _lo, hi in stats) or 1.0
         label_w, value_w = 74, 66
-        for i, (label, value, color) in enumerate(self._rows):
-            y = 4 + i * 18
+        track = self.width() - label_w - value_w - 8
+
+        def x_of(value: float) -> float:
+            return label_w + 4 + track * max(0.0, min(1.0, value / vmax))
+
+        for i, (label, mu, sd, p10, p90) in enumerate(stats):
+            y = 4 + i * self.ROW_H
             p.setPen(QPen(QColor(fg), 1))
-            p.drawText(QRectF(2, y, label_w, 16),
+            p.drawText(QRectF(2, y, label_w, self.ROW_H - 2),
                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label)
-            track = self.width() - label_w - value_w - 8
-            w = max(1.0, track * (value / vmax))
-            p.fillRect(QRectF(label_w + 4, y + 4, w, 9),
-                       QColor(color or JOINT_COLORS[i % len(JOINT_COLORS)]))
-            p.drawText(QRectF(self.width() - value_w - 2, y, value_w, 16),
+            color = QColor(JOINT_COLORS[i % len(JOINT_COLORS)])
+            mid = y + (self.ROW_H - 2) / 2.0
+            # p10~p90: 가는 선
+            p.setPen(QPen(color, 1))
+            p.drawLine(QPointF(x_of(p10), mid), QPointF(x_of(p90), mid))
+            for edge in (p10, p90):
+                p.drawLine(QPointF(x_of(edge), mid - 3), QPointF(x_of(edge), mid + 3))
+            # 평균 ± σ: 굵은 띠
+            band = QColor(color)
+            band.setAlpha(150)
+            lo_x, hi_x = x_of(max(0.0, mu - sd)), x_of(mu + sd)
+            p.fillRect(QRectF(lo_x, mid - 4, max(1.0, hi_x - lo_x), 8), band)
+            # 평균: 빨간 눈금
+            p.fillRect(QRectF(x_of(mu) - 1, mid - 7, 2, 14), QColor(self.MEAN_COLOR))
+            p.setPen(QPen(QColor(fg), 1))
+            p.drawText(QRectF(self.width() - value_w - 2, y, value_w, self.ROW_H - 2),
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                       f"{_fmt(value)}{self.unit}")
+                       f"{mu:.4f}{self.unit}")
+        # 축은 한 줄로만 -- 0 과 최대값만 있으면 눈금이 없어도 폭을 읽는다.
+        p.setPen(QPen(QColor(fg).darker(120), 1))
+        base = 4 + len(stats) * self.ROW_H + 2
+        p.drawText(QRectF(label_w + 4, base, 60, 14),
+                   Qt.AlignmentFlag.AlignLeft, "0")
+        p.drawText(QRectF(label_w + 4 + track - 60, base, 60, 14),
+                   Qt.AlignmentFlag.AlignRight, f"{vmax:.4f}")
 
 
 class Histogram(QWidget):

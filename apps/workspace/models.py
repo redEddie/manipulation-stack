@@ -60,6 +60,9 @@ class PlaybackState:
     trim_loader: Any | None = None
     trim_timer: QTimer | None = None
     trim_series: Any | None = None
+    #: 자를 양을 바꾼 이력 -- [행동취소] 가 한 걸음씩 되돌린다. 에피소드를
+    #: 새로 물 때마다 비운다 (다른 에피소드의 걸음을 되돌릴 수는 없다).
+    trim_undo: list = field(default_factory=list)
 
     play_key: tuple | None = None
     play_timer: QTimer | None = None

@@ -84,6 +84,15 @@ def build_dataset_right(win) -> QWidget:
                       "지점까지를 제안합니다 (최대 15프레임)"))
     sug.clicked.connect(win.playback_ops.trim_suggest)
     act_row.addWidget(sug)
+    # 되돌리기는 둘이다: **행동취소**는 마지막 한 걸음만, **원래대로**는
+    # 통째로 0 으로. 확정 전이라 어느 쪽도 파일은 건드리지 않는다.
+    win.trim_undo_btn = QPushButton(tr("↶ 행동취소"))
+    win.trim_undo_btn.setToolTip(tr("마지막으로 바꾼 한 걸음만 되돌립니다 "
+                                     "(−5 를 잘못 눌렀을 때). Ctrl+Z"))
+    win.trim_undo_btn.setShortcut("Ctrl+Z")
+    win.trim_undo_btn.setEnabled(False)
+    win.trim_undo_btn.clicked.connect(win.playback_ops.trim_undo)
+    act_row.addWidget(win.trim_undo_btn)
     win.trim_reset_btn = QPushButton(tr("원래대로"))
     win.trim_reset_btn.setToolTip(tr("고른 프레임 수를 0으로 되돌립니다 -- 자를 것이 "
                                       "없는 상태로 돌아갑니다. 확정 전에는 파일이 "

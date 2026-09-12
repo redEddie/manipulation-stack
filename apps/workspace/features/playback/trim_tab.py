@@ -2,16 +2,17 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
-from mstack.gui.widgets import VideoView
+from apps.workspace.constants import PLAYBACK_SPEEDS
+from mstack.gui.widgets import CutSlider, VideoView
 from mstack.gui.i18n import tr
 from mstack.gui.plot_widgets import SeriesPlot
 
@@ -87,20 +88,32 @@ def build_trim_tab(win) -> QWidget:
     win.trim_play_btn.setEnabled(False)
     win.trim_play_btn.clicked.connect(win.playback_ops.on_trim_play)
     srow.addWidget(win.trim_play_btn)
-    win.trim_slider = QSlider(Qt.Orientation.Horizontal)
+    # 자를 지점은 재생바 위에 **빨간 선**으로 그린다 -- −5/−1 을 누르면 선이
+    # 따라 움직이고, 그 뒤 옅은 빨강이 사라질 구간이다 (조작자, 2026-09-12).
+    win.trim_slider = CutSlider(Qt.Orientation.Horizontal)
     win.trim_slider.setEnabled(False)
     win.trim_slider.valueChanged.connect(win.playback_ops.on_trim_scrub)
     srow.addWidget(win.trim_slider, 1)
-    # **고정 폭**이어야 한다. 이 라벨은 마지막 프레임에서 " ← 잘린 뒤 마지막"
-    # 을 덧붙이는데, 최소 폭만 주면 글자가 길어진 만큼 라벨이 넓어지고 그
-    # 폭을 슬라이더에서 뺏는다 -- 재생이 끝에 닿을 때마다 재생바가 줄었다
-    # 늘었다 한다 (조작자, 2026-09-12: "재생바는 길이가 무조건 불변이도록").
+    # **고정 폭**이어야 한다. 글자가 길어진 만큼 라벨이 넓어지면 그 폭을
+    # 슬라이더에서 뺏어, 재생이 끝에 닿을 때마다 재생바가 줄었다 늘었다
+    # 한다 (조작자, 2026-09-12: "재생바는 길이가 무조건 불변이도록").
     # 슬라이더 눈금이 움직이면 같은 지점을 두 번 짚을 수가 없다.
     win.trim_pos = QLabel("-/-")
-    win.trim_pos.setFixedWidth(190)
+    win.trim_pos.setFixedWidth(150)
     win.trim_pos.setAlignment(Qt.AlignmentFlag.AlignLeft
                               | Qt.AlignmentFlag.AlignVCenter)
     srow.addWidget(win.trim_pos)
+    # 배속. Playback 탭에 있던 것과 같은 값이다 -- 0.5배는 놓는 순간을 한
+    # 프레임씩, 2~3배는 앞부분을 훑을 때 쓴다. 3배(60Hz)까지는 타이머 주기만
+    # 줄이면 되어 프레임을 건너뛰지 않는다.
+    srow.addWidget(QLabel(tr("배속")))
+    win.trim_speed_combo = QComboBox()
+    for label, mult in PLAYBACK_SPEEDS:
+        win.trim_speed_combo.addItem(label, mult)
+    win.trim_speed_combo.setCurrentIndex([m for _l, m in PLAYBACK_SPEEDS].index(1.0))
+    win.trim_speed_combo.setMaximumWidth(80)
+    win.trim_speed_combo.currentIndexChanged.connect(win.playback_ops.on_trim_speed_changed)
+    srow.addWidget(win.trim_speed_combo)
     outer.addLayout(srow)
 
     # ── 어느 플롯을 볼지 ─────────────────────────────────────────────
@@ -133,7 +146,6 @@ def build_trim_tab(win) -> QWidget:
         chk.setChecked(title == "gripper")
         win.trim_plot_checks[title] = chk
         prow.addWidget(chk)
-    prow.addStretch(1)
     outer.addLayout(prow)
 
     def _relayout() -> None:
@@ -153,8 +165,30 @@ def build_trim_tab(win) -> QWidget:
             plot_box.addWidget(plot, i // 2, i % 2)
             plot.setVisible(True)
             i += 1
+    def _set_all(on: bool) -> None:
+        """여덟 번 누르는 대신 한 번. 체크박스 신호를 막고 마지막에 한 번만
+        다시 깐다 -- 하나씩 풀면 _relayout 이 다섯 번 돌면서 격자가 그때마다
+        다시 짜인다 (조작자, 2026-09-12: "한번에 해제하거나 한번에 선택하는
+        버튼")."""
+        for chk in win.trim_plot_checks.values():
+            chk.blockSignals(True)
+            chk.setChecked(on)
+            chk.blockSignals(False)
+        _relayout()
+
     for title, _dims in PANELS:
         win.trim_plot_checks[title].toggled.connect(_relayout)
+    all_btn = QPushButton(tr("전체"))
+    all_btn.setMaximumWidth(48)
+    all_btn.setToolTip(tr("다섯 플롯을 모두 켭니다"))
+    all_btn.clicked.connect(lambda: _set_all(True))
+    prow.addWidget(all_btn)
+    none_btn = QPushButton(tr("해제"))
+    none_btn.setMaximumWidth(48)
+    none_btn.setToolTip(tr("플롯을 모두 끕니다 -- 영상이 화면을 다 씁니다"))
+    none_btn.clicked.connect(lambda: _set_all(False))
+    prow.addWidget(none_btn)
+    prow.addStretch(1)
     _relayout()
     outer.addLayout(plot_box)
 
