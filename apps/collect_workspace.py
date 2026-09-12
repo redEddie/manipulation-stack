@@ -27,7 +27,7 @@ Panel map (all splitters, all user-resizable):
     menu bar
     toolbar          connect / record / stop / save / discard / upload
     ┌──────┬──────────┬───────────────────────┬──────────────┐
-    │ act. │ left     │ CENTER  Live/Playback │ right        │
+    │ act. │ left     │ CENTER  Live/Gallery  │ right        │
     │ bar  │ (stacked)│ (camera, never swaps) │ (status)     │
     ├──────┴──────────┴───────────────────────┴──────────────┤
     │ bottom tabs: Log / Upload / Validation                 │
@@ -79,7 +79,6 @@ from mstack.data.dataset_schema import (  # noqa: E402
 from mstack.data.collection_history import new_run_id  # noqa: E402
 from mstack.scene.dataset_meta import load_identity  # noqa: E402
 from mstack.gui.dialogs import DatasetSchemaDialog, hf_account  # noqa: E402
-from mstack.gui.constants import PLAYBACK_FPS  # noqa: E402
 from mstack.gui.curation_basket import CurationBasket  # noqa: E402
 from mstack.gui.fonts import ensure_font
 from mstack.gui.wheel_guard import install_wheel_guard  # noqa: E402
@@ -312,10 +311,6 @@ class WorkspaceWindow(QMainWindow):
         self.analysis_timer.setSingleShot(True)
         self.analysis_timer.timeout.connect(self.stats_ops.auto_refresh_analysis)
 
-        self.playback.play_timer = QTimer(self)
-        self.playback.play_timer.setInterval(int(1000 / PLAYBACK_FPS))
-        self.playback.play_timer.timeout.connect(self.playback_ops.on_play_tick)
-
         # App-wide, not window-scoped: the operator's hands are on the leader,
         # so whichever widget happens to hold focus must not swallow the keys.
         QApplication.instance().installEventFilter(self)
@@ -527,7 +522,7 @@ class WorkspaceWindow(QMainWindow):
         p["wrist"]["x"] = self.crop_wrist_x.value()
         self._refresh_crop_labels()
         save_crop_params(p)
-        for views in (self.live_views, self.play_views,
+        for views in (self.live_views,
                       getattr(self, "trim_views", {})):
             for role, v in views.items():
                 v.set_crop_guide(**p[role])
@@ -668,7 +663,7 @@ class WorkspaceWindow(QMainWindow):
 
     # ------------------------------------------------------------ cameras
     def _on_square_guide(self, on: bool) -> None:
-        for v in list(self.live_views.values()) + list(self.play_views.values()) \
+        for v in list(self.live_views.values()) \
                 + list(getattr(self, "trim_views", {}).values()):
             v.set_square_guide(on)
 
@@ -940,9 +935,6 @@ class WorkspaceWindow(QMainWindow):
                 self.log(f"[원시로그] {line.strip()}")
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        self.playback.play_timer.stop()
-        if self.playback.play_loader is not None:
-            self.playback.play_loader.wait(3000)
         self.depth_ops.stop_cloud(restore_previews=False)
         self.camera_ops.stop_previews_blocking()
         self.camera_ops.stop_camera_node()

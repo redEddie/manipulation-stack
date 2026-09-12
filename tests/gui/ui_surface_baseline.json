@@ -86,7 +86,6 @@
       "Gallery",
       "Trim",
       "Analysis",
-      "Playback",
       "레이아웃",
       "Point Cloud",
       "Depth",
@@ -180,7 +179,6 @@
     "gallery",
     "trim",
     "analysis",
-    "playback",
     "layout",
     "cloud",
     "depth"
@@ -202,8 +200,7 @@
       "live",
       "gallery",
       "trim",
-      "analysis",
-      "playback"
+      "analysis"
     ],
     "doctor": [
       "doc_record",
@@ -215,8 +212,7 @@
       "live",
       "gallery",
       "trim",
-      "analysis",
-      "playback"
+      "analysis"
     ],
     "upload": [
       "live"

@@ -8,6 +8,11 @@
 
 그리고 Analysis 의 [Trim 에서 재생] 이 **Trim 탭**을 연다 (예전엔 Playback).
 
+**Playback 탭은 2026-09-12 에 없앴다.** 같은 일(한 에피소드를 크게 보며
+재생)을 Trim 이 전부 하게 되어, 같은 것을 하는 화면이 둘이 되었다. 7번이
+그것이 되살아나지 않는지 지킨다 -- 되살리려면 그 판단을 다시 하고 이 줄을
+지우면 된다.
+
 로봇도 카메라도 필요 없다 (offscreen). 합성 scene 파일 하나로 돈다.
 """
 import json
@@ -151,6 +156,24 @@ def main() -> None:
         assert cur is win.center_tab_widgets["trim"], \
             "Playback 이 아니라 Trim 으로 가야 한다"
         print("6. Trim 에서 재생 OK · 후보 목록의 짧은 이름 OK")
+
+        # ---------------------------------------------- 7. Playback stay-gone
+        from apps.workspace.constants import CENTER_TABS, CENTER_TABS_BY_ACTIVITY
+        assert "playback" not in dict(CENTER_TABS), "Playback 탭이 돌아왔다"
+        for act, keys in CENTER_TABS_BY_ACTIVITY.items():
+            assert "playback" not in keys, act
+        assert "playback" not in win.center_tab_widgets
+        for gone in ("play_views", "play_btn", "play_slider", "play_caption",
+                     "speed_combo"):
+            assert not hasattr(win, gone), gone
+        for gone in ("play_episode", "on_play_toggle", "on_play_tick",
+                     "show_frame", "stop_playback"):
+            assert not hasattr(ops, gone), gone
+        # 갤러리 타일 더블클릭도 Trim 으로 온다 (예전엔 Playback 이었다).
+        show_center_tab(win, "gallery")
+        win.gallery_ops.on_gallery_activated({"name": "episode_001"})
+        assert win.center_tabs.currentWidget() is win.center_tab_widgets["trim"]
+        print("7. Playback stay-gone · 갤러리 더블클릭도 Trim OK")
 
         for loader in (win.playback.trim_loader,):
             if loader is not None:

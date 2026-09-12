@@ -27,7 +27,7 @@ from apps.workspace.shared.sizing import shrinkable_combo
 def build_gallery_tab(win) -> QWidget:
     """scene 에피소드 갤러리 (#31): 썸네일 그리드 + 재생 제어.
 
-    더블클릭 = Playback 재생(기존 경로 재사용). 썸네일은 uid 기반 캐시라
+    더블클릭 = Trim 탭에서 크게 보기. 썸네일은 uid 기반 캐시라
     (에피소드 immutable) 첫 로드 이후에는 즉시 뜬다.
     """
     w = QWidget()

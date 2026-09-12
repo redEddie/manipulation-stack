@@ -64,11 +64,6 @@ class PlaybackState:
     #: 새로 물 때마다 비운다 (다른 에피소드의 걸음을 되돌릴 수는 없다).
     trim_undo: list = field(default_factory=list)
 
-    play_key: tuple | None = None
-    play_timer: QTimer | None = None
-    play_frames: dict = field(default_factory=lambda: {"agent": None, "wrist": None})
-    play_loader: Any | None = None
-
     layout_playing: bool = True
 
 

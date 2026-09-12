@@ -78,13 +78,13 @@ CENTER_TABS = (
     ("doc_progress", "진행 닥터"),
     ("doc_schema", "스키마 닥터"),
     # 큐레이션 넷은 **고치는 순서**로 둔다 (2026-09-11 조작자): 훑고(Gallery)
-    # -> 끝을 다듬고(Trim) -> 수치를 보고(Analysis) -> 한 개를 크게
-    # 본다(Playback). 여기가 탭이 붙는 순서의 정본이다 --
-    # CENTER_TABS_BY_ACTIVITY 는 어느 활동에 보일지만 정하고 순서는 안 정한다.
+    # -> 끝을 다듬고(Trim) -> 수치를 보고(Analysis). 한 개를 크게 보는
+    # 것도 Trim 이 한다 (Playback 탭은 2026-09-12 에 제거). 여기가 탭이
+    # 붙는 순서의 정본이다 -- CENTER_TABS_BY_ACTIVITY 는 어느 활동에 보일지만
+    # 정하고 순서는 안 정한다.
     ("gallery", "Gallery"),
     ("trim", "Trim"),
     ("analysis", "Analysis"),
-    ("playback", "Playback"),
     ("layout", "레이아웃"),
     ("cloud", "Point Cloud"),
     ("depth", "Depth"),
@@ -112,13 +112,14 @@ CENTER_TABS_BY_ACTIVITY = {
     "configure": ("instruction", "scene", "live"),
     "collect": ("live",),
     # 순서는 **고치는 순서**다 (2026-09-11 조작자): 훑고(gallery) -> 끝을
-    # 다듬고(trim) -> 수치를 보고(analysis) -> 한 개를 크게 본다(playback).
+    # 다듬고(trim) -> 수치를 보고(analysis). 한 개를 크게 보는 것도 Trim 이
+    # 한다 (Playback 탭은 2026-09-12 에 제거).
     # gallery 가 이 활동의 기본 화면이라 live 다음에 온다.
-    "dataset": ("live", "gallery", "trim", "analysis", "playback"),
+    "dataset": ("live", "gallery", "trim", "analysis"),
     # 활동탭은 하나로 둔다 -- 운용자에게는 "어디가 잘못됐나" 라는 하나의
     # 질문이라 세 군데를 뒤지게 하면 안 된다 (2026-09-07 사용자 결정).
     "doctor": ("doc_record", "doc_progress", "doc_schema", "live"),
-    "stats": ("live", "gallery", "trim", "analysis", "playback"),
+    "stats": ("live", "gallery", "trim", "analysis"),
     "upload": ("live",),
     "settings": ("live",),
 }

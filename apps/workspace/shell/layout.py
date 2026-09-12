@@ -32,7 +32,6 @@ from apps.workspace.shared.tabs import tab_title
 from apps.workspace.constants import (
     ACTIVITIES,
     CENTER_TABS,
-    PLAYBACK_SPEEDS,
     WIDE_FIELDS,
     workflow_step,
 )
@@ -132,52 +131,6 @@ def build_center(win) -> None:
     grow.addStretch(1)
     live.layout().addLayout(grow)
 
-    play = QWidget()
-    play_col = QVBoxLayout(play)
-    play_col.setContentsMargins(4, 4, 4, 4)
-    win.play_split = QSplitter(Qt.Orientation.Horizontal)
-    win.play_views = {}
-    for key, title in (("agent", "Agent (정면)"), ("wrist", "Wrist (손목)")):
-        box = QGroupBox(tr(title))
-        inner = QVBoxLayout(box)
-        inner.setContentsMargins(4, 4, 4, 4)
-        view = VideoView()
-        view.setText(tr("에피소드를 선택하세요"))
-        view.set_crop_guide(**win.cameras.crop_params[key])
-        inner.addWidget(view)
-        win.play_views[key] = view
-        win.play_split.addWidget(box)
-    win.play_split.setSizes([600, 600])
-    play_col.addWidget(win.play_split, 1)
-
-    row = QHBoxLayout()
-    win.play_btn = QPushButton(tr("재생"))
-    win.play_btn.setEnabled(False)
-    win.play_btn.clicked.connect(win.playback_ops.on_play_toggle)
-    row.addWidget(win.play_btn)
-    win.play_slider = QSlider(Qt.Orientation.Horizontal)
-    win.play_slider.setEnabled(False)
-    win.play_slider.valueChanged.connect(win.playback_ops.show_frame)
-    row.addWidget(win.play_slider, 1)
-    win.play_pos = QLabel("-/-")
-    win.play_pos.setMinimumWidth(80)
-    win.play_pos.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    row.addWidget(win.play_pos)
-    # 배속. 3배까지는 타이머 주기만 줄이면 되고(20 -> 60Hz) 프레임을 건너뛸
-    # 필요가 없어서, 빠르게 훑을 때도 놓치는 프레임이 없다.
-    row.addWidget(QLabel(tr("배속")))
-    win.speed_combo = QComboBox()
-    for label, mult in PLAYBACK_SPEEDS:
-        win.speed_combo.addItem(label, mult)
-    win.speed_combo.setCurrentIndex(
-        [m for _l, m in PLAYBACK_SPEEDS].index(1.0))
-    win.speed_combo.currentIndexChanged.connect(win.playback_ops.on_speed_changed)
-    win.speed_combo.setMaximumWidth(80)
-    row.addWidget(win.speed_combo)
-    play_col.addLayout(row)
-    win.play_caption = QLabel(tr("Dataset 패널에서 에피소드를 고르면 여기서 재생됩니다."))
-    win.play_caption.setStyleSheet("color:#888;")
-    play_col.addWidget(win.play_caption)
     # 탭은 키로 등록한다. 코드가 인덱스로 탭을 가리키면 탭이 하나만 늘어도
     # 전부 밀리고, 그 밀림은 조용하다 (엉뚱한 탭이 열릴 뿐 예외가 안 난다).
     # 순서·제목의 정본은 constants.CENTER_TABS 다.
@@ -188,7 +141,6 @@ def build_center(win) -> None:
         "doc_record": build_record_tab(win),
         "doc_progress": build_progress_tab(win),
         "doc_schema": build_schema_tab(win),
-        "playback": play,
         "analysis": build_analysis_tab(win),
         "trim": build_trim_tab(win),
         "layout": build_layout_tab(win),

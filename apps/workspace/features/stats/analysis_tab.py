@@ -25,7 +25,7 @@ from mstack.gui.plot_widgets import DistStrip, Histogram, SeriesPlot
 def build_analysis_tab(win) -> QWidget:
     """Center-tab analysis: the curve view plus the curation list.
 
-    It lives in the center, next to Live/Playback, because judging a take
+    It lives in the center, next to Live/Gallery/Trim, because judging a take
     means looking at its curves and its video together -- putting the plots
     in a side panel would have made them too narrow to read.
     """

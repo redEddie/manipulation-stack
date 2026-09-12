@@ -1,4 +1,4 @@
-"""Playback, trim, replay, and HDF5 structure operations for WorkspaceWindow."""
+"""Trim, replay, and HDF5 structure operations for WorkspaceWindow."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from apps.workspace.shared.tabs import show_center_tab
 
 
 class PlaybackOps:
-    """Playback, trim, robot replay, and HDF5 structure inspection."""
+    """Trim, robot replay, and HDF5 structure inspection."""
 
     def __init__(self, win) -> None:
         self.win = win
@@ -334,99 +334,6 @@ class PlaybackOps:
         self.win.dataset_ops.refresh_dataset_tree()
         self.win.stats_ops.refresh_analysis(force=True)
         self.show_trim_for(path, demo)
-
-    # -------------------------------------------------------------- playback
-    def play_episode(self, path: str, demo: str) -> None:
-        """Dataset 트리와 Analysis 순위표가 공유하는 재생 진입점."""
-        if self.win.playback.play_key == (path, demo):
-            show_center_tab(self.win, "playback")
-            return
-        if self.win.session.active_file_path is not None and Path(path) == self.win.session.active_file_path:
-            self.win.play_caption.setText(tr("수집 중인 파일은 재생할 수 없습니다."))
-            return
-        self.stop_playback()
-        self.win.playback.play_key = (path, demo)
-        self.win.play_caption.setText(tr("불러오는 중... {d}").format(d=demo))
-        show_center_tab(self.win, "playback")
-        if self.win.playback.play_loader is not None:
-            self.win.playback.play_loader.wait()
-        self.win.playback.play_loader = EpisodeLoadWorker(path, demo)
-        self.win.playback.play_loader.loaded.connect(self.on_episode_loaded)
-        self.win.playback.play_loader.failed.connect(
-            lambda m: self.win.play_caption.setText(tr("재생 실패: {m}").format(m=m)))
-        self.win.playback.play_loader.start()
-
-    def on_episode_loaded(self, path, demo, agent, wrist) -> None:
-        if self.win.playback.play_key != (path, demo):
-            return
-        self.win.playback.play_frames = {"agent": agent, "wrist": wrist}
-        n = len(agent) if agent is not None else len(wrist)
-        self.win.play_slider.blockSignals(True)
-        self.win.play_slider.setRange(0, max(0, n - 1))
-        self.win.play_slider.setValue(0)
-        self.win.play_slider.blockSignals(False)
-        self.win.play_slider.setEnabled(True)
-        self.win.play_btn.setEnabled(True)
-        self.win.play_btn.setText(tr("일시정지"))
-        self.apply_speed()
-        self.refresh_play_caption()
-        self.show_frame(0)
-        self.win.playback.play_timer.start()
-
-    def stop_playback(self) -> None:
-        self.win.playback.play_timer.stop()
-        self.win.playback.play_frames = {"agent": None, "wrist": None}
-        self.win.playback.play_key = None
-        self.win.play_btn.setEnabled(False)
-        self.win.play_btn.setText(tr("재생"))
-        self.win.play_slider.setEnabled(False)
-        self.win.play_pos.setText("-/-")
-        for v in self.win.play_views.values():
-            v.clear_frame(tr("에피소드를 선택하세요"))
-
-    def speed(self) -> float:
-        data = self.win.speed_combo.currentData()
-        return float(data) if data else 1.0
-
-    def apply_speed(self) -> None:
-        interval = max(1, int(round(1000.0 / (PLAYBACK_FPS * self.speed()))))
-        self.win.playback.play_timer.setInterval(interval)
-
-    def on_speed_changed(self) -> None:
-        self.apply_speed()
-        self.refresh_play_caption()
-
-    def refresh_play_caption(self) -> None:
-        if not self.win.playback.play_key:
-            return
-        path, demo = self.win.playback.play_key
-        n = self.win.play_slider.maximum() + 1
-        speed = self.speed()
-        eff = PLAYBACK_FPS * speed
-        self.win.play_caption.setText(
-            f"{Path(path).name} · {demo} · {n} frames · "
-            + (tr("{s:g}배속 ({f:g} fps)").format(s=speed, f=eff) if speed != 1
-               else tr("{f:g} fps (실제 속도)").format(f=eff)))
-
-    def on_play_toggle(self) -> None:
-        if self.win.playback.play_timer.isActive():
-            self.win.playback.play_timer.stop()
-            self.win.play_btn.setText(tr("재생"))
-        else:
-            self.win.playback.play_timer.start()
-            self.win.play_btn.setText(tr("일시정지"))
-
-    def on_play_tick(self) -> None:
-        n = self.win.play_slider.maximum() + 1
-        if n > 1:
-            self.win.play_slider.setValue((self.win.play_slider.value() + 1) % n)
-
-    def show_frame(self, i: int) -> None:
-        for key, view in self.win.play_views.items():
-            frames = self.win.playback.play_frames.get(key)
-            if frames is not None and i < len(frames):
-                view.set_frame(frames[i])
-        self.win.play_pos.setText(f"{i + 1}/{self.win.play_slider.maximum() + 1}")
 
     # -------------------------------------------------------------- analysis
     def on_rank_trim(self) -> None:

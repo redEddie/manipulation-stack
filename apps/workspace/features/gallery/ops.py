@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTreeWidgetItem
 
 from apps.workspace.features.collection.header import set_busy
+from apps.workspace.shared.tabs import show_center_tab
 from mstack.gui.i18n import tr
 from mstack.gui.workers import GalleryLoadWorker
 from mstack.scene.scene_format import iter_scene_files
@@ -250,7 +251,12 @@ class GalleryOps:
         return [(path, e["name"]) for e in (self.win._gallery_selected or [])]
 
     def on_gallery_activated(self, ep) -> None:
-        """타일을 크게 보기 -- 기존 Playback 경로를 그대로 쓴다."""
+        """타일을 더블클릭하면 **Trim 탭**에서 크게 본다.
+
+        예전에는 Playback 탭을 열었다. 그 탭은 2026-09-12 에 없앴다 --
+        한 에피소드를 크게 보는 자리는 Trim 하나로 모았다.
+        """
         path = self.win.gallery_scene_combo.currentData()
         if path and ep:
-            self.win.playback_ops.play_episode(path, ep["name"])
+            self.win.playback_ops.show_trim_for(path, ep["name"])
+            show_center_tab(self.win, "trim")
