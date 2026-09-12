@@ -145,7 +145,7 @@ print(f"5 통과: 계획에 없는 slot -- 누계만 ({t})")
 _write_plan(10)
 win.collection.refresh_instruction()
 assert win.instr_counter.text() == f"S000 · {IID} · 2/10"
-ok = win.dataset_ops.delete_episodes({scene: [ok0]})
+ok = win.delete_ops.delete_episodes({scene: [ok0]})
 assert ok
 # 삭제 직후 count_by_slot 실측
 counts = count_by_slot(scene)

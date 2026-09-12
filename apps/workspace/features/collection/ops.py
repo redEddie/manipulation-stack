@@ -23,6 +23,7 @@ from mstack.scene.scene_format import count_by_slot, read_scene_metadata, scene_
 from apps.workspace.features.collection.header import set_header_state
 from apps.workspace.features.collection.page import set_live_keys
 from apps.workspace.models import _new_stats
+from apps.workspace.shared.progress import connect_progress
 from apps.workspace.shared.tabs import show_center_tab
 
 
@@ -63,8 +64,8 @@ class CollectionOps:
             return
         self.win.session.last_saved_success = not self.win.session.last_saved_success
         self.win.worker.cmd_set_episode_success(self.win.session.last_saved_name, self.win.session.last_saved_success)
-        self.win.stats_ops.bump("success", 1 if self.win.session.last_saved_success else -1)
-        self.win.stats_ops.bump("failed", -1 if self.win.session.last_saved_success else 1)
+        self.win.history_ops.bump("success", 1 if self.win.session.last_saved_success else -1)
+        self.win.history_ops.bump("failed", -1 if self.win.session.last_saved_success else 1)
         self.win._refresh_verdict_label()
 
     # --------------------------------------------------------------- session UI
@@ -443,7 +444,7 @@ class CollectionOps:
             waited = time.monotonic() - self.win._connect_wait_since
             if waited < 12.0:
                 self.win.tb_actions["connect"].setEnabled(False)
-                self.win.stats_ops.connect_progress(waited)
+                connect_progress(self.win, waited)
                 QTimer.singleShot(200, self.win.collection.on_connect)
                 return
             self.win._connect_wait_since = None
@@ -612,10 +613,10 @@ class CollectionOps:
         self.win.right_fields["frames"].setText(f"{n_frames} ({seconds:.1f}s)")
 
     def on_saved(self, name, n_frames) -> None:
-        self.win.stats_ops.bump("saved")
-        self.win.stats_ops.bump("frames", n_frames)
+        self.win.history_ops.bump("saved")
+        self.win.history_ops.bump("frames", n_frames)
         if self.win.session.pending_success is not None:
-            self.win.stats_ops.bump("success" if self.win.session.pending_success else "failed")
+            self.win.history_ops.bump("success" if self.win.session.pending_success else "failed")
             self.win.session.pending_success = None
         self.win.session.last_saved_name = name
         if self.win.session.pending_success is not None:
@@ -669,7 +670,7 @@ class CollectionOps:
         Phase 4-8 이 창에서 이 메서드를 지우면서 여기로 옮기지 않아, 조작자가
         테이크를 버릴 때마다 AttributeError 로 죽었다 (2026-09-04 복구).
         """
-        self.win.stats_ops.bump("discarded")
+        self.win.history_ops.bump("discarded")
         self.win.log(f"[버림] {n_frames} frames")
 
     def on_countdown(self, seconds) -> None:
@@ -743,7 +744,7 @@ class CollectionOps:
         # worker 를 놓기 **전에** 이력을 남긴다 -- 이 세션이 무슨 scene 을
         # 찍었는지는 worker 가 들고 있다. 연습 모드(파일 없음)는 남기지
         # 않는다: 저장 카운터가 0 이라 record_session 이 알아서 건너뛴다.
-        self.win.stats_ops.record_session()
+        self.win.history_ops.record_session()
         self.win.worker = None
         self.win.session.no_dataset_session = False
         self.win.session.active_file_path = None

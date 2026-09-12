@@ -161,7 +161,7 @@ sc_eps = list_scene_episodes(scene)
 sc_names = [e["name"] for e in sc_eps]
 victim_uid5 = sc_eps[0]["episode_uid"]
 n5 = len(sc_eps)
-ok = win.dataset_ops.delete_episodes({scene: [sc_names[0]], legacy: ["demo_0"]})
+ok = win.delete_ops.delete_episodes({scene: [sc_names[0]], legacy: ["demo_0"]})
 assert ok
 after = list_scene_episodes(scene)
 assert len(after) == n5 - 1
@@ -191,18 +191,18 @@ have_repo = bool(win.upload.repo_id_for("repo_id"))
 # (a) 사이드카에 이 uid 가 있음 -> "올라가 있음 + 재빌드"
 _sync.hub_episode_uids = lambda repo: ({uid0}, "")
 _sync.hub_meta = lambda repo: ({cur[0]["instruction"]: 99}, {}, "")
-rows, n_ok, note = win.dataset_ops.describe_delete_targets(targets)
+rows, n_ok, note = win.delete_ops.describe_delete_targets(targets)
 assert len(rows) == 2 and all("EP-" in r_ for r_ in rows)
 if have_repo:
     assert "재빌드" in note and uid0 in note, note
 # (b) 사이드카는 있는데 이 uid 없음 -> 같은 문장이 있어도 "올라가 있지 않음"
 _sync.hub_episode_uids = lambda repo: ({"EP-S999-I000-E000"}, "")
-_, _, note_b = win.dataset_ops.describe_delete_targets(targets)
+_, _, note_b = win.delete_ops.describe_delete_targets(targets)
 if have_repo:
     assert "올라가 있지 않습니다" in note_b, note_b
 # (c) 사이드카 없음(legacy repo) -> 문장 일치는 '참고' 로만, 올라갔다고 하지 않음
 _sync.hub_episode_uids = lambda repo: (None, "")
-_, _, note_c = win.dataset_ops.describe_delete_targets(targets)
+_, _, note_c = win.delete_ops.describe_delete_targets(targets)
 if have_repo:
     assert "참고" in note_c and "올라갔다는 뜻은 아닙니다" in note_c, note_c
 print(f"7 통과: 확인창 목록 {len(rows)}행 + Hub 안내 uid 단위 3경로 (repo 설정={'O' if have_repo else '-'})")
@@ -260,12 +260,12 @@ win.gallery_scene_combo.clear()
 win.gallery_scene_combo.addItem(Path(scene).name, str(scene))
 win.gallery.selected = [cur[0]]
 captured_dialogs.clear()
-win.dataset_ops.on_delete_selected()
+win.delete_ops.on_delete_selected()
 # 표시 경로: 확인창이 뜨지 않고 장바구니에만 들어간다 (지우는 문은 Delete marked 하나).
 assert not captured_dialogs, captured_dialogs
 assert (str(scene), cur[0]["name"]) in win.basket
 # 실행 경로: 장바구니 -> 확인창 -> 실제 삭제, 성공 후 해당 파일 표시는 비워진다.
-win.dataset_ops.on_delete_marked()
+win.delete_ops.on_delete_marked()
 assert captured_dialogs, "\uD655\uC778\uCC3D\uC774 \uB728\uC9C0 \uC54A\uC74C"
 kind, title, body, wargs, wkw = captured_dialogs[-1]
 assert "\uC5D0\uD53C\uC18C\uB4DC \uC0AD\uC81C" in title

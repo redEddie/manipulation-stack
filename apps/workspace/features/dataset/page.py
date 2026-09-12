@@ -163,10 +163,10 @@ def build_dataset(win) -> QWidget:
         "삭제 목록에 넣은 에피소드를 한 번에 지웁니다.\n"
         "확인창에서 무엇이 지워지는지 다시 봅니다. 되돌릴 수 없습니다.\n"
         "표시는 격자·순위표 어디서든 하고, 지우는 것은 이 버튼 하나뿐입니다."))
-    win.basket_exec_btn.clicked.connect(win.dataset_ops.on_delete_marked)
+    win.basket_exec_btn.clicked.connect(win.delete_ops.on_delete_marked)
     brow.addWidget(win.basket_exec_btn)
     win.basket_clear_btn = QPushButton(tr("Clear"))
-    win.basket_clear_btn.clicked.connect(win.dataset_ops.on_clear_marks)
+    win.basket_clear_btn.clicked.connect(win.delete_ops.on_clear_marks)
     brow.addWidget(win.basket_clear_btn)
     col.addLayout(brow)
 

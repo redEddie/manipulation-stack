@@ -67,6 +67,10 @@ class _Stub(QMainWindow):
         # 큐레이션이 갤러리 쪽 ops 를 부르게 됐다 (2026-09-11) -- 새로고침이
         # scene 목록·썸네일을 다시 읽는 쪽으로 합쳐졌다.
         self.gallery_ops = _NoOp()
+        # 큰 ops 둘을 책임대로 가르면서 늘었다 (2026-09-12): 지우는 일은
+        # delete_ops, 세션 장부(카운터·디스크·이력)는 history_ops.
+        self.delete_ops = _NoOp()
+        self.history_ops = _NoOp()
 
     def __getattr__(self, name):
         if name.startswith("_"):

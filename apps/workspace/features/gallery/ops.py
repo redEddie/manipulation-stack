@@ -255,7 +255,7 @@ class GalleryOps:
             for k in keys:
                 self.win.basket.add(k)
         self.win.gallery_grid.refresh_marks()
-        self.win.dataset_ops.refresh_basket_ui()
+        self.win.delete_ops.refresh_basket_ui()
 
     def selected_keys(self) -> list:
         """선택을 ``(파일경로, 에피소드이름)`` 목록으로. 격자 밖(재판정·실로봇

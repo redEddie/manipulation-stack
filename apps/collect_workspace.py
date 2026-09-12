@@ -88,12 +88,12 @@ from mstack.gui.text_utils import clean_stream_lines, is_progress_line, repo_id_
 from apps.workspace.constants import LOG_DIR  # noqa: E402
 from apps.workspace.features.camera import CameraOps, DepthOps  # noqa: E402
 from apps.workspace.features.collection import CollectionOps  # noqa: E402
-from apps.workspace.features.dataset import DatasetOps  # noqa: E402
+from apps.workspace.features.dataset import DatasetOps, DeleteOps  # noqa: E402
 from apps.workspace.features.doctor import DoctorOps  # noqa: E402
 from apps.workspace.features.gallery import GalleryOps  # noqa: E402
 from apps.workspace.features.trim import TrimOps  # noqa: E402
 from apps.workspace.features.scene import LayoutRefOps, SceneOps, ScenePlanningOps  # noqa: E402
-from apps.workspace.features.stats import StatsOps  # noqa: E402
+from apps.workspace.features.stats import HistoryOps, StatsOps  # noqa: E402
 from apps.workspace.features.system import SystemOps  # noqa: E402
 from apps.workspace.features.upload import UploadOps  # noqa: E402
 from apps.workspace.models import (  # noqa: E402
@@ -103,6 +103,7 @@ from apps.workspace.models import (  # noqa: E402
     ProcessRegistry,
     SessionState,
 )
+from apps.workspace.shared.progress import log_progress  # noqa: E402
 from apps.workspace.shared.raw_logger_proc import spawn_logger
 from apps.workspace.shared.sizing import GROUP_BOX_QSS  # noqa: E402
 from apps.workspace.shared.camera_node_proc import adopt_node  # noqa: E402
@@ -278,9 +279,11 @@ class WorkspaceWindow(QMainWindow):
         self.camera_ops = CameraOps(self)
         self.depth_ops = DepthOps(self)
         self.dataset_ops = DatasetOps(self)
+        self.delete_ops = DeleteOps(self)
         self.gallery_ops = GalleryOps(self)
         self.basket = CurationBasket()
         self.stats_ops = StatsOps(self)
+        self.history_ops = HistoryOps(self)
         self.system = SystemOps(self)
         self.collection = CollectionOps(self)
 
@@ -310,9 +313,9 @@ class WorkspaceWindow(QMainWindow):
         # 저장 경로 여유는 초마다 볼 값이 아니다 -- 에피소드 하나가 60MB 라
         # 5초 사이에 눈에 띄게 줄지 않는다.
         self.disk_timer = QTimer(self)
-        self.disk_timer.timeout.connect(self.stats_ops.refresh_disk)
+        self.disk_timer.timeout.connect(self.history_ops.refresh_disk)
         self.disk_timer.start(5000)
-        self.stats_ops.refresh_disk()
+        self.history_ops.refresh_disk()
 
         # 데이터가 바뀌면 알아서 다시 분석한다 (2026-09-06 사용자 요청).
         # 단발 타이머라 신호가 몰려 와도 스캔은 한 번이다.
@@ -594,7 +597,7 @@ class WorkspaceWindow(QMainWindow):
             self.doctor.refresh_progress()
             self.doctor.refresh_schema()
         elif key == "stats":
-            self.stats_ops.refresh_history()
+            self.history_ops.refresh_history()
             # auto_ 를 쓴다 -- 세션 중에는 기록 중인 파일이 잠겨 있어서, 그냥
             # 스캔하면 지금 찍고 있는 것만 빠진 통계가 나온다.
             self.stats_ops.auto_refresh_analysis()
@@ -747,7 +750,7 @@ class WorkspaceWindow(QMainWindow):
         w.fatal_error.connect(self.collection.on_fatal)
         w.connected.connect(self.collection.on_connected)
         w.episode_list_changed.connect(self.trim_ops.on_episode_list)
-        w.session_summary.connect(self.stats_ops.on_summary)
+        w.session_summary.connect(self.history_ops.on_summary)
         # 세션 해제(버튼 복구, worker=None)는 session_summary가 아니라 finished에
         # 걸어야 한다. summary는 run()의 finally에서만 나오는데, 연결 실패는 그
         # 전에 조기 return이라 summary가 영영 오지 않는다 -- 그 상태에서는 GUI가
@@ -817,7 +820,7 @@ class WorkspaceWindow(QMainWindow):
         # 몇 분이면 수십 줄이 쌓여, 그 사이 지나간 다른 로그를 밀어낸다.
         for line in clean_stream_lines(data, state, every_s=1.0):
             if is_progress_line(line):
-                self.stats_ops.log_progress(f"{prefix} {line}", view)
+                log_progress(self, f"{prefix} {line}", view)
             else:
                 self.log(f"{prefix} {line}", view)
 
@@ -963,7 +966,7 @@ class WorkspaceWindow(QMainWindow):
             # 이력은 여기서 남긴다. cmd_quit 뒤의 wait() 동안에는 이벤트
             # 루프가 안 돌아서 on_worker_finished 가 올 자리가 없다 --
             # 창을 그냥 닫으면 마지막 세션이 통째로 이력에서 빠졌다.
-            self.stats_ops.record_session()
+            self.history_ops.record_session()
             self.worker.cmd_quit()
             self.worker.wait(5000)
         self.system.on_stop_node()

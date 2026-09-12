@@ -36,7 +36,7 @@ from apps.workspace.constants import (  # noqa: E402
     workflow_step,
 )
 from apps.workspace.features.stats import build_stats  # noqa: E402
-from apps.workspace.features.stats.ops import StatsOps  # noqa: E402
+from apps.workspace.features.stats.history_ops import HistoryOps  # noqa: E402
 from apps.workspace.shell import build_statusbar  # noqa: E402
 
 # --------------------------------------------------------------- 5. 워크플로
@@ -59,7 +59,7 @@ class _Stub(QMainWindow):
         self.collector_edit = QLineEdit("tester")
         self.run_id = "test-run"
         self.session = None
-        self.stats_ops = StatsOps(self)
+        self.history_ops = HistoryOps(self)
         self.log_lines: list = []
 
     def log(self, msg) -> None:
@@ -69,7 +69,7 @@ class _Stub(QMainWindow):
 win = _Stub()
 build_statusbar(win)
 assert hasattr(win, "sb_disk"), "저장 경로 여유가 상태바에 없다"
-win.stats_ops.refresh_disk()
+win.history_ops.refresh_disk()
 assert "GB" in win.sb_disk.text(), win.sb_disk.text()
 print("2. 저장 경로 여유가 상태바에 있다 OK:", win.sb_disk.text())
 
