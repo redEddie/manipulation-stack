@@ -155,4 +155,16 @@ assert invalidate_scene_proxies("S000", proxy_dir_for(a, TMP)) == 1
 assert not pa.exists() and pb.exists(), "다른 데이터셋의 캐시를 지웠다"
 print(f"8. 데이터셋별 캐시 분리 ({dataset_tag(a)} / {dataset_tag(b)}) OK")
 
-print("\n프록시 클립 캐시 통과 (데이터셋 분리 포함)")
+# ---- 9. 지웠다는 사실이 캐시 옆에 남는다 ----
+# 2026-09-11 에 클립 120개가 세 번 사라졌는데 스택 추적·스위트·GUI 로그
+# 어느 것으로도 못 잡았고, 이 감사 로그를 넣고서야 범인(테스트를 단독으로
+# 돌려 진짜 상태 폴더를 쓴 것)이 드러났다. 그 증거 통로가 살아 있는지 본다.
+from mstack.data.proxy_clip import AUDIT_NAME  # noqa: E402
+
+audit = proxy_dir_for(a, TMP) / AUDIT_NAME
+assert audit.exists(), f"{AUDIT_NAME} 이 안 쓰였다 -- 다음에 사라지면 또 못 찾는다"
+last = audit.read_text(encoding="utf-8").strip().splitlines()[-1]
+assert "S000" in last and "1" in last, last
+print(f"9. 삭제 감사 기록 OK ({last.strip()[:60]})")
+
+print("\n프록시 클립 캐시 통과 (데이터셋 분리 · 감사 기록 포함)")

@@ -132,4 +132,22 @@ win2.worker = _Worker()
 assert jobs.close_blockers(win2) == ["LeRobot 변환", "수집 세션"], jobs.close_blockers(win2)
 print("5. 닫기 확인의 이유 OK")
 
+# --------------------------------------- 6. "지금 읽는 중" 표시 (set_busy)
+# 켜는 것보다 **끄는 것**이 중요하다 -- 안 끄면 화면이 영원히 "읽는 중" 이라고
+# 거짓말한다. 이 표시는 큐레이션 로딩이 길어서 넣은 것이다 (2026-09-12).
+from PyQt6.QtWidgets import QLabel  # noqa: E402
+
+from apps.workspace.shared.busy import set_busy  # noqa: E402
+
+win3 = _Win()
+win3.hud_busy = QLabel("")
+win3.hud_busy.setVisible(False)
+set_busy(win3, "27개 파일을 분석하는 중")
+assert win3.hud_busy.isVisible() and "27개" in win3.hud_busy.text(), win3.hud_busy.text()
+set_busy(win3)
+assert not win3.hud_busy.isVisible() and win3.hud_busy.text() == "", win3.hud_busy.text()
+# 라벨이 아직 없는 창(짓는 도중)에서도 죽지 않는다
+set_busy(_Win(), "아무거나")
+print("6. set_busy OK (켜기·끄기·라벨 없는 창)")
+
 print("test_jobs OK")

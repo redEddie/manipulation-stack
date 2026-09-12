@@ -70,7 +70,8 @@ from mstack.config.paths import state_dir
 #: ``MSTACK_PROXY_DIR`` 을 같은 곳으로 가리키면 캐시를 공유한다.
 PROXY_DIR_ENV = "MSTACK_PROXY_DIR"
 
-#: 프록시가 쌓이는 곳. 썸네일 캐시(``thumbs/``) 옆이다.
+#: 프록시가 쌓이는 곳. 상태 폴더 안이다 (썸네일 캐시가 있던 자리 옆 --
+#: 그 캐시는 2026-09-12 에 없앴고 남은 jpg 도 2026-09-13 에 지웠다).
 #:
 #: **왜 환경 변수로 덮을 수 있는가.** 프록시는 데이터셋의 파생물이지 세션의
 #: 파생물이 아니다. 두 체크아웃이 같은 ``~/libero_datasets`` 를 본다면 캐시도

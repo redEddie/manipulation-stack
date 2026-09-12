@@ -123,6 +123,24 @@ new_q = next(e["quality_status"] for e in eps_after
 assert new_q == ("success" if want else "failed")
 print("3 통과: 비소유 scene 파일 직접 수정 회귀")
 
+# ---- 4. 화면의 판정 버튼이 그 경로에 실제로 닿는가 ----
+# 버튼 글자는 두 번 바뀌었고(정정 → Pass → Success) 그때마다 배선은 아무도
+# 확인하지 않았다. 파일을 실제로 바꾸는 버튼이라 한 번 눌러 본다.
+calls = []
+win.dataset_ops.set_verdict = lambda by_file, ok: (calls.append((by_file, ok)), True)[1]
+win.gallery_ops.selected_keys = lambda: [(str(scene), target_scene["name"])]
+# 판정이 성공하면 목록과 격자를 다시 그린다 -- 여기서 보려는 것은 **배선**
+# 이므로 그 뒷단은 막는다 (이 스텁 창에는 세션이 없어 다시 그리다 죽는다).
+win.dataset_ops.refresh_dataset_tree = lambda *a, **k: None
+win.gallery_ops.refresh_gallery = lambda *a, **k: None
+win.verdict_ok_btn.click()
+win.verdict_fail_btn.click()
+assert [ok for _b, ok in calls] == [True, False], calls
+assert all(list(b.values()) == [[target_scene["name"]]] for b, _ok in calls), calls
+assert "Success" in win.verdict_ok_btn.text() and "Failed" in win.verdict_fail_btn.text(), (
+    win.verdict_ok_btn.text(), win.verdict_fail_btn.text())
+print("4 통과: 판정 버튼 두 개가 set_verdict 로 닿는다 (뒤집기가 아니라 정한다)")
+
 print("\n재판정 경로 검증 통과")
 import os  # noqa: E402
 
