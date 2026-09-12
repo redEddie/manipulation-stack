@@ -252,13 +252,13 @@ _sync.hub_episode_uids = lambda repo: ({uid9}, "")
 _sync.hub_meta = lambda repo: ({cur[0]["instruction"]: 99}, {}, "")
 
 # 선택은 **공유 선택**에서 읽는다 (2026-09-11). 목록 뷰(왼쪽)와 격자(중간)가
-# 같은 집합의 두 뷰라, 어느 쪽에서 골랐든 win._gallery_selected 하나가 정본이다.
+# 같은 집합의 두 뷰라, 어느 쪽에서 골랐든 win.gallery.selected 하나가 정본이다.
 # 파일은 Scene 콤보가 정본이므로 그쪽도 맞춰 준다.
 # **순서 주의**: 콤보를 먼저 채운다. 콤보가 바뀌면 refresh_gallery 가 돌아
 # 선택을 비우기 때문이다 (좁힌 집합이 바뀌면 선택은 무효라는 규칙).
 win.gallery_scene_combo.clear()
 win.gallery_scene_combo.addItem(Path(scene).name, str(scene))
-win._gallery_selected = [cur[0]]
+win.gallery.selected = [cur[0]]
 captured_dialogs.clear()
 win.dataset_ops.on_delete_selected()
 # 표시 경로: 확인창이 뜨지 않고 장바구니에만 들어간다 (지우는 문은 Delete marked 하나).

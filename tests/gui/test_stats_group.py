@@ -113,7 +113,7 @@ scene1 = d / "scene_001.hdf5"
 win.gallery_scene_combo.addItem("scene_001", str(scene1))
 win.gallery_scene_combo.setCurrentIndex(win.gallery_scene_combo.count() - 1)
 eps1 = list_scene_episodes(scene1)
-win._gallery_shown = eps1
+win.gallery.shown = eps1
 lst = win.instruction_list
 lst.blockSignals(True)
 lst.clear()
@@ -131,18 +131,18 @@ out = win.stats_ops.filtered_stats()
 assert len(out) == len(s1), (len(out), len(s1))
 assert all(e.path == str(scene1) for e in out), [e.path for e in out]
 
-# 지시문 I000 으로 좁히면: _gallery_shown 의 문장과 같은 task 만 남는다.
+# 지시문 I000 으로 좁히면: gallery.shown 의 문장과 같은 task 만 남는다.
 # S001 의 지시문이 I000 이고 문장이 sentence 하나뿐이므로 집합은 그대로다.
 lst.setCurrentItem(iid_it)
 out_i = win.stats_ops.filtered_stats()
 assert len(out_i) == len(s1), (len(out_i), len(s1))
 
-# _gallery_shown 이 비어 있으면 지시문 필터는 걸지 않는다 (깨진 상태로
+# gallery.shown 이 비어 있으면 지시문 필터는 걸지 않는다 (깨진 상태로
 # 전부 날리지 않는다).
-win._gallery_shown = []
+win.gallery.shown = []
 out_empty = win.stats_ops.filtered_stats()
 assert len(out_empty) == len(s1), (len(out_empty), len(s1))
-win._gallery_shown = eps1
+win.gallery.shown = eps1
 
 # 순위표: 4열, 에피소드 번호 순, 선택된 (씬 → 지시문) 집합만.
 win.stats_ops.refresh_rank_list()

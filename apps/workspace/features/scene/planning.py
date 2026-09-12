@@ -506,7 +506,7 @@ class ScenePlanningOps:
         if not items:
             return
         keys = [it.data(0, Qt.ItemDataRole.UserRole) for it in items]
-        shown = getattr(self.win, "_gallery_episodes", []) or []
+        shown = self.win.gallery.episodes
         by_name = {e["name"]: e for e in shown}
         eps = [by_name[d] for _p, d in keys if d in by_name]
         if eps:

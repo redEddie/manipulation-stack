@@ -119,7 +119,7 @@ class DatasetOps:
         if tree is None:
             return
         tree.clear()
-        for ep in getattr(self.win, "_gallery_shown", []) or []:
+        for ep in self.win.gallery.shown:
             uid = ep.get("episode_uid", "")
             # 표기는 격자 타일과 **같은 함수**에서 나온다 (2026-09-12 감사:
             # 두 곳에 복사돼 있었고 legacy 판정 처리가 서로 달랐다).
@@ -131,7 +131,7 @@ class DatasetOps:
             item.setToolTip(0, f"{uid}\n{ep.get('instruction', '')}\n"
                                f"{ep.get('collector', '')}")
             tree.addTopLevelItem(item)
-        self.show_tree_selection(getattr(self.win, "_gallery_selected", []))
+        self.show_tree_selection(self.win.gallery.selected)
 
     def show_tree_selection(self, episodes) -> None:
         """바깥이 정한 선택을 목록에 그린다. 신호를 내지 않는다."""
@@ -191,7 +191,7 @@ class DatasetOps:
         """
         if not hasattr(self.win, "right_fields"):
             return
-        eps = getattr(self.win, "_gallery_selected", []) or []
+        eps = self.win.gallery.selected
         ep = eps[0] if eps else None
         path = self.selected_file()
         self.fill_right_for(ep, path)

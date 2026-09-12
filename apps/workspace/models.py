@@ -70,6 +70,28 @@ class TrimState:
 
 
 @dataclass
+class GalleryState:
+    """큐레이션 격자가 들고 있는 것 -- 로드 결과와 **공유 선택**.
+
+    `selected` 가 창 전체의 공유 선택이다. 읽는 문은
+    ``gallery_ops.selected_keys()`` 하나이고(격자·목록·순위표가 전부 이걸
+    가리킨다), 쓰는 문은 ``gallery_ops.set_selection()`` 하나다.
+
+    2026-09-12 까지 이 다섯은 ``win._gallery_*`` 로 창에 흩어져 있었다 --
+    같은 성격의 트림 상태는 TrimState 에 있어서, "상태가 어디 사나" 의 답이
+    둘이었다.
+    """
+
+    loader: Any | None = None        # GalleryLoadWorker (씬 하나를 읽는 스레드)
+    episodes: list = field(default_factory=list)   # 지금 씬의 에피소드 전량
+    shown: list = field(default_factory=list)      # 지시문으로 좁힌 것
+    selected: list = field(default_factory=list)   # 공유 선택 (에피소드 dict)
+    #: "저 에피소드가 보이는 자리로 가 달라" 는 요청. 씬 로드가 비동기라
+    #: 요청과 처리 사이에 한 박자가 있다 (go_to_episode -> on_gallery_loaded).
+    focus_episode: tuple | None = None
+
+
+@dataclass
 class CameraState:
     """Camera, depth, and point-cloud state for WorkspaceWindow."""
 

@@ -84,10 +84,10 @@ def main() -> None:
         cb.setCurrentIndex(0)
         for _ in range(60):
             app.processEvents()
-            if win._gallery_episodes:
+            if win.gallery.episodes:
                 break
             time.sleep(0.05)
-        assert win._gallery_episodes, "갤러리가 scene 을 못 읽었다"
+        assert win.gallery.episodes, "갤러리가 scene 을 못 읽었다"
         win.gallery_ops.apply_gallery_filter()
 
         t = win.dataset_tree

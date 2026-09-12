@@ -98,6 +98,7 @@ from apps.workspace.features.system import SystemOps  # noqa: E402
 from apps.workspace.features.upload import UploadOps  # noqa: E402
 from apps.workspace.models import (  # noqa: E402
     CameraState,
+    GalleryState,
     TrimState,
     ProcessRegistry,
     SessionState,
@@ -228,6 +229,7 @@ class WorkspaceWindow(QMainWindow):
         self.worker: CollectionWorker | None = None
         self.procs = ProcessRegistry()
         self.trim = TrimState()
+        self.gallery = GalleryState()
         self.cameras = CameraState()
         self.cameras.grid_store = load_grid_store()
         self.session = SessionState()

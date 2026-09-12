@@ -244,7 +244,7 @@ def main() -> None:
         win.gallery_ops.refresh_gallery_scenes()
         for _ in range(80):
             app.processEvents()
-            if win._gallery_episodes:
+            if win.gallery.episodes:
                 break
             time.sleep(0.02)
         win.stats_ops.refresh_analysis(force=True)
@@ -256,13 +256,13 @@ def main() -> None:
         cb.setCurrentIndex(cb.findData(path))
         for _ in range(80):
             app.processEvents()
-            if cb.currentData() == path and win._gallery_episodes:
+            if cb.currentData() == path and win.gallery.episodes:
                 break
             time.sleep(0.02)
         win.stats_ops.on_select_flagged()
         for _ in range(120):
             app.processEvents()
-            if cb.currentData() == other and win._focus_episode is None:
+            if cb.currentData() == other and win.gallery.focus_episode is None:
                 break
             time.sleep(0.02)
         assert cb.currentData() == other, "튄 것이 있는 씬으로 안 옮겼다"

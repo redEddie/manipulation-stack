@@ -367,7 +367,7 @@ class StatsOps:
         iid = self.win.gallery_ops.selected_instruction_id()
         if iid is not None:
             sentences = {e["instruction"]
-                         for e in (getattr(self.win, "_gallery_episodes", []) or [])
+                         for e in self.win.gallery.episodes
                          if e.get("instruction_id") == iid}
             if sentences:
                 out = [e for e in out if e.task in sentences]
@@ -545,8 +545,7 @@ class StatsOps:
         # 딴 것을 가리킨 채라, 고른 것을 그 자리에서 지우거나 판정할 수
         # 없었다. 넣고 나면 refresh_rank_list 가 순위표에도 그대로 비춘다.
         if picked:
-            by_name = {e["name"]: e
-                       for e in (getattr(self.win, "_gallery_episodes", []) or [])}
+            by_name = {e["name"]: e for e in self.win.gallery.episodes}
             eps = [by_name[d] for _p, d in
                    (it.data(0, Qt.ItemDataRole.UserRole) for it in picked)
                    if d in by_name]

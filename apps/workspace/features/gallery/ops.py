@@ -38,9 +38,9 @@ class GalleryOps:
     def refresh_gallery(self, *_args) -> None:
         path = self.win.gallery_scene_combo.currentData()
         self.win.gallery_grid.set_episodes([])
-        self.win._gallery_episodes = []
-        self.win._gallery_shown = []
-        self.win._gallery_selected = []
+        self.win.gallery.episodes = []
+        self.win.gallery.shown = []
+        self.win.gallery.selected = []
         if not path:
             set_busy(self.win)
             self.win.gallery_status.setText(tr("표시할 scene 파일이 없습니다"))
@@ -53,21 +53,21 @@ class GalleryOps:
             return
         self.win.gallery_status.setText(tr("불러오는 중..."))
         set_busy(self.win, tr("{f} 에피소드 목록을 읽는 중").format(f=Path(path).name))
-        if self.win._gallery_loader is not None:
-            self.win._gallery_loader.wait()
-        self.win._gallery_loader = GalleryLoadWorker(path)
-        self.win._gallery_loader.loaded.connect(self.on_gallery_loaded)
-        self.win._gallery_loader.failed.connect(
+        if self.win.gallery.loader is not None:
+            self.win.gallery.loader.wait()
+        self.win.gallery.loader = GalleryLoadWorker(path)
+        self.win.gallery.loader.loaded.connect(self.on_gallery_loaded)
+        self.win.gallery.loader.failed.connect(
             lambda m: (set_busy(self.win),
                        self.win.gallery_status.setText(
                            tr("갤러리 로드 실패: {m}").format(m=m))))
-        self.win._gallery_loader.start()
+        self.win.gallery.loader.start()
 
     def on_gallery_loaded(self, path, episodes, _unused=None) -> None:
         set_busy(self.win)
         if path != self.win.gallery_scene_combo.currentData():
             return  # 로드 중 scene 을 바꿨다
-        self.win._gallery_episodes = episodes
+        self.win.gallery.episodes = episodes
         # instruction 목록 재구성 (선택 유지)
         lst = self.win.instruction_list
         cur = lst.currentItem()
@@ -108,7 +108,7 @@ class GalleryOps:
         """지금 고른 지시문 id. "(all instructions)" 이거나 목록이 없으면 None.
 
         **지시문의 정본은 이 목록 하나**다 (파일의 정본이 selected_file() 인
-        것과 같다). 전에는 Analysis 가 `_gallery_shown` 의 문장 집합으로
+        것과 같다). 전에는 Analysis 가 ``gallery.shown`` 의 문장 집합으로
         범위를 역추론했는데, 그러면 갤러리 필터에 조건이 하나라도 늘면
         Analysis 의 범위가 조용히 갈라진다 (kimi 구조 감사, 2026-09-12).
         """
@@ -124,12 +124,12 @@ class GalleryOps:
         나란히 돌려 이상한 것을 고른다.
         """
         want = self.selected_instruction_id()
-        eps = self.win._gallery_episodes
+        eps = self.win.gallery.episodes
 
         shown = [e for e in eps
                  if want is None or e["instruction_id"] == want]
 
-        self.win._gallery_shown = shown
+        self.win.gallery.shown = shown
         # Analysis 도 이 범위를 따른다. 여기서 불러야 하는 이유: 지시문 목록과
         # Scene 콤보 변경은 **둘 다 이 함수로만** 들어오고, on_selection_changed
         # 는 에피소드를 클릭했을 때만 불린다 -- 거기에만 걸면 지시문을 바꿔도
@@ -138,7 +138,7 @@ class GalleryOps:
             self.win.stats_ops.refresh_rank_list()
         # 좁힌 집합이 바뀌면 선택은 무효다 -- 안 보이는 것이 선택된 채로
         # 남으면 판정·표시가 화면에 없는 에피소드에 걸린다.
-        self.win._gallery_selected = []
+        self.win.gallery.selected = []
         self.win.dataset_ops.refresh_episode_list()
         self.win.gallery_grid.proxy_dir = self.proxy_dir()
         self.win.gallery_grid.set_episodes(
@@ -226,11 +226,11 @@ class GalleryOps:
             return
         self._syncing = True
         try:
-            self.win._gallery_selected = [e for e in (episodes or []) if e]
+            self.win.gallery.selected = [e for e in (episodes or []) if e]
             if source != "grid":
-                self.win.gallery_grid.show_selection(self.win._gallery_selected)
+                self.win.gallery_grid.show_selection(self.win.gallery.selected)
             if source != "tree":
-                self.win.dataset_ops.show_tree_selection(self.win._gallery_selected)
+                self.win.dataset_ops.show_tree_selection(self.win.gallery.selected)
             self.win.dataset_ops.on_selection_changed()
         finally:
             self._syncing = False
@@ -264,7 +264,7 @@ class GalleryOps:
         path = self.win.dataset_ops.selected_file()   # 파일의 정본은 저쪽 하나
         if path is None:
             return []
-        return [(str(path), e["name"]) for e in (self.win._gallery_selected or [])]
+        return [(str(path), e["name"]) for e in (self.win.gallery.selected or [])]
 
     def go_to_episode(self, path: str, demo: str) -> bool:
         """왼쪽 패널의 (씬 → 지시문) 을 그 에피소드가 보이는 자리로 옮긴다.
@@ -280,7 +280,7 @@ class GalleryOps:
         idx = cb.findData(str(path))
         if idx < 0:
             return False
-        self.win._focus_episode = (str(path), demo)
+        self.win.gallery.focus_episode = (str(path), demo)
         if cb.currentIndex() == idx:
             self._focus_instruction()      # 같은 씬이면 지시문만 바꾼다
         else:
@@ -289,14 +289,14 @@ class GalleryOps:
 
     def _focus_instruction(self) -> bool:
         """적어 둔 에피소드의 지시문을 목록에서 고른다. 골랐으면 True."""
-        want = getattr(self.win, "_focus_episode", None)
+        want = self.win.gallery.focus_episode
         if not want:
             return False
         path, demo = want
         if path != self.win.gallery_scene_combo.currentData():
             return False
-        ep = next((e for e in self.win._gallery_episodes if e["name"] == demo), None)
-        self.win._focus_episode = None
+        ep = next((e for e in self.win.gallery.episodes if e["name"] == demo), None)
+        self.win.gallery.focus_episode = None
         if ep is None:
             return False
         lst = self.win.instruction_list
