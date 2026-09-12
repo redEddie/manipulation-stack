@@ -104,12 +104,11 @@ def build_dataset(win) -> QWidget:
     line.setStyleSheet("color:#444;")
     col.addWidget(line)
 
-    trim_btn = QPushButton(tr("끝 다듬기 (Trim 탭에서)"))
-    trim_btn.setToolTip(tr(
-        "선택한 에피소드를 Trim 탭에서 엽니다.\n"
-        "저장 키를 누를 때 흔들린 마지막 몇 프레임을 잘라냅니다."))
-    trim_btn.clicked.connect(win.trim_ops.on_open_trim)
-    col.addWidget(trim_btn)
+    # [끝 다듬기 (Trim 탭에서)] 버튼은 뺐다 (조작자, 2026-09-12). 에피소드를
+    # 고르면 Trim 탭은 이미 그것을 물고 있고(sync_trim_to_selection), 탭은
+    # 바로 위에 있다. 탭을 옮기는 것이 전부인 버튼이 판정·삭제와 나란히
+    # 있으면 자리만 차지한다. 문 자체는 남는다 -- Curation 메뉴의 같은 항목이
+    # on_open_trim 을 부른다 (메뉴는 전량 색인).
 
     vrow = QHBoxLayout()
     win.verdict_ok_btn = QPushButton(tr("✓ Success"))
