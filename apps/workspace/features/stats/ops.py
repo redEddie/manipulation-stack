@@ -73,6 +73,10 @@ class StatsOps:
 
     def __init__(self, win) -> None:
         self.win = win
+        #: [튀는 것만 선택] 이 방금 데려간 곳. 같은 곳으로 두 번 데려가지
+        #: 않기 위한 빗장이다 -- 옮긴 목록에도 그것이 안 보이면(길이 필터에
+        #: 가렸거나) 다시 옮기려 들어 무한히 오갈 수 있다.
+        self._last_jump = None
 
     def connect_progress(self, waited: float) -> None:
         self.win.statusBar().showMessage(
@@ -304,7 +308,8 @@ class StatsOps:
         files = hdf5_files(root) + [str(p) for p in iter_scene_files(root)]
         if not files:
             self.win.session.stats_stale = False
-            self.win.analysis_summary.setText(
+            # 요약 텍스트 줄은 없앴다 (2026-09-12) -- 남은 한 줄에 적는다.
+            self.win.stats_hint.setText(
                 tr("{r} 에 *_demo.hdf5 / scene_*.hdf5 가 없습니다.").format(r=root))
             return
         t0 = time.monotonic()
@@ -321,10 +326,10 @@ class StatsOps:
         self.win._summary = summarize(self.win.session.stats)
         dt = time.monotonic() - t0
         s = self.win._summary
-        self.win.analysis_summary.setText(
-            tr("에피소드 {n}개 · {f:,}프레임 · 그룹(scene·문장) {t}개 · 길이 {a}~{b}프레임\n{v}").format(
-                n=s["n"], f=s["frames"], t=s["tasks"],
-                a=s["len_min"], b=s["len_max"], v=s["verdict"]))
+        # 데이터셋 전체의 규모와 판정은 **로그로만** 남긴다. 화면 맨 위에
+        # 텍스트로 붙여 두었더니 후보 목록의 칸들과 같은 숫자를 두 번 말하는
+        # 셈이었다 (조작자, 2026-09-12). 지금 목록 기준 개수는 목록 아래
+        # 한 줄이 말한다.
         self.win.log(f"[분석] {len(files)}개 파일 / {s['n']}개 에피소드 ({dt:.2f}s) — {s['verdict']}")
 
         means = [e.mean_da for e in self.win.session.stats]
@@ -419,22 +424,19 @@ class StatsOps:
                 for c in range(4):
                     item.setBackground(c, QBrush(tint))
             self.win.rank_tree.addTopLevelItem(item)
-        # 힌트 한 줄이 **무엇의 목록인지**와 **튄 것이 몇 개인지**를 말한다.
-        # 요약 줄의 판정 개수는 데이터셋 전체 기준이라, 지금 목록에 그 하나가
-        # 들어 있는지는 여기서만 알 수 있다 (조작자, 2026-09-12).
+        # **무엇의 후보인지**는 상자 제목이 말한다. 회색 설명 줄에 섞어
+        # 두었더니 정작 필요한 한 마디(판정선)가 묻혔다 (조작자, 2026-09-12).
         eps = self.filtered_stats()
+        box = getattr(self.win, "filt_box", None)
+        if box is not None:
+            more = tr(" · 위 {m}개만").format(m=len(rows)) if len(rows) < len(eps) else ""
+            box.setTitle(tr("큐레이션 후보 — {s}{m}").format(
+                s=self.scope_label(), m=more))
         flagged = [e for e in eps if e.flagged]
-        parts = [self.scope_label()]
-        if len(rows) < len(eps):
-            parts.append(tr("위 {m}개만 표시").format(m=len(rows)))
-        if flagged:
-            parts.append(tr("튄 것 {k}개 (급함 {f} / 늘어짐 {s}) — 바탕색으로 표시").format(
-                k=len(flagged),
-                f=sum(1 for e in flagged if e.task_dev > 0),
-                s=sum(1 for e in flagged if e.task_dev < 0)))
-        else:
-            parts.append(tr("튄 것 없음"))
-        self.win.stats_hint.setText(" · ".join(parts))
+        band = tr("±{d} 밖 = 급함(빨강 바탕) / 늘어짐(파랑 바탕)").format(d=TASK_DEV_LIMIT)
+        self.win.stats_hint.setText(
+            tr("{b} — 지금 목록에 {k}개").format(b=band, k=len(flagged))
+            if flagged else tr("{b} — 지금 목록에는 없음").format(b=band))
         self.refresh_dim_dist()
 
     def scope_label(self) -> str:
@@ -491,14 +493,8 @@ class StatsOps:
             plot.set_cursor(None)
         stat = next((e for e in self.win.session.stats if e.key == (path, demo)), None)
         if stat is not None:
-            self.win.analysis_summary.setText(
-                tr("{d} · {n}프레임 ({s:.1f}s) · 평균 |Δa| {m:.5f} · 같은 (scene·문장) 그룹 평균과 "
-                   "{v:+.4f}{mark} · 멈춤 {p:.0f}%\n{t}").format(
-                       d=demo, n=stat.n_frames, s=stat.seconds, m=stat.mean_da,
-                       v=stat.task_dev,
-                       mark=" (급함)" if stat.task_dev > TASK_DEV_LIMIT else (
-                           " (느림)" if stat.task_dev < -TASK_DEV_LIMIT else ""),
-                       p=100 * stat.still_frac, t=stat.group_label))
+            # 고른 에피소드의 숫자는 후보 목록의 칸이 이미 같은 것을
+            # 보여준다 -- 여기서 다시 문장으로 쓰지 않는다 (2026-09-12).
             self.win.da_hist.set_values(
                 [e.mean_da for e in self.win.session.stats],
                 [(self.win._summary["p50"], tr("중앙값")), (stat.mean_da, tr("이 에피소드"))])
@@ -534,11 +530,38 @@ class StatsOps:
             for it in picked:
                 it.setSelected(True)
             tree.scrollToItem(picked[0])
-        self.win.stats_hint.setText(
-            tr("밴드(±{d}) 밖 {n}개를 골랐습니다 -- [Trim 에서 재생] 으로 보고, "
-               "버릴 것만 🗑 Mark for delete 로 표시한 뒤 왼쪽에서 지웁니다.").format(
-                   d=TASK_DEV_LIMIT, n=len(picked))
-            if picked else tr("이 목록에는 밴드 밖이 없습니다."))
+            self._last_jump = None
+            self.win.stats_hint.setText(
+                tr("밴드(±{d}) 밖 {n}개를 골랐습니다 — [Trim 에서 재생] 으로 보고, "
+                   "버릴 것만 🗑 Mark for delete 로 표시한 뒤 왼쪽에서 지웁니다.").format(
+                       d=TASK_DEV_LIMIT, n=len(picked)))
+            return
+        # 지금 목록에 없으면 **어디에 있는지 찾아 데려간다.** 예전에는 "이
+        # 목록에는 없습니다" 로 끝냈는데, 요약은 "늘어짐 1개" 라고 말하고
+        # 있어서 조작자가 그 하나를 찾을 길이 없었다 (2026-09-12).
+        rest = sorted((e for e in self.win.session.stats if e.flagged),
+                      key=lambda e: (e.path, _episode_sort_key(e.demo)))
+        if not rest:
+            self.win.stats_hint.setText(tr("데이터셋 어디에도 밴드 밖이 없습니다."))
+            return
+        tgt = rest[0]
+        where = tr("{s} · {t}").format(s=tgt.scene or Path(tgt.path).stem,
+                                       t=tgt.task[:34])
+        if self._last_jump == (tgt.path, tgt.demo):
+            self._last_jump = None
+            self.win.stats_hint.setText(
+                tr("{w} 에 있는데 지금 목록에 안 나옵니다 — 길이(초) 슬라이더를 "
+                   "넓혀 보세요.").format(w=where))
+            return
+        self._last_jump = (tgt.path, tgt.demo)
+        if self.win.gallery_ops.go_to_episode(tgt.path, tgt.demo):
+            self.win.stats_hint.setText(
+                tr("지금 목록에는 없어 {w} 로 옮겼습니다 (밴드 밖 {n}개 중 첫 번째).")
+                .format(w=where, n=len(rest)))
+        else:
+            self.win.stats_hint.setText(
+                tr("지금 목록에는 없습니다 — {w} 에 있습니다 (데이터 경로가 다르면 "
+                   "그 폴더로 옮기세요).").format(w=where))
 
     def on_rank_delete(self) -> None:
         """순위표 선택을 삭제 목록에 **표시**한다 (실행이 아니다).

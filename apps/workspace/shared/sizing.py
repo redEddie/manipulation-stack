@@ -17,6 +17,11 @@
   원하는데 357px 로 늘어나 있었다). 안이 접히거나 자라는 상자(줄바꿈 라벨,
   트리)는 예외다 -- 거기 걸면 내용이 잘린다.
 
+* **상자 제목은 테두리 위에 앉힌다** (``GROUP_BOX_QSS``). Fusion 기본값은
+  제목을 상자 **바깥 위**에 띄워 놓아서, 상자가 여럿 쌓이면 어느 제목이 어느
+  상자의 것인지 알 수 없다 (조작자, 2026-09-12: "'큐레이션 후보'가 박스 밖에
+  있어서 뭘 가리키는지 명확하지 않네").
+
 휠로 콤보·스핀 값이 바뀌지 않게 하는 것은 앱 전역 필터가 맡는다
 (``mstack.gui.wheel_guard``) -- 화면마다 챙길 필요가 없다.
 """
@@ -40,6 +45,25 @@ from PyQt6.QtWidgets import (
 FIELD_PADDING = 12
 #: 폼 줄 사이. Qt 기본 6 은 줄이 여덟을 넘어가면 빽빽하게 읽힌다.
 ROW_SPACING = 8
+
+#: 앱 전역 QGroupBox 모양. 제목을 테두리 **선 위**에 앉히고 좌우로 여백을
+#: 줘서, 제목이 그 상자의 것임이 눈에 보이게 한다. app.setStyleSheet 으로
+#: 한 번 깔면 모든 상자가 같은 모양이 된다 (화면마다 따로 하면 반드시
+#: 어긋난다).
+GROUP_BOX_QSS = """
+QGroupBox {
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    margin-top: 9px;
+    padding-top: 6px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 8px;
+    padding: 0 4px;
+}
+"""
 
 
 def roomy(*widgets) -> None:

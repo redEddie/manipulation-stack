@@ -229,6 +229,12 @@ class PlaybackOps:
         # 끝에 서 있으면 처음으로 되감고 튼다 -- 안 그러면 한 프레임 만에 선다.
         if self.win.trim_slider.value() >= self.win.playback.trim_n - 1:
             self.trim_seek(0)
+        # 잘림 지점 **앞**에서 시작하는 재생은 거기서 다시 선다. 몇 번을
+        # 돌려 보든 매번 서야 한다 (조작자, 2026-09-12: "여러번 보더라도
+        # 계속 멈춰주면 좋겠어"). 그 자리에 서 있는 채로 누른 것만이
+        # "이어보기" 라서, 그때만 안 선다.
+        if self.win.trim_slider.value() < self.trim_keep() - 1:
+            self._trim_cut_stop_armed = True
         if self.win.playback.trim_timer is None:
             self.win.playback.trim_timer = QTimer(self.win)
             self.win.playback.trim_timer.timeout.connect(self.trim_tick)

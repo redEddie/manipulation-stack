@@ -182,6 +182,50 @@ class SeriesPlot(QWidget):
             x -= 8
 
 
+class LegendStrip(QWidget):
+    """계열 범례 -- 글자로 "실선/파선/점선" 이라 쓰지 않고 **선을 그린다.**
+
+    예전에는 한 줄짜리 QLabel 에 "실선 observation.state ┄ 파선 ... ┈ 점선
+    action" 이라고 적었는데, 유니코드 파선 문자와 글자가 섞여 무엇이 표본이고
+    무엇이 설명인지 구분이 안 됐다 (조작자, 2026-09-12: "텍스트랑 선이랑
+    겹쳐"). 실제 펜으로 표본을 그리면 플롯에 그려진 선과 같은 모양이라 눈으로
+    바로 맞춰 볼 수 있다.
+    """
+
+    def __init__(self, extra: str = "") -> None:
+        super().__init__()
+        self.extra = extra          # 오른쪽 끝에 덧붙일 한 마디 (없으면 빈 칸)
+        self.setFixedHeight(18)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fg = self.palette().windowText().color()
+        dim = QColor(fg)
+        dim.setAlpha(150)
+        f = QFont(); f.setPointSize(8); p.setFont(f)
+        y = self.height() / 2.0
+        x = 2.0
+        for style, width, label in SERIES_STYLES.values():
+            p.setPen(QPen(dim, width, style))
+            p.drawLine(QPointF(x, y), QPointF(x + 22, y))
+            x += 26
+            w = p.fontMetrics().horizontalAdvance(label)
+            p.setPen(QPen(dim, 1))
+            p.drawText(QRectF(x, 0, w + 4, self.height()),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
+            x += w + 16
+        if self.extra:
+            cut = QColor(220, 70, 70); cut.setAlpha(120)
+            p.fillRect(QRectF(x, y - 5, 14, 10), cut)
+            x += 18
+            p.setPen(QPen(dim, 1))
+            p.drawText(QRectF(x, 0, self.width() - x, self.height()),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                       self.extra)
+
+
 class DistStrip(QWidget):
     """차원별 **분포** 띠 -- 막대 하나가 아니라 퍼짐까지 그린다.
 

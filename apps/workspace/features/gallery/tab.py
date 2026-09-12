@@ -97,5 +97,9 @@ def build_gallery_tab(win) -> QWidget:
     win._gallery_episodes = []
     win._gallery_shown = []
     win._gallery_selected = []
+    #: [튀는 것만 선택] 이 "저 에피소드가 보이는 자리로 가 달라" 고 적어 두는
+    #: 칸. 씬 파일 로드가 비동기라 요청과 처리 사이에 한 박자가 있다
+    #: (gallery/ops.go_to_episode -> on_gallery_loaded).
+    win._focus_episode = None
     win.gallery_ops.refresh_gallery_scenes()
     return w

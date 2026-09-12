@@ -9,7 +9,7 @@
 그리고 Analysis 의 [Trim 에서 재생] 이 **Trim 탭**을 연다 (예전엔 Playback).
 
 **Playback 탭은 2026-09-12 에 없앴다.** 같은 일(한 에피소드를 크게 보며
-재생)을 Trim 이 전부 하게 되어, 같은 것을 하는 화면이 둘이 되었다. 8번이
+재생)을 Trim 이 전부 하게 되어, 같은 것을 하는 화면이 둘이 되었다. 9번이
 그것이 되살아나지 않는지 지킨다 -- 되살리려면 그 판단을 다시 하고 이 줄을
 지우면 된다.
 
@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import h5py
@@ -35,6 +36,40 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 N_FRAMES = 60
+
+
+def _episode(f, i: int, step: float, iid: str, sentence: str, sid: str) -> None:
+    g = f.create_group(f"episode_{i:03d}")
+    g.attrs.update({
+        "scene_id": sid, "instruction_id": iid, "instruction": sentence,
+        "episode_uid": f"EP-{sid}-{iid}-E{i:03d}", "episode_id": i,
+        "quality_status": "success", "collector": "tester",
+        "num_samples": N_FRAMES,
+    })
+    # arm[t, j] = t * step  ->  |Δa| 가 모든 프레임에서 step 이라
+    # mean_da == step 이 된다 (task_dev 를 원하는 값으로 맞추기 쉽다).
+    t = np.arange(N_FRAMES, dtype=np.float32)[:, None]
+    arm = (t * step).repeat(7, axis=1)
+    g.create_dataset("actions", data=arm)
+    obs = g.create_group("obs")
+    obs.create_dataset("joint_states", data=arm)
+    obs.create_dataset("gripper_states", data=np.zeros((N_FRAMES, 1), np.float32))
+
+
+def _make_outlier_scene(root: Path) -> str:
+    """늘어짐 하나가 든 두 번째 씬 -- [튀는 것만 선택] 이 데려갈 곳."""
+    path = root / "scene_001.hdf5"
+    with h5py.File(path, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["scene_id"] = "S001"
+        meta.attrs["objects"] = json.dumps(["OBJ-CUP-WHT-02"])
+        meta.attrs["layout"] = json.dumps(
+            {"grid": [3, 3], "placements": {"OBJ-CUP-WHT-02": {"zone": [0, 0]}}})
+        sentence = "drag the small gray bowl"
+        for i in range(9):                       # 평범한 것들
+            _episode(f, i, 0.0100 + i * 0.00005, "I000", sentence, "S001")
+        _episode(f, 9, 0.0160, "I000", sentence, "S001")   # 튄 것 (+0.005)
+    return str(path)
 
 
 def _make(root: Path) -> None:
@@ -184,15 +219,50 @@ def main() -> None:
         assert scope.startswith("S000 · pick up the white cup"), scope
         assert "2개" in scope, scope
         assert scope in win.dim_box.title(), win.dim_box.title()
-        assert scope in win.stats_hint.text(), win.stats_hint.text()
-        assert "튄 것" in win.stats_hint.text(), win.stats_hint.text()
+        assert scope in win.filt_box.title(), win.filt_box.title()
+        # 회색 줄은 **하나**뿐이고, 남은 한 마디는 판정선이다.
+        assert "±0.004" in win.stats_hint.text(), win.stats_hint.text()
+        assert not hasattr(win, "analysis_summary"), "요약 텍스트 줄이 돌아왔다"
         # 요약 줄은 무엇을 하라고 시키지 않는다 -- 그 일을 하는 버튼이 아래 있다.
         from mstack.data.episode_stats import summarize
         v = summarize(win.session.stats)["verdict"]
         assert "재생해서 확인" not in v, v
         print("7. 범위 표시 · 요약 문구 OK")
 
-        # ---------------------------------------------- 8. Playback stay-gone
+        # ------------------------- 8. [튀는 것만 선택] 이 **데려간다**
+        # 지금 목록(S000)에는 튄 것이 없고, 옆 씬(S001)에 하나 있다.
+        other = _make_outlier_scene(root)
+        win.gallery_ops.refresh_gallery_scenes()
+        for _ in range(80):
+            app.processEvents()
+            if win._gallery_episodes:
+                break
+            time.sleep(0.02)
+        win.stats_ops.refresh_analysis(force=True)
+        flagged = [e for e in win.session.stats if e.flagged]
+        assert len(flagged) == 1 and flagged[0].scene == "S001", \
+            [(e.scene, e.demo, round(e.task_dev, 5)) for e in flagged]
+        # S000 을 보고 있는 상태에서 누른다
+        cb = win.gallery_scene_combo
+        cb.setCurrentIndex(cb.findData(path))
+        for _ in range(80):
+            app.processEvents()
+            if cb.currentData() == path and win._gallery_episodes:
+                break
+            time.sleep(0.02)
+        win.stats_ops.on_select_flagged()
+        for _ in range(120):
+            app.processEvents()
+            if cb.currentData() == other and win._focus_episode is None:
+                break
+            time.sleep(0.02)
+        assert cb.currentData() == other, "튄 것이 있는 씬으로 안 옮겼다"
+        picked = [i.text(0) for i in win.rank_tree.selectedItems()]
+        assert picked and flagged[0].demo in picked[0], (picked, flagged[0].demo)
+        assert "S001" in win.filt_box.title(), win.filt_box.title()
+        print("8. 튀는 것만 선택 -> 다른 씬으로 데려가기 OK")
+
+        # ---------------------------------------------- 9. Playback stay-gone
         from apps.workspace.constants import CENTER_TABS, CENTER_TABS_BY_ACTIVITY
         assert "playback" not in dict(CENTER_TABS), "Playback 탭이 돌아왔다"
         for act, keys in CENTER_TABS_BY_ACTIVITY.items():
@@ -208,7 +278,7 @@ def main() -> None:
         show_center_tab(win, "gallery")
         win.gallery_ops.on_gallery_activated({"name": "episode_001"})
         assert win.center_tabs.currentWidget() is win.center_tab_widgets["trim"]
-        print("8. Playback stay-gone · 갤러리 더블클릭도 Trim OK")
+        print("9. Playback stay-gone · 갤러리 더블클릭도 Trim OK")
 
         for loader in (win.playback.trim_loader,):
             if loader is not None:

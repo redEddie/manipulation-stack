@@ -19,7 +19,7 @@ from mstack.data.episode_stats import STILL_VEL, TASK_DEV_LIMIT
 from mstack.gui.i18n import tr
 
 from apps.workspace.shared.sizing import shrinkable_combo
-from mstack.gui.plot_widgets import DistStrip, Histogram, SeriesPlot
+from mstack.gui.plot_widgets import DistStrip, Histogram, LegendStrip, SeriesPlot
 
 
 def build_analysis_tab(win) -> QWidget:
@@ -37,11 +37,11 @@ def build_analysis_tab(win) -> QWidget:
     left = QWidget()
     lcol = QVBoxLayout(left)
     lcol.setContentsMargins(0, 0, 0, 0)
-    win.analysis_summary = QLabel(tr("툴바의 [다시 분석] 을 누르세요."))
-    win.analysis_summary.setWordWrap(True)
-    win.analysis_summary.setStyleSheet("font-weight:bold;")
-    lcol.addWidget(win.analysis_summary)
-
+    # 여기 있던 **요약 텍스트 줄**(에피소드 수·프레임·그룹 수, 그리고 고른
+    # 에피소드의 평균과 차이·멈춤%·길이)을 뺐다 (조작자, 2026-09-12:
+    # "상단에 정보가 왜 텍스트로 표시되지? 어차피 겹치는 정보들이면 안
+    # 보여줘도 좋을 것 같아"). 고른 에피소드의 값은 오른쪽 후보 목록의
+    # 칸이 이미 같은 숫자를 보여주고, 범위와 개수는 상자 제목이 말한다.
     win.plot_grid = QGridLayout()
     win.series_plots = {}
     # LeRobot 뷰어와 같은 묶음: 인접 관절끼리 스케일이 비슷해 같은 축에 얹힌다.
@@ -56,10 +56,7 @@ def build_analysis_tab(win) -> QWidget:
         win.series_plots[title] = (plot, dims)
         win.plot_grid.addWidget(plot, i // 2, i % 2)
     lcol.addLayout(win.plot_grid, 1)
-    legend = QLabel(tr("실선 observation.state   ┄ 파선 observation.commanded_state"
-                       "   ┈ 점선 action"))
-    legend.setStyleSheet("color:#888;")
-    lcol.addWidget(legend)
+    lcol.addWidget(LegendStrip())
     split.addWidget(left)
 
     right = QWidget()
@@ -87,7 +84,9 @@ def build_analysis_tab(win) -> QWidget:
     win.da_hist = Histogram(tr("에피소드 평균 |Δa| 분포"))
     rcol.addWidget(win.da_hist)
 
-    filt = QGroupBox(tr("큐레이션 후보"))
+    # 제목이 **무엇의 후보인지** 말한다 (refresh_rank_list 가 채운다).
+    win.filt_box = QGroupBox(tr("큐레이션 후보"))
+    filt = win.filt_box
     fcol = QVBoxLayout(filt)
     # 후보 목록의 **범위**(씬 → 지시문)는 왼쪽 패널이 정본이다 (Scene 콤보 +
     # Instruction 목록). 여기에 따로 그룹 콤보를 두면 같은 축이 두 군데
@@ -157,22 +156,22 @@ def build_analysis_tab(win) -> QWidget:
     # 여기(refresh_rank_list, on_select_flagged)인데 정작 Analysis 를 볼 때는
     # 그 패널이 안 보였다 -- 몇 개 중 몇 개가 걸렸는지를 화면 밖에서 말하고
     # 있었던 셈이다 (2026-09-12).
-    win.stats_hint = QLabel(tr("에피소드를 고르세요"))
+    # 회색 줄은 **하나**다. 두 줄이던 것을 합쳤다 (조작자, 2026-09-12:
+    # "회색으로 뭔가 주절주절 설명하지만 실제로 유효한 문장은 ±0.004 에 대한
+    # 설명뿐이지 않나?"). 남긴 것은 판정선 한 마디와, 지금 목록에 그 밖이
+    # 몇 개인지 -- 나머지(범위·표시 개수)는 상자 제목으로 올라갔다.
+    hint_row = QHBoxLayout()
+    win.stats_hint = QLabel(
+        tr("±{d} 밖 = 급함(빨강 바탕) / 늘어짐(파랑 바탕)").format(d=TASK_DEV_LIMIT))
     win.stats_hint.setStyleSheet("color:#888;")
     win.stats_hint.setWordWrap(True)
-    fcol.addWidget(win.stats_hint)
-
-    cols_row = QHBoxLayout()
-    cols = QLabel(tr("같은 (scene·문장) 그룹 평균과의 차 — ±{d} 밖이면 급함(빨강)/느림(파랑)")
-                  .format(d=TASK_DEV_LIMIT))
-    cols.setStyleSheet("color:#888;")
-    cols_row.addWidget(cols, 1)
+    hint_row.addWidget(win.stats_hint, 1)
     helpb = QPushButton("?")
     helpb.setFixedWidth(24)
     helpb.setToolTip(tr("칼럼 정의와 판정 기준 (docs/curation-metrics.md)"))
     helpb.clicked.connect(win.stats_ops.on_metric_help)
-    cols_row.addWidget(helpb)
-    fcol.addLayout(cols_row)
+    hint_row.addWidget(helpb)
+    fcol.addLayout(hint_row)
 
     btns = QHBoxLayout()
     for text, slot in ((tr("튀는 것만 선택"), win.stats_ops.on_select_flagged),

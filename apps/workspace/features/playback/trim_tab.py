@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 from apps.workspace.constants import PLAYBACK_SPEEDS
 from mstack.gui.widgets import CutSlider, VideoView
 from mstack.gui.i18n import tr
-from mstack.gui.plot_widgets import SeriesPlot
+from mstack.gui.plot_widgets import LegendStrip, SeriesPlot
 
 
 def build_trim_tab(win) -> QWidget:
@@ -195,10 +195,10 @@ def build_trim_tab(win) -> QWidget:
     _relayout()
     outer.addLayout(plot_box)
 
-    legend = QLabel(tr("실선 observation.state   ┄ 파선 observation.commanded_state"
-                       "   ┈ 점선 action     ▨ 빨간 음영 = 잘려나갈 구간"))
-    legend.setStyleSheet("color:#888;")
-    outer.addWidget(legend)
+    # 범례는 글자로 "실선/파선/점선" 이라 쓰지 않고 선을 그린다 (LegendStrip)
+    # -- 유니코드 파선 문자와 글자가 섞이면 무엇이 표본인지 알 수 없다
+    # (조작자, 2026-09-12).
+    outer.addWidget(LegendStrip(tr("빨간 음영·테두리 = 잘려나갈 구간")))
 
     # 끝 다듬기 상자(단계·추천·정정·확정·경고)는 우측 패널로 옮겼다
     # (features/dataset/right_panel.py 의 Trim 상자, 2026-09-11). 이 탭에는

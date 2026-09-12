@@ -103,6 +103,7 @@ from apps.workspace.models import (  # noqa: E402
     SessionState,
 )
 from apps.workspace.shared.raw_logger_proc import spawn_logger
+from apps.workspace.shared.sizing import GROUP_BOX_QSS  # noqa: E402
 from apps.workspace.shared.camera_node_proc import adopt_node  # noqa: E402
 from apps.workspace.shared.robot_node_proc import (  # noqa: E402
     adopt_node as adopt_robot_node,
@@ -205,7 +206,13 @@ class WorkspaceWindow(QMainWindow):
                  schema_version: str = SCHEMA_VERSION) -> None:
         super().__init__()
         self.setWindowTitle(tr("FR3 GELLO 데이터 수집 워크스페이스"))
-        self.resize(1780, 1020)
+        # 화면보다 큰 창으로 뜨면 창틀(제목 표시줄의 최소화·최대화)이 화면
+        # 밖으로 나가 손이 닿지 않는다. 쓸 수 있는 영역 안으로 가둔다 --
+        # 작업 표시줄을 뺀 크기라 availableGeometry 를 쓴다.
+        screen = QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen is not None else None
+        self.resize(min(1780, avail.width()) if avail else 1780,
+                    min(1020, avail.height()) if avail else 1020)
 
         # 이 세션이 기록할 스키마 버전. 런처가 데이터셋을 보고 정해 주고
         # 여기서는 고정으로 쓴다 -- 새 scene 파일에 그대로 찍힌다. 기록기가
@@ -934,6 +941,14 @@ class WorkspaceWindow(QMainWindow):
             if line.strip():
                 self.log(f"[원시로그] {line.strip()}")
 
+    def _toggle_maximized(self) -> None:
+        """View 메뉴의 [창 최대화 / 복원]. 창 관리자가 창틀 단추를 안 그려
+        주는 환경에서도 앱 안에서 창을 키우고 되돌릴 수 있어야 한다."""
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.depth_ops.stop_cloud(restore_previews=False)
         self.camera_ops.stop_previews_blocking()
@@ -1009,6 +1024,7 @@ def main(app: "QApplication | None" = None, camera_node=None,
         # 이 가지는 마법사를 건너뛰고 이 파일을 직접 실행한 경우다.
         app = QApplication(sys.argv)
         app.setStyle("Fusion")
+        app.setStyleSheet(GROUP_BOX_QSS)
         ensure_font(app)
         app._wheel_guard = install_wheel_guard(app)
     win = WorkspaceWindow(log_path, camera_node=camera_node,

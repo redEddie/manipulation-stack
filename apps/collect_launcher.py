@@ -89,11 +89,13 @@ def install_excepthook(log_path) -> None:
 
 def main() -> None:
     from apps.workspace.constants import LOG_DIR  # noqa: E402
+    from apps.workspace.shared.sizing import GROUP_BOX_QSS  # noqa: E402
 
     install_excepthook(
         LOG_DIR / f"launcher_{time.strftime('%Y%m%d_%H%M%S')}.log")
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setStyleSheet(GROUP_BOX_QSS)
     ensure_font(app)
     # 반환값을 잡아 둔다 -- 가비지로 사라지면 필터도 같이 사라진다.
     app._wheel_guard = install_wheel_guard(app)

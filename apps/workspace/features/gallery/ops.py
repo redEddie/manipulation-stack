@@ -97,6 +97,11 @@ class GalleryOps:
                 lst.setCurrentItem(lst.topLevelItem(0))
         finally:
             lst.blockSignals(False)
+        # 데려가기 요청이 걸려 있으면 그 지시문을 고른다. setCurrentItem 이
+        # apply_gallery_filter 를 부르므로 아래를 두 번 돌지 않게 여기서 끝낸다.
+        if self._focus_instruction():
+            self.win.stats_ops.on_select_flagged()
+            return
         self.apply_gallery_filter()
 
     def apply_gallery_filter(self, *_args) -> None:
@@ -249,6 +254,47 @@ class GalleryOps:
         if not path:
             return []
         return [(path, e["name"]) for e in (self.win._gallery_selected or [])]
+
+    def go_to_episode(self, path: str, demo: str) -> bool:
+        """왼쪽 패널의 (씬 → 지시문) 을 그 에피소드가 보이는 자리로 옮긴다.
+
+        Analysis 의 [튀는 것만 선택] 이 쓴다: 튄 것이 지금 목록에 없으면
+        **거기로 데려간다** (조작자, 2026-09-12). 씬 파일 로드가 비동기라
+        지시문 선택은 여기서 못 끝낸다 -- 원하는 에피소드를 적어 두고,
+        ``on_gallery_loaded`` 가 목록을 다 만든 뒤에 집어 준다.
+
+        콤보에 그 파일이 없으면(데이터 경로가 다른 폴더면) False.
+        """
+        cb = self.win.gallery_scene_combo
+        idx = cb.findData(str(path))
+        if idx < 0:
+            return False
+        self.win._focus_episode = (str(path), demo)
+        if cb.currentIndex() == idx:
+            self._focus_instruction()      # 같은 씬이면 지시문만 바꾼다
+        else:
+            cb.setCurrentIndex(idx)        # -> refresh_gallery -> on_gallery_loaded
+        return True
+
+    def _focus_instruction(self) -> bool:
+        """적어 둔 에피소드의 지시문을 목록에서 고른다. 골랐으면 True."""
+        want = getattr(self.win, "_focus_episode", None)
+        if not want:
+            return False
+        path, demo = want
+        if path != self.win.gallery_scene_combo.currentData():
+            return False
+        ep = next((e for e in self.win._gallery_episodes if e["name"] == demo), None)
+        self.win._focus_episode = None
+        if ep is None:
+            return False
+        lst = self.win.instruction_list
+        for row in range(lst.topLevelItemCount()):
+            it = lst.topLevelItem(row)
+            if it.data(0, Qt.ItemDataRole.UserRole) == ep["instruction_id"]:
+                lst.setCurrentItem(it)     # -> apply_gallery_filter
+                return True
+        return False
 
     def on_gallery_activated(self, ep) -> None:
         """타일을 더블클릭하면 **Trim 탭**에서 크게 본다.

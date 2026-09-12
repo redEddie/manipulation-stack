@@ -297,8 +297,10 @@ def build_menu(win) -> None:
     m.addAction(tr("데이터 저장 경로 선택..."), win.dataset_ops.browse_root)
     m.addSeparator()
     m.addSeparator()
-    m.addAction(tr("✓ Pass"), win.dataset_ops.on_set_verdict_success)
-    m.addAction(tr("✗ Fail"), win.dataset_ops.on_set_verdict_failed)
+    # 낱말은 저장되는 값과 같게 둔다 -- 파일에 적히는 것은 success/failed 다
+    # (2026-09-12 에 버튼을 고치면서 메뉴가 "Pass" 로 남아 있었다).
+    m.addAction(tr("✓ Success"), win.dataset_ops.on_set_verdict_success)
+    m.addAction(tr("✗ Failed"), win.dataset_ops.on_set_verdict_failed)
     m.addAction(tr("선택 재생 (실로봇)"), win.playback_ops.on_replay_selected)
     m.addAction(tr("끝 다듬기 (Trim 탭에서)"), win.playback_ops.on_open_trim)
     m.addSeparator()
@@ -356,6 +358,12 @@ def build_menu(win) -> None:
     win.act_toggle_right.triggered.connect(
         lambda on: win.right_scroll.setVisible(on))
     m.addAction(win.act_toggle_right)
+    m.addSeparator()
+    # 창 조작을 메뉴에도 둔다. 창틀 단추는 창 관리자가 그리는 것이라 없을
+    # 수도 있고(조작자, 2026-09-12: "윈도우가 최대화/최소화 기능이 없네?"),
+    # 그러면 앱 안에서는 창을 줄이거나 키울 길이 아예 없다.
+    m.addAction(tr("창 최대화 / 복원"), win._toggle_maximized).setShortcut("Ctrl+Shift+M")
+    m.addAction(tr("창 최소화"), win.showMinimized).setShortcut("Ctrl+M")
 
     m = mb.addMenu(tr("Help"))
     # 표는 손으로 쓰지 않고 Collect 화면의 KEY_MAP 에서 만든다 -- 두 곳에
