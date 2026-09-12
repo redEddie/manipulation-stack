@@ -303,8 +303,8 @@ def build_menu(win) -> None:
     # "거울" 규칙 참고 (툴바는 현재 화면의 자주 쓰는 것, 메뉴는 전량 색인).
     m.addAction(tr("✓ Success"), win.dataset_ops.on_set_verdict_success)
     m.addAction(tr("✗ Failed"), win.dataset_ops.on_set_verdict_failed)
-    m.addAction(tr("선택 재생 (실로봇)"), win.playback_ops.on_replay_selected)
-    m.addAction(tr("끝 다듬기 (Trim 탭에서)"), win.playback_ops.on_open_trim)
+    m.addAction(tr("선택 재생 (실로봇)"), win.trim_ops.on_replay_selected)
+    m.addAction(tr("끝 다듬기 (Trim 탭에서)"), win.trim_ops.on_open_trim)
     m.addSeparator()
     m.addAction(tr("프록시 클립 만들기..."), win.dataset_ops.on_build_proxies)
     m.addSeparator()

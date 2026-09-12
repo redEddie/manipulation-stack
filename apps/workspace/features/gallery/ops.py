@@ -315,5 +315,5 @@ class GalleryOps:
         """
         path = self.win.gallery_scene_combo.currentData()
         if path and ep:
-            self.win.playback_ops.show_trim_for(path, ep["name"])
+            self.win.trim_ops.show_trim_for(path, ep["name"])
             show_center_tab(self.win, "trim")

@@ -179,7 +179,7 @@ def build_analysis_tab(win) -> QWidget:
     # 선택)과 보는 것(Trim 에서 재생)이다.
     btns = QHBoxLayout()
     for text, slot in ((tr("튀는 것만 선택"), win.stats_ops.on_select_flagged),
-                       (tr("Trim 에서 재생"), win.playback_ops.on_rank_trim)):
+                       (tr("Trim 에서 재생"), win.trim_ops.on_rank_trim)):
         b = QPushButton(text)
         b.clicked.connect(slot)
         btns.addWidget(b)

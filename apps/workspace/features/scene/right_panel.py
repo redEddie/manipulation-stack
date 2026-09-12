@@ -41,7 +41,7 @@ from apps.workspace.shared.info import WrapLabel
 from mstack.gui.i18n import tr
 
 #: 종착 동작 하나에만 색을 준다. 색이 둘 이상이면 그 순간 아무것도 안
-#: 도드라진다. 파괴적 종착 동작이 붉은 것과 짝 (trim_tab 의 [확정]).
+#: 도드라진다. 파괴적 종착 동작이 붉은 것과 짝 (trim/tab 의 [확정]).
 _PRIMARY = ("background-color:#2d7d46; color:white; padding:6px;"
             "font-weight:bold;")
 #: 조회 버튼 -- 아무것도 안 바꾸므로 동작 버튼의 무게를 주지 않는다.

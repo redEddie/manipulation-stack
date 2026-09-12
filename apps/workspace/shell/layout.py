@@ -45,7 +45,7 @@ from apps.workspace.features.collection import build_collect_header
 from apps.workspace.features.stats.analysis_tab import build_analysis_tab
 from apps.workspace.features.camera import build_cloud_tab, build_depth_tab
 from apps.workspace.features.gallery import build_gallery_tab
-from apps.workspace.features.playback import build_trim_tab
+from apps.workspace.features.trim import build_trim_tab
 from apps.workspace.features.scene.layout_tab import build_layout_tab
 from apps.workspace.features.doctor.progress_tab import build_progress_tab
 from apps.workspace.features.doctor.record_tab import build_record_tab

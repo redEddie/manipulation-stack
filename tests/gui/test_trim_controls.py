@@ -110,12 +110,12 @@ def main() -> None:
         win.root_edit.setText(str(root))
         win.dataset_ops.on_root_changed()
         win._set_activity("dataset")
-        ops = win.playback_ops
+        ops = win.trim_ops
 
         # ---------------------------------------------- 1. 잘림 선
         assert isinstance(win.trim_slider, CutSlider), type(win.trim_slider)
         ops.show_trim_for(path, "episode_000")
-        assert win.playback.trim_n == N_FRAMES, win.playback.trim_n
+        assert win.trim.n == N_FRAMES, win.trim.n
         assert win.trim_slider.cut() is None, "자를 것이 없는데 선이 그려졌다"
         ops.trim_add(5)
         assert ops.trim_keep() == N_FRAMES - 5
@@ -129,14 +129,14 @@ def main() -> None:
         ops.on_trim_play()
         ops.trim_tick()                       # keep - 1 (아직 남는 마지막)
         assert win.trim_slider.value() == keep - 1
-        assert win.playback.trim_timer.isActive()
+        assert win.trim.timer.isActive()
         ops.trim_tick()                       # 잘릴 첫 프레임 -- 여기서 선다
-        assert not win.playback.trim_timer.isActive(), "잘림 지점에서 안 섰다"
+        assert not win.trim.timer.isActive(), "잘림 지점에서 안 섰다"
         assert win.trim_slider.value() == keep - 1, "선 자리가 잘림 지점이 아니다"
         assert "이어보기" in win.trim_play_btn.text(), win.trim_play_btn.text()
         # 한 번 더 누르면 잘려나갈 구간까지 이어서 본다 (전체 재생은 그대로).
         ops.on_trim_play()
-        assert win.playback.trim_timer.isActive()
+        assert win.trim.timer.isActive()
         ops.trim_tick()
         assert win.trim_slider.value() == keep, "이어보기가 안 된다"
         assert "#c0392b" in win.trim_views["agent"].styleSheet(), "잘릴 구간인데 테두리가 안 빨갛다"
@@ -147,7 +147,7 @@ def main() -> None:
         for _ in range(5):
             ops.trim_tick()
         assert win.trim_slider.value() == N_FRAMES - 1, win.trim_slider.value()
-        assert not win.playback.trim_timer.isActive()
+        assert not win.trim.timer.isActive()
         # 재생바 폭은 불변이다 -- 위치 라벨이 글자 길이로 넓어지면 그 폭을
         # 슬라이더에서 뺏는다 (2026-09-12 조작자: "길이가 무조건 불변").
         assert win.trim_pos.minimumWidth() == win.trim_pos.maximumWidth(), (
@@ -158,7 +158,7 @@ def main() -> None:
         ops.trim_seek(ops.trim_keep() - 1)
         assert "잘린 뒤 마지막" not in win.trim_pos.text(), win.trim_pos.text()
         src = (Path(__file__).resolve().parents[2] /
-               "apps/workspace/features/playback/ops.py").read_text(encoding="utf-8")
+               "apps/workspace/features/trim/ops.py").read_text(encoding="utf-8")
         assert 'tr(" ← 잘린 뒤 마지막")' not in src, "빼기로 한 문구가 돌아왔다"
         print("2. '잘린 뒤 마지막' stay-gone OK")
 
@@ -171,13 +171,13 @@ def main() -> None:
         assert ops.trim_pending() == 0
         ops.trim_undo()
         assert ops.trim_pending() == 6, "원래대로도 되돌릴 수 있어야 한다"
-        while win.playback.trim_undo:
+        while win.trim.undo:
             ops.trim_undo()
         assert ops.trim_pending() == 0 and not win.trim_undo_btn.isEnabled()
         # 다른 에피소드를 물면 이전 걸음은 못 되돌린다
         ops.trim_add(3)
         ops.show_trim_for(path, "episode_001")
-        assert win.playback.trim_undo == [] and ops.trim_pending() == 0
+        assert win.trim.undo == [] and ops.trim_pending() == 0
         print("3. 행동취소 / 원래대로 OK")
 
         # ---------------------------------------------- 4. 배속
@@ -186,13 +186,13 @@ def main() -> None:
         assert labels == ["0.5x", "1x", "2x", "3x"], labels
         win.trim_speed_combo.setCurrentIndex(labels.index("1x"))
         ops.on_trim_play()                      # 타이머를 만든다
-        base = win.playback.trim_timer.interval()
+        base = win.trim.timer.interval()
         assert base == 50, base                 # 20Hz
         win.trim_speed_combo.setCurrentIndex(labels.index("2x"))
-        assert win.playback.trim_timer.interval() == 25, \
-            win.playback.trim_timer.interval()
+        assert win.trim.timer.interval() == 25, \
+            win.trim.timer.interval()
         ops.on_trim_play()                      # 멈춘다
-        assert not win.playback.trim_timer.isActive()
+        assert not win.trim.timer.isActive()
         print("4. Trim 배속 OK")
 
         # ---------------------------------------------- 5. 플롯 전체 / 해제
@@ -297,7 +297,7 @@ def main() -> None:
         app.processEvents()                          # 행 포인터는 여기서 죽는다
         assert win.gallery_ops.selected_keys() == [key], \
             (win.gallery_ops.selected_keys(), key)
-        assert win.playback.trim_key == key, win.playback.trim_key
+        assert win.trim.key == key, win.trim.key
         # 왼쪽 Episode 목록도 같은 것을 가리킨다 (예전엔 순위표만 움직였다)
         in_tree = [i.data(0, Qt.ItemDataRole.UserRole)["name"]
                    for i in win.dataset_tree.selectedItems()]
@@ -314,7 +314,7 @@ def main() -> None:
         assert not any("Mark for delete" in t for t in labels), labels
         print("10. 순위표 선택 = 공유 선택 · 삭제 문 하나 OK")
 
-        for loader in (win.playback.trim_loader,):
+        for loader in (win.trim.loader,):
             if loader is not None:
                 loader.wait(3000)
     print("test_trim_controls OK")

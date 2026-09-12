@@ -50,21 +50,23 @@ class ProcessRegistry:
 
 
 @dataclass
-class PlaybackState:
-    """Trim and playback state for WorkspaceWindow."""
+class TrimState:
+    """끝 다듬기 화면의 상태 -- 지금 문 에피소드와 그 프레임·타이머·되돌리기.
 
-    trim_key: tuple | None = None
-    trim_n: int = 0
-    trim_n_pending: int = 0
-    trim_frames: dict = field(default_factory=lambda: {"agent": None, "wrist": None})
-    trim_loader: Any | None = None
-    trim_timer: QTimer | None = None
-    trim_series: Any | None = None
+    실로봇 재생의 프로세스는 여기 없다 (ProcessRegistry) -- 이 dataclass 는
+    Qt 없이 시험되는 값만 담는다.
+    """
+
+    key: tuple | None = None
+    n: int = 0
+    n_pending: int = 0
+    frames: dict = field(default_factory=lambda: {"agent": None, "wrist": None})
+    loader: Any | None = None
+    timer: QTimer | None = None
+    series: Any | None = None
     #: 자를 양을 바꾼 이력 -- [행동취소] 가 한 걸음씩 되돌린다. 에피소드를
     #: 새로 물 때마다 비운다 (다른 에피소드의 걸음을 되돌릴 수는 없다).
-    trim_undo: list = field(default_factory=list)
-
-    layout_playing: bool = True
+    undo: list = field(default_factory=list)
 
 
 @dataclass
@@ -96,6 +98,9 @@ class CameraState:
     crop_params: dict = field(default_factory=dict)
     grid_store: dict = field(default_factory=dict)
     layout_ref: dict = field(default_factory=dict)
+    #: 레이아웃 점검 탭의 슬라이드쇼 플래그. Playback 탭이 있을 땐 그
+    #: 상태에 끼워 있었는데, 트림과 무관한 값이라 CameraState 로 옮겼다.
+    layout_playing: bool = True
 
 
 @dataclass

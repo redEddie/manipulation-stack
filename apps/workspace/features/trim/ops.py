@@ -26,7 +26,7 @@ from apps.workspace.shared.info import InfoCard
 from apps.workspace.shared.tabs import show_center_tab
 
 
-class PlaybackOps:
+class TrimOps:
     """Trim, robot replay, and HDF5 structure inspection."""
 
     def __init__(self, win) -> None:
@@ -76,50 +76,50 @@ class PlaybackOps:
         if self.win.session.active_file_path is not None and Path(path) == self.win.session.active_file_path:
             self.win.trim_summary.setText(tr("수집 중인 파일은 편집할 수 없습니다."))
             return
-        self.win.playback.trim_key = (path, demo)
-        self.win.playback.trim_n_pending = 0
-        self.win.playback.trim_undo.clear()   # 다른 에피소드의 걸음은 못 되돌린다
+        self.win.trim.key = (path, demo)
+        self.win.trim.n_pending = 0
+        self.win.trim.undo.clear()   # 다른 에피소드의 걸음은 못 되돌린다
         try:
             series = load_series(path, demo)
         except Exception as e:  # noqa: BLE001
             self.win.trim_summary.setText(tr("불러오기 실패: {e}").format(e=e))
             return
-        self.win.playback.trim_series = series
-        self.win.playback.trim_n = int(series["n"])
+        self.win.trim.series = series
+        self.win.trim.n = int(series["n"])
         for plot, dims in self.win.trim_plots.values():
             plot.set_data(series, dims)
-        self.win.playback.trim_frames = {"agent": None, "wrist": None}
+        self.win.trim.frames = {"agent": None, "wrist": None}
         self._trim_cut_shown = False
         self.win.trim_play_btn.setText(tr("재생"))
         for v in self.win.trim_views.values():
             v.setStyleSheet("border:2px solid transparent;")
             v.clear_frame(tr("영상 불러오는 중..."))
-        if self.win.playback.trim_loader is not None:
-            self.win.playback.trim_loader.wait()
-        self.win.playback.trim_loader = EpisodeLoadWorker(path, demo)
-        self.win.playback.trim_loader.loaded.connect(self.on_trim_loaded)
-        self.win.playback.trim_loader.failed.connect(
+        if self.win.trim.loader is not None:
+            self.win.trim.loader.wait()
+        self.win.trim.loader = EpisodeLoadWorker(path, demo)
+        self.win.trim.loader.loaded.connect(self.on_trim_loaded)
+        self.win.trim.loader.failed.connect(
             lambda m: [v.clear_frame(tr("영상 없음")) for v in self.win.trim_views.values()])
-        self.win.playback.trim_loader.start()
+        self.win.trim.loader.start()
         self.trim_update()
 
     def on_trim_loaded(self, path, demo, agent, wrist) -> None:
-        if self.win.playback.trim_key != (path, demo):
+        if self.win.trim.key != (path, demo):
             return
-        self.win.playback.trim_frames = {"agent": agent, "wrist": wrist}
+        self.win.trim.frames = {"agent": agent, "wrist": wrist}
         self.trim_update()
         self.trim_seek(self.trim_keep() - 1)
 
     def trim_pending(self) -> int:
-        return self.win.playback.trim_n_pending
+        return self.win.trim.n_pending
 
     def trim_keep(self) -> int:
-        return max(0, self.win.playback.trim_n - self.trim_pending())
+        return max(0, self.win.trim.n - self.trim_pending())
 
     def _trim_push(self) -> None:
         """지금 자를 양을 되돌리기 더미에 쌓는다. 값을 바꾸기 **전에** 부른다."""
-        self.win.playback.trim_undo.append(self.win.playback.trim_n_pending)
-        del self.win.playback.trim_undo[:-50]          # 더미가 무한정 자라지 않게
+        self.win.trim.undo.append(self.win.trim.n_pending)
+        del self.win.trim.undo[:-50]          # 더미가 무한정 자라지 않게
 
     def trim_undo(self) -> None:
         """행동취소 -- 마지막 한 걸음만 되돌린다.
@@ -129,43 +129,43 @@ class PlaybackOps:
         설정했다가 취소하고 싶을 수 있잖아? 행동취소 버튼을 만들자"). 확정
         전이라 어느 쪽도 파일은 건드리지 않는다.
         """
-        if self.win.playback.trim_key is None or not self.win.playback.trim_undo:
+        if self.win.trim.key is None or not self.win.trim.undo:
             return
-        self.win.playback.trim_n_pending = self.win.playback.trim_undo.pop()
+        self.win.trim.n_pending = self.win.trim.undo.pop()
         self.trim_update()
         self.trim_seek(self.trim_keep() - 1)
 
     def trim_add(self, n: int) -> None:
         """+/- 를 누른 만큼 옮긴다. 0 아래로는 못 간다 -- 원본보다 길어질 수 없다."""
-        if self.win.playback.trim_key is None:
+        if self.win.trim.key is None:
             return
         self._trim_push()
-        self.win.playback.trim_n_pending = max(0, self.win.playback.trim_n_pending + n)
+        self.win.trim.n_pending = max(0, self.win.trim.n_pending + n)
         self.trim_update()
         self.trim_seek(self.trim_keep() - 1)
 
     def trim_reset(self) -> None:
         """원래대로 -- 고른 것을 통째로 0으로. 한 걸음씩 무르는 것은
         [행동취소](trim_undo)가 한다."""
-        if self.win.playback.trim_key is None:
+        if self.win.trim.key is None:
             return
         self._trim_push()
-        self.win.playback.trim_n_pending = 0
+        self.win.trim.n_pending = 0
         self.trim_update()
         self.trim_seek(self.trim_keep() - 1)
 
     def trim_suggest(self) -> None:
-        if self.win.playback.trim_key is None:
+        if self.win.trim.key is None:
             return
-        n = suggest_trim(*self.win.playback.trim_key)
+        n = suggest_trim(*self.win.trim.key)
         self._trim_push()
-        self.win.playback.trim_n_pending = n
+        self.win.trim.n_pending = n
         self.win.log(f"[트림] 추천 {n}프레임" + ("" if n else " (이미 조용하게 끝납니다)"))
         self.trim_update()
         self.trim_seek(self.trim_keep() - 1)
 
     def trim_seek(self, i: int) -> None:
-        n = self.win.playback.trim_n
+        n = self.win.trim.n
         if n <= 0:
             return
         i = max(0, min(n - 1, i))
@@ -178,7 +178,7 @@ class PlaybackOps:
     def trim_show_frame(self, i: int) -> None:
         keep = self.trim_keep()
         for role, v in self.win.trim_views.items():
-            arr = self.win.playback.trim_frames.get(role)
+            arr = self.win.trim.frames.get(role)
             if arr is None or len(arr) == 0:
                 continue
             v.set_frame(arr[min(i, len(arr) - 1)])
@@ -187,7 +187,7 @@ class PlaybackOps:
         # 알 수 없었고 (조작자, 2026-09-12: "의미하는 바를 전혀 알 수 없어"),
         # 같은 것을 재생바의 빨간 선이 늘 보여 준다.
         mark = tr("  (잘려나갈 구간)") if i >= keep else ""
-        self.win.trim_pos.setText(f"{i + 1}/{self.win.playback.trim_n}{mark}")
+        self.win.trim_pos.setText(f"{i + 1}/{self.win.trim.n}{mark}")
         # 지금 보는 프레임이 사라질 것이면 영상 테두리가 빨개진다. 테두리는
         # 늘 2px 자리를 차지하고 색만 바뀌므로 (transparent <-> 빨강) 영상
         # 크기는 흔들리지 않는다.
@@ -214,15 +214,15 @@ class PlaybackOps:
         보려면 통째로 봐야 한다 ("재생이 전체 재생이 안 되요").
         잘릴 구간은 플롯의 빨간 음영과 위치 표시로 그대로 보인다.
         """
-        if self.win.playback.trim_key is None:
+        if self.win.trim.key is None:
             return
-        t = self.win.playback.trim_timer
+        t = self.win.trim.timer
         if t is not None and t.isActive():   # 누르면 멈춘다
             t.stop()
             self.win.trim_play_btn.setText(tr("재생"))
             return
         # 끝에 서 있으면 처음으로 되감고 튼다 -- 안 그러면 한 프레임 만에 선다.
-        if self.win.trim_slider.value() >= self.win.playback.trim_n - 1:
+        if self.win.trim_slider.value() >= self.win.trim.n - 1:
             self.trim_seek(0)
         # 잘림 지점 **앞**에서 시작하는 재생은 거기서 다시 선다. 몇 번을
         # 돌려 보든 매번 서야 한다 (조작자, 2026-09-12: "여러번 보더라도
@@ -230,11 +230,11 @@ class PlaybackOps:
         # "이어보기" 라서, 그때만 안 선다.
         if self.win.trim_slider.value() < self.trim_keep() - 1:
             self._trim_cut_stop_armed = True
-        if self.win.playback.trim_timer is None:
-            self.win.playback.trim_timer = QTimer(self.win)
-            self.win.playback.trim_timer.timeout.connect(self.trim_tick)
+        if self.win.trim.timer is None:
+            self.win.trim.timer = QTimer(self.win)
+            self.win.trim.timer.timeout.connect(self.trim_tick)
         self.apply_trim_speed()
-        self.win.playback.trim_timer.start()
+        self.win.trim.timer.start()
         self.win.trim_play_btn.setText(tr("정지"))
 
     def trim_speed(self) -> float:
@@ -245,7 +245,7 @@ class PlaybackOps:
     def apply_trim_speed(self) -> None:
         """배속은 타이머 주기로 낸다 -- 3배(60Hz)까지는 프레임을 건너뛸 필요가
         없어, 빠르게 훑을 때도 놓치는 프레임이 없다 (Playback 탭과 같은 규약)."""
-        t = self.win.playback.trim_timer
+        t = self.win.trim.timer
         if t is not None:
             t.setInterval(max(5, int(round(1000 / PLAYBACK_FPS / self.trim_speed()))))
 
@@ -257,8 +257,8 @@ class PlaybackOps:
         # 재생이 끝나는 지점이 달라져서, 같은 에피소드를 두 번 틀면 다른
         # 길이로 보인다.
         i = self.win.trim_slider.value() + 1
-        if i >= self.win.playback.trim_n:
-            self.win.playback.trim_timer.stop()
+        if i >= self.win.trim.n:
+            self.win.trim.timer.stop()
             self.win.trim_play_btn.setText(tr("재생"))
             return
         # 다만 **잘릴 자리에서 한 번 선다.** 통째로 흘려보내면 새 끝이 어느
@@ -269,7 +269,7 @@ class PlaybackOps:
         keep = self.trim_keep()
         if self.trim_pending() and i == keep and self._trim_cut_stop_armed:
             self._trim_cut_stop_armed = False
-            self.win.playback.trim_timer.stop()
+            self.win.trim.timer.stop()
             self.win.trim_play_btn.setText(tr("잘린 뒤 이어보기"))
             return
         self.trim_seek(i)
@@ -284,14 +284,14 @@ class PlaybackOps:
         count = getattr(self.win, "trim_count", None)
         apply_btn = getattr(self.win, "trim_apply_btn", None)
         warn = getattr(self.win, "trim_warn", None)
-        has = self.win.playback.trim_key is not None
-        self.win.trim_play_btn.setEnabled(has and self.win.playback.trim_frames.get("agent") is not None)
+        has = self.win.trim.key is not None
+        self.win.trim_play_btn.setEnabled(has and self.win.trim.frames.get("agent") is not None)
         self.win.trim_slider.setEnabled(has)
         if reset_btn is not None:
-            reset_btn.setEnabled(bool(self.win.playback.trim_n_pending))
+            reset_btn.setEnabled(bool(self.win.trim.n_pending))
         undo_btn = getattr(self.win, "trim_undo_btn", None)
         if undo_btn is not None:
-            undo_btn.setEnabled(has and bool(self.win.playback.trim_undo))
+            undo_btn.setEnabled(has and bool(self.win.trim.undo))
         if not has:
             if count is not None:
                 count.setText(tr("에피소드를 고르세요"))
@@ -303,17 +303,17 @@ class PlaybackOps:
                 plot.set_cut(None)
             self.win.trim_slider.set_cut(None)
             return
-        path, demo = self.win.playback.trim_key
+        path, demo = self.win.trim.key
         n_trim, keep = self.trim_pending(), self.trim_keep()
         plan = plan_trim(path, [demo], max(n_trim, 1))[0]
         self.win.trim_summary.setText(
             tr("{d} · {n}프레임 ({s:.1f}s) · 마지막 그리퍼 동작 −{g}프레임").format(
-                d=demo, n=self.win.playback.trim_n, s=self.win.playback.trim_n / 20.0,
+                d=demo, n=self.win.trim.n, s=self.win.trim.n / 20.0,
                 g=plan.gripper_tail if plan.gripper_tail is not None else "?"))
         if count is not None:
             count.setText(
-                tr("{a} → {b} 프레임   (−{n})").format(a=self.win.playback.trim_n, b=keep, n=n_trim)
-                if n_trim else tr("{a} 프레임 — 자를 구간 없음").format(a=self.win.playback.trim_n))
+                tr("{a} → {b} 프레임   (−{n})").format(a=self.win.trim.n, b=keep, n=n_trim)
+                if n_trim else tr("{a} 프레임 — 자를 구간 없음").format(a=self.win.trim.n))
         for plot, _ in self.win.trim_plots.values():
             plot.set_cut(keep if n_trim else None)
         # 재생바에도 같은 선을 긋는다. 자를 양을 바꿀 때 **눈에 보이는 것**이
@@ -331,15 +331,15 @@ class PlaybackOps:
                 warn.setText("")
 
     def trim_apply(self) -> None:
-        if self.win.playback.trim_key is None or not self.trim_pending():
+        if self.win.trim.key is None or not self.trim_pending():
             return
-        path, demo = self.win.playback.trim_key
+        path, demo = self.win.trim.key
         n_trim, keep = self.trim_pending(), self.trim_keep()
         if QMessageBox.question(
                 self.win, tr("끝 다듬기 확정"),
                 tr("{f}\n{d}\n\n{a} → {b} 프레임 (뒤에서 {n}개 삭제)\n\n"
                    "되돌릴 수 없습니다. 진행할까요?").format(
-                       f=Path(path).name, d=demo, a=self.win.playback.trim_n, b=keep, n=n_trim),
+                       f=Path(path).name, d=demo, a=self.win.trim.n, b=keep, n=n_trim),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
@@ -349,7 +349,7 @@ class PlaybackOps:
             QMessageBox.critical(self.win, tr("다듬기 실패"), f"{type(e).__name__}: {e}")
             self.win.log(f"[트림 실패] {Path(path).name} {demo}: {type(e).__name__}: {e}")
             return
-        self.win.log(f"[트림] {Path(path).name} {demo}: {self.win.playback.trim_n} → {new_n}프레임 "
+        self.win.log(f"[트림] {Path(path).name} {demo}: {self.win.trim.n} → {new_n}프레임 "
                  f"(−{n_trim})")
         # 프록시 클립은 잘린 꼬리를 아직 갖고 있다 -- 지우지 않으면 큐레이션
         # 그리드가 **이미 없는 프레임을 계속 보여준다.** 썸네일은 첫 프레임이라
@@ -375,7 +375,7 @@ class PlaybackOps:
         picks = self.win.gallery_ops.selected_keys()
         if not picks:
             return
-        if self.win.playback.trim_key != picks[0]:
+        if self.win.trim.key != picks[0]:
             self.show_trim_for(*picks[0])
         show_center_tab(self.win, "trim")
 

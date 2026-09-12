@@ -201,7 +201,7 @@ class DatasetOps:
             self.win.stats_ops.show_analysis_for(str(path), ep["name"])
         # Trim 탭도 고른 것을 문다. 하나만 골랐을 때만 무는 것은 그쪽 규칙이고,
         # 실패해도 선택 자체를 죽이지 않는다 (sync_trim_to_selection 참고).
-        self.win.playback_ops.sync_trim_to_selection()
+        self.win.trim_ops.sync_trim_to_selection()
 
 
     # ------------------------------------------------------------------ select

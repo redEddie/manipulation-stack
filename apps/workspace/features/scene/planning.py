@@ -514,7 +514,7 @@ class ScenePlanningOps:
             return
         path, demo = keys[0]
         self.win.stats_ops.show_analysis_for(path, demo)
-        self.win.playback_ops.show_trim_for(path, demo)
+        self.win.trim_ops.show_trim_for(path, demo)
 
     def session_instruction_counts(self) -> dict:
         """세션 중 slot 카운트 -- 파일은 saver 가 h5py 로 잠그고 있으므로

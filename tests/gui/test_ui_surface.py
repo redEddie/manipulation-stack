@@ -51,7 +51,7 @@ class _Stub(QMainWindow):
     def __init__(self):
         super().__init__()
         self.upload = _NoOp()
-        self.playback_ops = _NoOp()
+        self.trim_ops = _NoOp()
         self.camera_ops = _NoOp()
         self.dataset_ops = _NoOp()
         self.collection = _NoOp()

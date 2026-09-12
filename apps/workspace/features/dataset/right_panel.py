@@ -74,7 +74,7 @@ def build_dataset_right(win) -> QWidget:
             .format(n=n) if n > 0 else
             tr("누를 때마다 {n}프레임씩 되돌립니다 (원본 길이 이상으로는 안 갑니다)")
             .format(n=-n))
-        b.clicked.connect(lambda _=False, k=n: win.playback_ops.trim_add(k))
+        b.clicked.connect(lambda _=False, k=n: win.trim_ops.trim_add(k))
         step_row.addWidget(b)
     box.body.addLayout(step_row)
 
@@ -88,19 +88,19 @@ def build_dataset_right(win) -> QWidget:
                                      "되돌립니다 (−5 를 잘못 눌렀을 때). Ctrl+Z"))
     win.trim_undo_btn.setShortcut("Ctrl+Z")
     win.trim_undo_btn.setEnabled(False)
-    win.trim_undo_btn.clicked.connect(win.playback_ops.trim_undo)
+    win.trim_undo_btn.clicked.connect(win.trim_ops.trim_undo)
     undo_row.addWidget(win.trim_undo_btn, 1)
     win.trim_reset_btn = QPushButton(tr("원래대로"))
     win.trim_reset_btn.setToolTip(tr("고른 프레임 수를 0으로 되돌립니다 -- 자를 것이 "
                                       "없는 상태로 돌아갑니다. 확정 전에는 파일이 "
                                       "바뀌지 않습니다."))
     win.trim_reset_btn.setEnabled(False)
-    win.trim_reset_btn.clicked.connect(win.playback_ops.trim_reset)
+    win.trim_reset_btn.clicked.connect(win.trim_ops.trim_reset)
     undo_row.addWidget(win.trim_reset_btn, 1)
     sug = QPushButton(tr("추천"))
     sug.setToolTip(tr("끝에서부터 속도가 그 에피소드 중앙값 아래로 떨어지는 "
                       "지점까지를 제안합니다 (최대 15프레임)"))
-    sug.clicked.connect(win.playback_ops.trim_suggest)
+    sug.clicked.connect(win.trim_ops.trim_suggest)
     undo_row.addWidget(sug, 1)
     box.body.addLayout(undo_row)
 
@@ -114,7 +114,7 @@ def build_dataset_right(win) -> QWidget:
     # 먼저 불리고(build_center 가 build_right 보다 앞서 Trim 탭을 짓는다) 나중에
     # 만들어지므로 초기 상태는 여기서 박는다.
     win.trim_apply_btn.setEnabled(False)
-    win.trim_apply_btn.clicked.connect(win.playback_ops.trim_apply)
+    win.trim_apply_btn.clicked.connect(win.trim_ops.trim_apply)
     box.body.addWidget(win.trim_apply_btn)
 
     win.trim_warn = QLabel("")

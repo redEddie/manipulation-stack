@@ -108,7 +108,7 @@ def build_dataset(win) -> QWidget:
     trim_btn.setToolTip(tr(
         "선택한 에피소드를 Trim 탭에서 엽니다.\n"
         "저장 키를 누를 때 흔들린 마지막 몇 프레임을 잘라냅니다."))
-    trim_btn.clicked.connect(win.playback_ops.on_open_trim)
+    trim_btn.clicked.connect(win.trim_ops.on_open_trim)
     col.addWidget(trim_btn)
 
     vrow = QHBoxLayout()
@@ -136,7 +136,7 @@ def build_dataset(win) -> QWidget:
         "재현합니다.\n로봇 노드가 켜져 있어야 하고, 로봇이 실제로 "
         "움직입니다. 주변을 비우세요.\n재생 중에는 이 버튼이 '재생 중단'"
         "이 됩니다 (중단 시 로봇은 현재 포즈 유지)."))
-    win.replay_btn.clicked.connect(win.playback_ops.on_replay_selected)
+    win.replay_btn.clicked.connect(win.trim_ops.on_replay_selected)
     col.addWidget(win.replay_btn)
 
     # 삭제는 표시와 실행으로 갈라진다 (2026-09-11). 에피소드 삭제로 가는

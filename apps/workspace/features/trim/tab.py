@@ -89,13 +89,13 @@ def build_trim_tab(win) -> QWidget:
     srow = QHBoxLayout()
     win.trim_play_btn = QPushButton(tr("재생"))
     win.trim_play_btn.setEnabled(False)
-    win.trim_play_btn.clicked.connect(win.playback_ops.on_trim_play)
+    win.trim_play_btn.clicked.connect(win.trim_ops.on_trim_play)
     srow.addWidget(win.trim_play_btn)
     # 자를 지점은 재생바 위에 **빨간 선**으로 그린다 -- −5/−1 을 누르면 선이
     # 따라 움직이고, 그 뒤 옅은 빨강이 사라질 구간이다 (조작자, 2026-09-12).
     win.trim_slider = CutSlider(Qt.Orientation.Horizontal)
     win.trim_slider.setEnabled(False)
-    win.trim_slider.valueChanged.connect(win.playback_ops.on_trim_scrub)
+    win.trim_slider.valueChanged.connect(win.trim_ops.on_trim_scrub)
     srow.addWidget(win.trim_slider, 1)
     # **고정 폭**이어야 한다. 글자가 길어진 만큼 라벨이 넓어지면 그 폭을
     # 슬라이더에서 뺏어, 재생이 끝에 닿을 때마다 재생바가 줄었다 늘었다
@@ -115,7 +115,7 @@ def build_trim_tab(win) -> QWidget:
         win.trim_speed_combo.addItem(label, mult)
     win.trim_speed_combo.setCurrentIndex([m for _l, m in PLAYBACK_SPEEDS].index(1.0))
     win.trim_speed_combo.setMaximumWidth(80)
-    win.trim_speed_combo.currentIndexChanged.connect(win.playback_ops.on_trim_speed_changed)
+    win.trim_speed_combo.currentIndexChanged.connect(win.trim_ops.on_trim_speed_changed)
     srow.addWidget(win.trim_speed_combo)
     outer.addLayout(srow)
 
@@ -203,6 +203,6 @@ def build_trim_tab(win) -> QWidget:
     # 끝 다듬기 상자(단계·추천·정정·확정·경고)는 우측 패널로 옮겼다
     # (features/dataset/right_panel.py 의 Trim 상자, 2026-09-11). 이 탭에는
     # 보는 것 -- 영상·스크럽·플롯 -- 만 남긴다.
-    win.playback_ops.trim_update()
+    win.trim_ops.trim_update()
     return page
 

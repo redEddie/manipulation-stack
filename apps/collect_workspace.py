@@ -91,14 +91,14 @@ from apps.workspace.features.collection import CollectionOps  # noqa: E402
 from apps.workspace.features.dataset import DatasetOps  # noqa: E402
 from apps.workspace.features.doctor import DoctorOps  # noqa: E402
 from apps.workspace.features.gallery import GalleryOps  # noqa: E402
-from apps.workspace.features.playback import PlaybackOps  # noqa: E402
+from apps.workspace.features.trim import TrimOps  # noqa: E402
 from apps.workspace.features.scene import LayoutRefOps, SceneOps, ScenePlanningOps  # noqa: E402
 from apps.workspace.features.stats import StatsOps  # noqa: E402
 from apps.workspace.features.system import SystemOps  # noqa: E402
 from apps.workspace.features.upload import UploadOps  # noqa: E402
 from apps.workspace.models import (  # noqa: E402
     CameraState,
-    PlaybackState,
+    TrimState,
     ProcessRegistry,
     SessionState,
 )
@@ -227,7 +227,7 @@ class WorkspaceWindow(QMainWindow):
         self._activity = ""
         self.worker: CollectionWorker | None = None
         self.procs = ProcessRegistry()
-        self.playback = PlaybackState()
+        self.trim = TrimState()
         self.cameras = CameraState()
         self.cameras.grid_store = load_grid_store()
         self.session = SessionState()
@@ -268,7 +268,7 @@ class WorkspaceWindow(QMainWindow):
         self.SHORTCUT_HINTS = SHORTCUT_HINTS
 
         self.upload = UploadOps(self)
-        self.playback_ops = PlaybackOps(self)
+        self.trim_ops = TrimOps(self)
         self.doctor = DoctorOps(self)
         self.scene_ops = SceneOps(self)
         self.scene_planning = ScenePlanningOps(self)
@@ -502,7 +502,7 @@ class WorkspaceWindow(QMainWindow):
             else:
                 self.layout_ref.layout_show()
             self.layout_ref.layout_apply_interval()
-            if self.playback.layout_playing:
+            if self.cameras.layout_playing:
                 self._layout_timer.start()
             if self.layout_blink_check.isChecked():
                 self._layout_blink_timer.start()
@@ -744,7 +744,7 @@ class WorkspaceWindow(QMainWindow):
         w.node_status.connect(self.collection.on_node_status)
         w.fatal_error.connect(self.collection.on_fatal)
         w.connected.connect(self.collection.on_connected)
-        w.episode_list_changed.connect(self.playback_ops.on_episode_list)
+        w.episode_list_changed.connect(self.trim_ops.on_episode_list)
         w.session_summary.connect(self.stats_ops.on_summary)
         # 세션 해제(버튼 복구, worker=None)는 session_summary가 아니라 finished에
         # 걸어야 한다. summary는 run()의 finally에서만 나오는데, 연결 실패는 그
@@ -758,7 +758,7 @@ class WorkspaceWindow(QMainWindow):
         # 에피소드 수·세션 통계·실패 표시 해제·탐색기 목록이 전부 멈춘 채로
         # 있는다 -- 실제로 10개를 저장한 세션 로그에 [저장] 줄이 한 줄도 없었다.
         w.saver.episode_saved.connect(self.collection.on_saved)
-        w.saver.episode_list_changed.connect(self.playback_ops.on_episode_list)
+        w.saver.episode_list_changed.connect(self.trim_ops.on_episode_list)
         w.saver.log_message.connect(self.log)
         w.saver.save_status.connect(self.collection.on_save_status)
         self.worker = w

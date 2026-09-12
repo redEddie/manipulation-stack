@@ -101,10 +101,10 @@ class LayoutRefOps:
         self.layout_show()
 
     def layout_toggle_play(self) -> None:
-        self.win.playback.layout_playing = not self.win.playback.layout_playing
+        self.win.cameras.layout_playing = not self.win.cameras.layout_playing
         self.win.layout_play_btn.setText(
-            tr("일시정지") if self.win.playback.layout_playing else tr("재생"))
-        if self.win.playback.layout_playing and \
+            tr("일시정지") if self.win.cameras.layout_playing else tr("재생"))
+        if self.win.cameras.layout_playing and \
                 center_tab_key(self.win) == "layout":
             self.win._layout_timer.start()
         else:

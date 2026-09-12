@@ -162,15 +162,15 @@ assert not hasattr(win.dataset_ops, "on_select_jerky")
 print("3c 통과: 전역 선택 헬퍼가 없어졌다 (필터가 대신)")
 
 # 재생 가드: 선택 없음 -> 안내, 세션 중 -> 경고
-win.playback_ops.on_replay_selected()
+win.trim_ops.on_replay_selected()
 assert infos and "하나만" in infos[-1]
 win.worker = object()
-win.playback_ops.replay_on_robot(str(TMP / "x.hdf5"), "episode_000")
+win.trim_ops.replay_on_robot(str(TMP / "x.hdf5"), "episode_000")
 assert warns and "세션" in warns[-1]
 win.worker = None
 # 배속 다이얼로그 취소 -> 프로세스 없음
 QInputDialog.getDouble = staticmethod(lambda *a, **k: (0.5, False))
-win.playback_ops.replay_on_robot(str(TMP / "x.hdf5"), "episode_000")
+win.trim_ops.replay_on_robot(str(TMP / "x.hdf5"), "episode_000")
 assert win.procs.replay_process is None
 # 승인 경로: 확인 Yes -> QProcess 시작 (더미 프로그램으로 교체)
 QInputDialog.getDouble = staticmethod(lambda *a, **k: (0.5, True))
@@ -178,7 +178,7 @@ cw.QMessageBox.warning = staticmethod(
     lambda *a, **k: cw.QMessageBox.StandardButton.Yes)
 real_repl = REPLAY_SCRIPT
 cw.sys = sys
-win.playback_ops.replay_on_robot(str(TMP / "x.hdf5"), "episode_000")
+win.trim_ops.replay_on_robot(str(TMP / "x.hdf5"), "episode_000")
 assert win.procs.replay_process is not None
 args = win.procs.replay_process.arguments()
 assert args[0] == real_repl and args[1].endswith("x.hdf5")
@@ -193,7 +193,7 @@ assert not hasattr(win, "gallery_replay_btn"), (
     "큐레이션 격자에 실로봇 재생 버튼이 다시 생겼다 -- 의도한 것이면 "
     "set_replay_ui 의 토글 목록에도 넣어야 한다")
 proc = win.procs.replay_process
-win.playback_ops.on_replay_selected()            # 토글: 재생 중 클릭 = 중단
+win.trim_ops.on_replay_selected()            # 토글: 재생 중 클릭 = 중단
 proc.waitForFinished(3000)
 for _ in range(20):                  # finished 시그널(큐잉) 전달
     app.processEvents()
