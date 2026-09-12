@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import h5py
-from PyQt6.QtCore import QProcess, Qt, QTimer
+from PyQt6.QtCore import QProcess, QTimer
 from PyQt6.QtWidgets import QInputDialog, QMessageBox
 
 from mstack.data.episode_stats import load_series
@@ -367,16 +367,16 @@ class PlaybackOps:
         Playback 탭으로 보내던 것을 옮겼다 (조작자, 2026-09-12). 순위표에서
         확인하고 싶은 것은 "이 테이크를 어떻게 할까"이고, 그 자리에서 바로
         할 수 있는 일(끝 다듬기·판정)은 Trim 쪽에 있다. 행을 고르는 것만으로
-        이미 ``show_trim_for`` 가 물려 있으므로(on_rank_selected), 여기서
-        하는 일은 **탭을 옮기는 것**이다 -- 탭 전환을 선택에 묶으면 곡선만
-        보려던 사람의 화면을 뺏는다.
+        이미 ``show_trim_for`` 가 물려 있으므로(공유 선택 → on_selection_changed
+        → sync_trim_to_selection), 여기서 하는 일은 **탭을 옮기는 것**이다 --
+        탭 전환을 선택에 묶으면 곡선만 보려던 사람의 화면을 뺏는다. 선택은
+        순위표가 아니라 공유 선택에서 읽는다 (통로 하나, 2026-09-12).
         """
-        items = self.win.rank_tree.selectedItems()
-        if not items:
+        picks = self.win.gallery_ops.selected_keys()
+        if not picks:
             return
-        path, demo = items[0].data(0, Qt.ItemDataRole.UserRole)
-        if self.win.playback.trim_key != (path, demo):
-            self.show_trim_for(path, demo)
+        if self.win.playback.trim_key != picks[0]:
+            self.show_trim_for(*picks[0])
         show_center_tab(self.win, "trim")
 
     # ---------------------------------------------------------------- replay

@@ -289,6 +289,31 @@ def main() -> None:
         assert win.center_tabs.currentWidget() is win.center_tab_widgets["trim"]
         print("9. Playback stay-gone · 갤러리 더블클릭도 Trim OK")
 
+        # -------------------- 10. 순위표 선택 = **공유 선택** (통로 하나)
+        tree = win.rank_tree
+        assert tree.topLevelItemCount() >= 2, tree.topLevelItemCount()
+        key = tree.topLevelItem(1).data(0, Qt.ItemDataRole.UserRole)
+        tree.setCurrentItem(tree.topLevelItem(1))   # 목록을 다시 그리므로
+        app.processEvents()                          # 행 포인터는 여기서 죽는다
+        assert win.gallery_ops.selected_keys() == [key], \
+            (win.gallery_ops.selected_keys(), key)
+        assert win.playback.trim_key == key, win.playback.trim_key
+        # 왼쪽 Episode 목록도 같은 것을 가리킨다 (예전엔 순위표만 움직였다)
+        in_tree = [i.data(0, Qt.ItemDataRole.UserRole)["name"]
+                   for i in win.dataset_tree.selectedItems()]
+        assert in_tree == [key[1]], (in_tree, key)
+        # 다시 그려도 순위표가 그 선택을 그대로 비춘다 (clear() 가 지우던 것)
+        win.stats_ops.refresh_rank_list()
+        back = [i.data(0, Qt.ItemDataRole.UserRole) for i in tree.selectedItems()]
+        assert back == [key], back
+        # 삭제로 가는 문은 하나 -- Analysis 상자의 중복 버튼은 없앴다
+        assert not hasattr(win.stats_ops, "on_rank_delete")
+        from PyQt6.QtWidgets import QPushButton
+        labels = [b.text() for b
+                  in win.center_tab_widgets["analysis"].findChildren(QPushButton)]
+        assert not any("Mark for delete" in t for t in labels), labels
+        print("10. 순위표 선택 = 공유 선택 · 삭제 문 하나 OK")
+
         for loader in (win.playback.trim_loader,):
             if loader is not None:
                 loader.wait(3000)

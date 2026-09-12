@@ -397,6 +397,9 @@ class StatsOps:
         # 가 네 번 돌았다 (목록·힌트·scope_label·refresh_dim_dist).
         eps = self.filtered_stats()
         rows = sorted(eps, key=score)[:60]
+        # 다시 그리는 동안 신호를 막는다. 안 그러면 clear() 가 "선택 없음" 을,
+        # 복원이 "선택 바뀜" 을 쏘아 on_rank_selected 가 헛돈다.
+        self.win.rank_tree.blockSignals(True)
         self.win.rank_tree.clear()
         for e in rows:
             # scene 은 **짧은 이름**으로 적는다: "scene_022" 가 아니라 "S022"
@@ -428,6 +431,20 @@ class StatsOps:
                 for c in range(4):
                     item.setBackground(c, QBrush(tint))
             self.win.rank_tree.addTopLevelItem(item)
+        # 순위표 선택은 **공유 선택의 보기**다 -- 목록을 다시 그려도 창이 들고
+        # 있는 선택을 그대로 비춘다. 예전에는 clear() 가 선택을 지워 버려서,
+        # 선택을 바꿀 때마다 순위표만 텅 비었다.
+        want = set(self.win.gallery_ops.selected_keys())
+        first = None
+        for i in range(self.win.rank_tree.topLevelItemCount()):
+            it = self.win.rank_tree.topLevelItem(i)
+            if it.data(0, Qt.ItemDataRole.UserRole) in want:
+                it.setSelected(True)
+                first = first or it
+        if first is not None:
+            self.win.rank_tree.setCurrentItem(first)
+            self.win.rank_tree.scrollToItem(first)
+        self.win.rank_tree.blockSignals(False)
         # **무엇의 후보인지**는 상자 제목이 말한다. 회색 설명 줄에 섞어
         # 두었더니 정작 필요한 한 마디(판정선)가 묻혔다 (조작자, 2026-09-12).
         box = getattr(self.win, "filt_box", None)
@@ -517,23 +534,24 @@ class StatsOps:
         고른 뒤 "🗑 Mark for delete" 로 표시하고 왼쪽에서 실행한다.
         """
         tree = self.win.rank_tree
-        tree.clearSelection()
         picked = []
         for i in range(tree.topLevelItemCount()):
             it = tree.topLevelItem(i)
             key = it.data(0, Qt.ItemDataRole.UserRole)
             st = next((e for e in self.win.session.stats if e.key == key), None)
             if st is not None and st.flagged:
-                it.setSelected(True)
                 picked.append(it)
-        # 고르기만 하면 60줄 목록 어딘가에 선택이 있을 뿐이라 여전히 못 찾는다
-        # (조작자, 2026-09-12). 첫 번째 것으로 **스크롤해서 세운다** -- 현재
-        # 항목이 되면 곡선이 그려지고 Trim 탭도 그 에피소드를 문다.
+        # **공유 선택에 넣는다.** 순위표에만 칠하면 격자·목록·우측 카드는
+        # 딴 것을 가리킨 채라, 고른 것을 그 자리에서 지우거나 판정할 수
+        # 없었다. 넣고 나면 refresh_rank_list 가 순위표에도 그대로 비춘다.
         if picked:
-            tree.setCurrentItem(picked[0])
-            for it in picked:
-                it.setSelected(True)
-            tree.scrollToItem(picked[0])
+            by_name = {e["name"]: e
+                       for e in (getattr(self.win, "_gallery_episodes", []) or [])}
+            eps = [by_name[d] for _p, d in
+                   (it.data(0, Qt.ItemDataRole.UserRole) for it in picked)
+                   if d in by_name]
+            if eps:
+                self.win.gallery_ops.set_selection(eps, source="rank")
             self._last_jump = None
             self.win.stats_hint.setText(
                 tr("밴드(±{d}) 밖 {n}개를 골랐습니다 — [Trim 에서 재생] 으로 보고, "
@@ -567,22 +585,9 @@ class StatsOps:
                 tr("지금 목록에는 없습니다 — {w} 에 있습니다 (데이터 경로가 다르면 "
                    "그 폴더로 옮기세요).").format(w=where))
 
-    def on_rank_delete(self) -> None:
-        """순위표 선택을 삭제 목록에 **표시**한다 (실행이 아니다).
-
-        격자·트리·순위표 어디서든 표시는 자유롭고, 실제 삭제는 왼쪽 패널의
-        "Delete marked" 버튼 하나뿐이다 -- 그 곳의 확인창이 배치 전체를
-        보여주는 유일한 검토 순간이다.
-        """
-        picks = [i.data(0, Qt.ItemDataRole.UserRole) for i in self.win.rank_tree.selectedItems()]
-        if not picks:
-            QMessageBox.information(self.win, tr("선택 필요"),
-                                    tr("삭제 목록에 넣을 에피소드를 선택하세요 (Ctrl/Shift로 여러 개)."))
-            return
-        for path, demo in picks:
-            self.win.basket.add((path, demo))
-        self.win.dataset_ops.refresh_basket_ui()
-        self.win.gallery_grid.refresh_marks()
+    # on_rank_delete 는 없앴다 (2026-09-12). 순위표 선택이 공유 선택이 된
+    # 뒤로는 왼쪽 패널의 [🗑 Mark for delete] 와 **같은 것에 같은 일**을 해서,
+    # 같은 문이 둘이 되었다. 삭제로 가는 문은 하나다 (curation_basket 참고).
 
     def on_metric_help(self) -> None:
         """Shows docs/curation-metrics.md rather than a copy of it.

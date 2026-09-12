@@ -487,12 +487,32 @@ class ScenePlanningOps:
         self.win.collection.refresh_instruction()
 
     def on_rank_selected(self) -> None:
-        """Selecting a row draws its curves -- the point of the panel is that a
-        number never decides on its own whether a take is bad."""
+        """순위표에서 고른 것을 **공유 선택**에 넣는다.
+
+        2026-09-12 까지 순위표는 자기만의 선택을 갖고 곡선과 Trim 을 직접
+        불렀다. 그래서 "지금 고른 것" 이 화면마다 달라졌다: 순위표에서 017 을
+        고르면 Trim 은 017 로 가는데 격자·왼쪽 목록·우측 카드는 004 를 가리킨
+        채였고, 그 상태에서 우측의 [✓ Success] 는 004 에, 바로 아래 [확정] 은
+        017 에 걸렸다 -- 같은 패널의 두 버튼이 다른 에피소드를 건드렸다.
+
+        이제 통로는 하나다. set_selection 하나가 격자·목록·우측 카드·Trim·
+        곡선을 전부 같은 것으로 맞춘다 (gallery_ops.set_selection).
+
+        번호만으로는 공유 선택이 요구하는 에피소드 dict 를 만들 수 없어서
+        지금 화면의 목록에서 찾는다. 못 찾으면(범위 밖이면) 예전처럼 곡선과
+        Trim 만 직접 띄운다 -- 아무것도 안 하는 것보다는 낫다.
+        """
         items = self.win.rank_tree.selectedItems()
         if not items:
             return
-        path, demo = items[0].data(0, Qt.ItemDataRole.UserRole)
+        keys = [it.data(0, Qt.ItemDataRole.UserRole) for it in items]
+        shown = getattr(self.win, "_gallery_episodes", []) or []
+        by_name = {e["name"]: e for e in shown}
+        eps = [by_name[d] for _p, d in keys if d in by_name]
+        if eps:
+            self.win.gallery_ops.set_selection(eps, source="rank")
+            return
+        path, demo = keys[0]
         self.win.stats_ops.show_analysis_for(path, demo)
         self.win.playback_ops.show_trim_for(path, demo)
 

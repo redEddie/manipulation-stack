@@ -173,10 +173,13 @@ def build_analysis_tab(win) -> QWidget:
     hint_row.addWidget(helpb)
     fcol.addLayout(hint_row)
 
+    # 여기 있던 [🗑 Mark for delete] 를 뺐다 (2026-09-12). 순위표 선택이
+    # 공유 선택이 된 뒤로는 왼쪽 패널의 같은 이름 버튼과 **같은 것에 같은
+    # 일**을 한다 -- 삭제로 가는 문은 하나다. 남은 둘은 찾는 것(튀는 것만
+    # 선택)과 보는 것(Trim 에서 재생)이다.
     btns = QHBoxLayout()
     for text, slot in ((tr("튀는 것만 선택"), win.stats_ops.on_select_flagged),
-                       (tr("Trim 에서 재생"), win.playback_ops.on_rank_trim),
-                       (tr("🗑 Mark for delete"), win.stats_ops.on_rank_delete)):
+                       (tr("Trim 에서 재생"), win.playback_ops.on_rank_trim)):
         b = QPushButton(text)
         b.clicked.connect(slot)
         btns.addWidget(b)
