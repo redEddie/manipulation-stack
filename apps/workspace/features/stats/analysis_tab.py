@@ -72,7 +72,11 @@ def build_analysis_tab(win) -> QWidget:
     # (씬 → 지시문) 안에서만 하므로, 전체 데이터셋으로 재면 작업이 다른
     # 에피소드들의 퍼짐이 섞여 비교가 흐려진다.
     win.dim_bars = DistStrip()
-    dim_box = QGroupBox(tr("차원별 σ(Δa) 분포 — 지금 목록"))
+    # 제목이 **모수를 직접 말한다.** "지금 목록" 이라고만 적었더니 그게 지금
+    # 씬인지 지금 지시문인지 알 수 없었다 (조작자, 2026-09-12). 값은
+    # refresh_dim_dist 가 채운다 -- 범위를 바꾸면 제목도 따라 바뀐다.
+    win.dim_box = QGroupBox(tr("차원별 σ(Δa) 분포"))
+    dim_box = win.dim_box
     dim_col = QVBoxLayout(dim_box)
     dim_col.addWidget(win.dim_bars)
     dim_legend = QLabel(tr("가는 선 p10~p90   ▬ 평균±σ   ▮ 빨강 = 평균"))

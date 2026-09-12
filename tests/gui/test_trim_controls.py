@@ -9,7 +9,7 @@
 그리고 Analysis 의 [Trim 에서 재생] 이 **Trim 탭**을 연다 (예전엔 Playback).
 
 **Playback 탭은 2026-09-12 에 없앴다.** 같은 일(한 에피소드를 크게 보며
-재생)을 Trim 이 전부 하게 되어, 같은 것을 하는 화면이 둘이 되었다. 7번이
+재생)을 Trim 이 전부 하게 되어, 같은 것을 하는 화면이 둘이 되었다. 8번이
 그것이 되살아나지 않는지 지킨다 -- 되살리려면 그 판단을 다시 하고 이 줄을
 지우면 된다.
 
@@ -87,7 +87,28 @@ def main() -> None:
         assert win.trim_slider.cut() == N_FRAMES - 6, win.trim_slider.cut()
         ops.trim_add(5)
         assert win.trim_slider.cut() == N_FRAMES - 11, "선이 따라 움직이지 않는다"
-        print("1. 재생바의 빨간 잘림선 OK")
+        # 재생은 **잘릴 자리에서 한 번 선다** -- 통째로 흘려보내면 새 끝이
+        # 어느 프레임인지 재생만으로는 알 수 없다 (2026-09-12).
+        keep = ops.trim_keep()
+        ops.trim_seek(keep - 2)
+        ops.on_trim_play()
+        ops.trim_tick()                       # keep - 1 (아직 남는 마지막)
+        assert win.trim_slider.value() == keep - 1
+        assert win.playback.trim_timer.isActive()
+        ops.trim_tick()                       # 잘릴 첫 프레임 -- 여기서 선다
+        assert not win.playback.trim_timer.isActive(), "잘림 지점에서 안 섰다"
+        assert win.trim_slider.value() == keep - 1, "선 자리가 잘림 지점이 아니다"
+        assert "이어보기" in win.trim_play_btn.text(), win.trim_play_btn.text()
+        # 한 번 더 누르면 잘려나갈 구간까지 이어서 본다 (전체 재생은 그대로).
+        ops.on_trim_play()
+        assert win.playback.trim_timer.isActive()
+        ops.trim_tick()
+        assert win.trim_slider.value() == keep, "이어보기가 안 된다"
+        assert "#c0392b" in win.trim_views["agent"].styleSheet(), "잘릴 구간인데 테두리가 안 빨갛다"
+        ops.trim_seek(0)
+        assert "transparent" in win.trim_views["agent"].styleSheet()
+        ops.on_trim_play()                    # 멈춘다
+        print("1. 빨간 잘림선 · 잘림 지점에서 정지 · 빨간 테두리 OK")
 
         # ---------------------------------------------- 2. 사라진 문구
         ops.trim_seek(ops.trim_keep() - 1)
@@ -119,6 +140,7 @@ def main() -> None:
         labels = [win.trim_speed_combo.itemText(i)
                   for i in range(win.trim_speed_combo.count())]
         assert labels == ["0.5x", "1x", "2x", "3x"], labels
+        win.trim_speed_combo.setCurrentIndex(labels.index("1x"))
         ops.on_trim_play()                      # 타이머를 만든다
         base = win.playback.trim_timer.interval()
         assert base == 50, base                 # 20Hz
@@ -157,7 +179,20 @@ def main() -> None:
             "Playback 이 아니라 Trim 으로 가야 한다"
         print("6. Trim 에서 재생 OK · 후보 목록의 짧은 이름 OK")
 
-        # ---------------------------------------------- 7. Playback stay-gone
+        # ------------------------------- 7. 목록이 무엇의 목록인지 말한다
+        scope = win.stats_ops.scope_label()
+        assert scope.startswith("S000 · pick up the white cup"), scope
+        assert "2개" in scope, scope
+        assert scope in win.dim_box.title(), win.dim_box.title()
+        assert scope in win.stats_hint.text(), win.stats_hint.text()
+        assert "튄 것" in win.stats_hint.text(), win.stats_hint.text()
+        # 요약 줄은 무엇을 하라고 시키지 않는다 -- 그 일을 하는 버튼이 아래 있다.
+        from mstack.data.episode_stats import summarize
+        v = summarize(win.session.stats)["verdict"]
+        assert "재생해서 확인" not in v, v
+        print("7. 범위 표시 · 요약 문구 OK")
+
+        # ---------------------------------------------- 8. Playback stay-gone
         from apps.workspace.constants import CENTER_TABS, CENTER_TABS_BY_ACTIVITY
         assert "playback" not in dict(CENTER_TABS), "Playback 탭이 돌아왔다"
         for act, keys in CENTER_TABS_BY_ACTIVITY.items():
@@ -173,7 +208,7 @@ def main() -> None:
         show_center_tab(win, "gallery")
         win.gallery_ops.on_gallery_activated({"name": "episode_001"})
         assert win.center_tabs.currentWidget() is win.center_tab_widgets["trim"]
-        print("7. Playback stay-gone · 갤러리 더블클릭도 Trim OK")
+        print("8. Playback stay-gone · 갤러리 더블클릭도 Trim OK")
 
         for loader in (win.playback.trim_loader,):
             if loader is not None:

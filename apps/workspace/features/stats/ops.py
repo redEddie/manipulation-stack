@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QTextCursor
+from PyQt6.QtGui import QBrush, QColor, QTextCursor
 from PyQt6.QtWidgets import (
     QDialog,
     QLabel,
@@ -409,11 +409,54 @@ class StatsOps:
                 item.setForeground(1, Qt.GlobalColor.blue)
             if e.success is False:
                 item.setForeground(0, Qt.GlobalColor.red)
+            # 튄 것은 **줄 전체**에 옅은 바탕을 깔아 목록에서 바로 보이게
+            # 한다 (조작자, 2026-09-12: "늘어짐 하나가 있다는데 어디있는건지
+            # 모르겠어"). 글자색이 아니라 바탕이라, 실패(빨간 글자)와 겹쳐도
+            # 둘 다 읽힌다.
+            if e.flagged:
+                tint = QColor("#c0392b" if e.task_dev > 0 else "#2e6fb7")
+                tint.setAlpha(46)
+                for c in range(4):
+                    item.setBackground(c, QBrush(tint))
             self.win.rank_tree.addTopLevelItem(item)
-        self.win.stats_hint.setText(
-            tr("{n}개 중 {m}개 표시 (에피소드 번호 순)").format(
-                n=len(self.filtered_stats()), m=len(rows)))
+        # 힌트 한 줄이 **무엇의 목록인지**와 **튄 것이 몇 개인지**를 말한다.
+        # 요약 줄의 판정 개수는 데이터셋 전체 기준이라, 지금 목록에 그 하나가
+        # 들어 있는지는 여기서만 알 수 있다 (조작자, 2026-09-12).
+        eps = self.filtered_stats()
+        flagged = [e for e in eps if e.flagged]
+        parts = [self.scope_label()]
+        if len(rows) < len(eps):
+            parts.append(tr("위 {m}개만 표시").format(m=len(rows)))
+        if flagged:
+            parts.append(tr("튄 것 {k}개 (급함 {f} / 늘어짐 {s}) — 바탕색으로 표시").format(
+                k=len(flagged),
+                f=sum(1 for e in flagged if e.task_dev > 0),
+                s=sum(1 for e in flagged if e.task_dev < 0)))
+        else:
+            parts.append(tr("튄 것 없음"))
+        self.win.stats_hint.setText(" · ".join(parts))
         self.refresh_dim_dist()
+
+    def scope_label(self) -> str:
+        """지금 목록이 **무엇의 목록인지** 한 줄로.
+
+        왼쪽 패널이 고른 것을 되읽지 않고 **걸러진 결과에서 뽑는다** -- 화면
+        두 곳이 각자 "지금 범위"를 계산하면 언젠가 갈라진다. 지시문이 하나로
+        좁혀졌으면 그 문장을, 아직 씬만 골랐으면 문장 수를 말한다.
+        """
+        eps = self.filtered_stats()
+        if not eps:
+            return tr("빈 목록")
+        scenes = {e.scene for e in eps if e.scene}
+        tasks = {e.task for e in eps}
+        where = next(iter(scenes)) if len(scenes) == 1 else (
+            tr("씬 {n}개").format(n=len(scenes)) if scenes else tr("전체"))
+        if len(tasks) == 1:
+            sent = next(iter(tasks))
+            what = sent if len(sent) <= 34 else sent[:33] + "…"
+        else:
+            what = tr("지시문 {n}개").format(n=len(tasks))
+        return f"{where} · {what} · {len(eps)}개"
 
     def refresh_dim_dist(self) -> None:
         """차원별 σ(Δa) 분포 -- 모수는 **지금 걸러진 목록**이다.
@@ -423,6 +466,9 @@ class StatsOps:
         해야 "이 차원이 이 작업에서 유난히 흔들린다"가 된다. 그래서 목록이
         다시 그려질 때마다 함께 다시 그린다.
         """
+        box = getattr(self.win, "dim_box", None)
+        if box is not None:
+            box.setTitle(tr("차원별 σ(Δa) 분포 — {s}").format(s=self.scope_label()))
         eps = [e for e in self.filtered_stats() if e.per_dim_sigma is not None]
         if not eps:
             self.win.dim_bars.set_rows([])
@@ -472,18 +518,27 @@ class StatsOps:
         """
         tree = self.win.rank_tree
         tree.clearSelection()
-        n = 0
+        picked = []
         for i in range(tree.topLevelItemCount()):
             it = tree.topLevelItem(i)
             key = it.data(0, Qt.ItemDataRole.UserRole)
             st = next((e for e in self.win.session.stats if e.key == key), None)
             if st is not None and st.flagged:
                 it.setSelected(True)
-                n += 1
+                picked.append(it)
+        # 고르기만 하면 60줄 목록 어딘가에 선택이 있을 뿐이라 여전히 못 찾는다
+        # (조작자, 2026-09-12). 첫 번째 것으로 **스크롤해서 세운다** -- 현재
+        # 항목이 되면 곡선이 그려지고 Trim 탭도 그 에피소드를 문다.
+        if picked:
+            tree.setCurrentItem(picked[0])
+            for it in picked:
+                it.setSelected(True)
+            tree.scrollToItem(picked[0])
         self.win.stats_hint.setText(
-            tr("밴드(±{d}) 밖 {n}개를 골랐습니다 -- 🗑 Mark for delete 로 "
-               "표시한 뒤 왼쪽에서 지웁니다.").format(d=TASK_DEV_LIMIT, n=n)
-            if n else tr("이 그룹에는 밴드 밖이 없습니다."))
+            tr("밴드(±{d}) 밖 {n}개를 골랐습니다 -- [Trim 에서 재생] 으로 보고, "
+               "버릴 것만 🗑 Mark for delete 로 표시한 뒤 왼쪽에서 지웁니다.").format(
+                   d=TASK_DEV_LIMIT, n=len(picked))
+            if picked else tr("이 목록에는 밴드 밖이 없습니다."))
 
     def on_rank_delete(self) -> None:
         """순위표 선택을 삭제 목록에 **표시**한다 (실행이 아니다).

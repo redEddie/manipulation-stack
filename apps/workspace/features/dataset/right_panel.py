@@ -78,28 +78,34 @@ def build_dataset_right(win) -> QWidget:
         step_row.addWidget(b)
     box.body.addLayout(step_row)
 
-    act_row = QHBoxLayout()
-    sug = QPushButton(tr("추천"))
-    sug.setToolTip(tr("끝에서부터 속도가 그 에피소드 중앙값 아래로 떨어지는 "
-                      "지점까지를 제안합니다 (최대 15프레임)"))
-    sug.clicked.connect(win.playback_ops.trim_suggest)
-    act_row.addWidget(sug)
-    # 되돌리기는 둘이다: **행동취소**는 마지막 한 걸음만, **원래대로**는
-    # 통째로 0 으로. 확정 전이라 어느 쪽도 파일은 건드리지 않는다.
+    # 되돌리기는 **되돌릴 것 바로 아래**에 둔다. 처음에는 확정 옆에 있었는데
+    # 조작자가 두 번 물었다 ("행동취소 버튼이 어디있는거지?", 2026-09-12):
+    # 네 버튼이 한 줄에 눌려 글자가 잘렸고, 무엇을 무르는 버튼인지도 자리가
+    # 말해 주지 않았다. 위 줄(−5/−1/+1/+5)을 무르는 것이니 그 밑이 맞다.
+    undo_row = QHBoxLayout()
     win.trim_undo_btn = QPushButton(tr("↶ 행동취소"))
-    win.trim_undo_btn.setToolTip(tr("마지막으로 바꾼 한 걸음만 되돌립니다 "
-                                     "(−5 를 잘못 눌렀을 때). Ctrl+Z"))
+    win.trim_undo_btn.setToolTip(tr("바로 위에서 마지막으로 누른 한 걸음만 "
+                                     "되돌립니다 (−5 를 잘못 눌렀을 때). Ctrl+Z"))
     win.trim_undo_btn.setShortcut("Ctrl+Z")
     win.trim_undo_btn.setEnabled(False)
     win.trim_undo_btn.clicked.connect(win.playback_ops.trim_undo)
-    act_row.addWidget(win.trim_undo_btn)
+    undo_row.addWidget(win.trim_undo_btn, 1)
     win.trim_reset_btn = QPushButton(tr("원래대로"))
     win.trim_reset_btn.setToolTip(tr("고른 프레임 수를 0으로 되돌립니다 -- 자를 것이 "
                                       "없는 상태로 돌아갑니다. 확정 전에는 파일이 "
                                       "바뀌지 않습니다."))
     win.trim_reset_btn.setEnabled(False)
     win.trim_reset_btn.clicked.connect(win.playback_ops.trim_reset)
-    act_row.addWidget(win.trim_reset_btn)
+    undo_row.addWidget(win.trim_reset_btn, 1)
+    sug = QPushButton(tr("추천"))
+    sug.setToolTip(tr("끝에서부터 속도가 그 에피소드 중앙값 아래로 떨어지는 "
+                      "지점까지를 제안합니다 (최대 15프레임)"))
+    sug.clicked.connect(win.playback_ops.trim_suggest)
+    undo_row.addWidget(sug, 1)
+    box.body.addLayout(undo_row)
+
+    # 확정만 한 줄을 통째로 쓴다 -- 유일하게 파일을 바꾸는 버튼이고,
+    # 되돌리기 버튼들과 나란히 두면 손이 미끄러진다.
     win.trim_apply_btn = QPushButton(tr("확정 (파일에 적용)"))
     win.trim_apply_btn.setStyleSheet("background-color:#c0392b; color:white; padding:6px;")
     win.trim_apply_btn.setToolTip(tr("여기서부터 .hdf5 가 실제로 바뀝니다. "
@@ -109,8 +115,7 @@ def build_dataset_right(win) -> QWidget:
     # 만들어지므로 초기 상태는 여기서 박는다.
     win.trim_apply_btn.setEnabled(False)
     win.trim_apply_btn.clicked.connect(win.playback_ops.trim_apply)
-    act_row.addWidget(win.trim_apply_btn, 1)
-    box.body.addLayout(act_row)
+    box.body.addWidget(win.trim_apply_btn)
 
     win.trim_warn = QLabel("")
     win.trim_warn.setWordWrap(True)

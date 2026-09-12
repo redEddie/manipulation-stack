@@ -14,6 +14,7 @@ from mstack.data.episode_trim import plan_trim, suggest_trim, trim_tail
 from mstack.gui.constants import PLAYBACK_FPS
 from mstack.gui.workers import EpisodeLoadWorker
 from mstack.gui.i18n import tr
+from mstack.gui.widgets.cut_slider import CUT_COLOR
 from mstack.data.libero_format import hdf5_repack_status
 from mstack.data.schema_description import describe_episode
 from mstack.data.proxy_clip import (
@@ -33,6 +34,11 @@ class PlaybackOps:
 
     def __init__(self, win) -> None:
         self.win = win
+        self._trim_cut_shown = False     # 영상 테두리가 지금 빨간가
+        #: 재생이 잘림 지점에서 **한 번** 선다. 그 자리에서 다시 누르면 이어
+        #: 봐야 하므로, 한 번 선 뒤에는 내려간다. 슬라이더를 끌거나 자를 양을
+        #: 바꾸면 다시 올라간다 (그때부터는 다른 지점이다).
+        self._trim_cut_stop_armed = True
 
     # ------------------------------------------------------------------ open
     def on_open_trim(self) -> None:
@@ -88,7 +94,10 @@ class PlaybackOps:
         for plot, dims in self.win.trim_plots.values():
             plot.set_data(series, dims)
         self.win.playback.trim_frames = {"agent": None, "wrist": None}
+        self._trim_cut_shown = False
+        self.win.trim_play_btn.setText(tr("재생"))
         for v in self.win.trim_views.values():
+            v.setStyleSheet("border:2px solid transparent;")
             v.clear_frame(tr("영상 불러오는 중..."))
         if self.win.playback.trim_loader is not None:
             self.win.playback.trim_loader.wait()
@@ -184,10 +193,20 @@ class PlaybackOps:
         # 같은 것을 재생바의 빨간 선이 늘 보여 준다.
         mark = tr("  (잘려나갈 구간)") if i >= keep else ""
         self.win.trim_pos.setText(f"{i + 1}/{self.win.playback.trim_n}{mark}")
+        # 지금 보는 프레임이 사라질 것이면 영상 테두리가 빨개진다. 테두리는
+        # 늘 2px 자리를 차지하고 색만 바뀌므로 (transparent <-> 빨강) 영상
+        # 크기는 흔들리지 않는다.
+        cut_now = bool(self.trim_pending()) and i >= keep
+        if cut_now != self._trim_cut_shown:
+            self._trim_cut_shown = cut_now
+            color = CUT_COLOR if cut_now else "transparent"
+            for v in self.win.trim_views.values():
+                v.setStyleSheet(f"border:2px solid {color};")
         for plot, _ in self.win.trim_plots.values():
             plot.set_cursor(i)
 
     def on_trim_scrub(self, i: int) -> None:
+        self._trim_cut_stop_armed = True     # 사람이 끌었으면 다시 선다
         self.trim_show_frame(i)
 
     def on_trim_play(self) -> None:
@@ -241,10 +260,22 @@ class PlaybackOps:
             self.win.playback.trim_timer.stop()
             self.win.trim_play_btn.setText(tr("재생"))
             return
+        # 다만 **잘릴 자리에서 한 번 선다.** 통째로 흘려보내면 새 끝이 어느
+        # 프레임인지 재생만으로는 알 수 없다 (조작자, 2026-09-12: "빨간
+        # 구분선 이후까지 재생되어서 정확히 어디까지가 에피소드인지 파악이
+        # 안 돼"). 한 번 더 누르면 잘려나갈 구간까지 이어서 본다 -- 전체를
+        # 볼 수 있어야 한다는 요구도 그대로다.
+        keep = self.trim_keep()
+        if self.trim_pending() and i == keep and self._trim_cut_stop_armed:
+            self._trim_cut_stop_armed = False
+            self.win.playback.trim_timer.stop()
+            self.win.trim_play_btn.setText(tr("잘린 뒤 이어보기"))
+            return
         self.trim_seek(i)
 
     def trim_update(self) -> None:
         """Recomputes every label, guard and shading from the pending count."""
+        self._trim_cut_stop_armed = True     # 자를 양이 바뀌면 설 자리도 바뀐다
         # 우측 패널 위젯은 build_center(Trim 탭) 뒤의 build_right 에서 만들어진다
         # -- Trim 탭을 짓는 도중에 이 메서드가 불리므로 없을 수 있고, 그때는
         # 가운데 패널 쪽(플롯·슬라이더)만 갱신한다.

@@ -53,6 +53,9 @@ def build_trim_tab(win) -> QWidget:
     for role, cap in (("agent", tr("agent")), ("wrist", tr("wrist"))):
         box = QVBoxLayout()
         v = VideoView()
+        # 테두리 자리는 늘 잡아 둔다 -- 잘려나갈 구간에서 색만 빨개진다.
+        # 없다가 생기면 그때마다 영상이 4px 씩 줄었다 늘었다 한다.
+        v.setStyleSheet("border:2px solid transparent;")
         v.clear_frame(tr("에피소드를 선택하세요"))
         v.set_crop_guide(**win.cameras.crop_params[role])
         win.trim_views[role] = v

@@ -183,7 +183,7 @@ def summarize(stats: list[EpisodeStat]) -> dict:
     """Population-level view + an honest verdict.
 
     The verdict counts takes outside the band rather than passing the dataset
-    against an invented constant: "평균과 0.0026 넘게 차이 나는 것 N개" is a
+    against an invented constant: "평균과 0.004 넘게 차이 나는 것 N개" is a
     fact a curator can act on, "JERKY" would not be.
     """
     if not stats:
@@ -195,8 +195,11 @@ def summarize(stats: list[EpisodeStat]) -> dict:
     if off == 0:
         verdict = f"전부 자기 (scene·문장) 그룹 평균의 ±{TASK_DEV_LIMIT} 안 — 잘라낼 것 없음"
     else:
+        # 무엇을 하라는 말은 붙이지 않는다. 화면에는 그것을 실제로 하는
+        # 버튼([튀는 것만 선택])이 바로 아래 있고, 문장으로 한 번 더 시키면
+        # 정작 그 버튼을 찾는 데 방해가 된다 (조작자, 2026-09-12).
         verdict = (f"자기 (scene·문장) 그룹 평균에서 {TASK_DEV_LIMIT} 넘게 벗어난 것 {off}개 "
-                   f"(급함 {n_fast} / 늘어짐 {n_slow}) — 재생해서 확인해보세요")
+                   f"(급함 {n_fast} / 늘어짐 {n_slow})")
     per_dim = np.stack([s.per_dim_sigma for s in stats]).mean(axis=0)
     return {
         "n": len(stats),
