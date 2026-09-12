@@ -88,7 +88,12 @@ class CurationBasket:
         return True
 
     def toggle(self, key) -> bool:
-        """표시하면 True, 표시를 풀면 False."""
+        """표시하면 True, 표시를 풀면 False.
+
+        화면은 add/discard 를 따로 부른다(격자는 표시, 목록은 해제) -- 지금
+        이 메서드의 소비자는 계약 테스트뿐이지만, 한 번 누를 때마다 뒤집는
+        타일을 만들면 곧 쓰인다. 남겨 두는 근거를 여기 적어 둔다.
+        """
         if self.discard(key):
             return False
         self.add(key)

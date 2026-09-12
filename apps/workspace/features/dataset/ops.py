@@ -10,12 +10,13 @@ from PyQt6.QtCore import QProcess, Qt
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QTreeWidgetItem
 
 from mstack.data.dataset_schema import OBS_AGENTVIEW_RGB, normalize_schema_version
+from mstack.data.episode_label import episode_label, quality_mark
+from apps.workspace.shared.caches import drop_scene_caches
 from mstack.data.libero_format import hdf5_repack_status, renumber_episodes
 from mstack.gui.text_utils import repo_id_error
 from mstack.gui.i18n import tr
 from apps.workspace.features.dataset.right_panel import PHOTO_W
 from apps.workspace.shared.info import scene_fields
-from mstack.data.proxy_clip import invalidate_scene_caches
 from mstack.gui.widgets.video_view import np_to_pixmap
 from mstack.scene.scene_format import (
     delete_scene_episodes,
@@ -120,13 +121,11 @@ class DatasetOps:
         tree.clear()
         for ep in getattr(self.win, "_gallery_shown", []) or []:
             uid = ep.get("episode_uid", "")
-            q = ep.get("quality_status") or (
-                "-" if ep.get("success") is None
-                else ("success" if ep["success"] else "failed"))
-            mark = {"success": "✓", "failed": "✗"}.get(q, "·")
+            # 표기는 격자 타일과 **같은 함수**에서 나온다 (2026-09-12 감사:
+            # 두 곳에 복사돼 있었고 legacy 판정 처리가 서로 달랐다).
             item = QTreeWidgetItem([
-                f"{ep.get('instruction_id', '')}-{uid.rsplit('-', 1)[-1]}",
-                mark, str(ep.get("num_samples", "")),
+                episode_label(ep), quality_mark(ep),
+                str(ep.get("num_samples", "")),
             ])
             item.setData(0, Qt.ItemDataRole.UserRole, ep)
             item.setToolTip(0, f"{uid}\n{ep.get('instruction', '')}\n"
@@ -511,14 +510,9 @@ class DatasetOps:
                     # (프록시 클립) 전부 무효화한다. 삭제와 별도 try --
                     # 캐시 정리 실패가 "삭제 실패" 로 오표기되면 안 된다
                     # (삭제는 이미 성공했다).
-                    try:
-                        sid = read_scene_metadata(path).scene_id
-                        c = invalidate_scene_caches(sid, self.dataset_root())
-                        if c["proxies"]:
-                            self.win.log(
-                                f"[캐시] {path.name}: 프록시 {c['proxies']}개 무효화")
-                    except Exception as e:  # noqa: BLE001
-                        self.win.log(f"[캐시 정리 실패] {path.name}: {e}")
+                    drop_scene_caches(
+                        self.win, lambda p=path: read_scene_metadata(p).scene_id,
+                        path.name)
                 else:
                     with h5py.File(path, "a") as f:
                         data = f["data"]

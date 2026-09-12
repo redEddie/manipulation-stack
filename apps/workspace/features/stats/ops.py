@@ -360,15 +360,16 @@ class StatsOps:
         out = [e for e in self.win.session.stats if lo <= e.seconds <= hi]
         out = [e for e in out if path is None or e.path == str(path)]
         # EpisodeStat 에는 instruction_id 가 없고 e.task 가 지시문 문장이다.
-        # 지금 걸러진 에피소드(_gallery_shown)의 문장 집합으로 판정한다 --
-        # Gallery 가 이미 instruction_id 로 걸러 놓은 것과 같은 집합이다.
-        lst = getattr(self.win, "instruction_list", None)
-        it = lst.currentItem() if lst is not None else None
-        iid = it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
+        # 지시문은 **정본 통로**에서 읽고(gallery_ops.selected_instruction_id),
+        # id -> 문장 변환만 지금 화면의 에피소드로 한다. 전에는 걸러진 목록의
+        # 문장 집합으로 역추론해서, 갤러리 필터가 바뀌면 여기가 조용히
+        # 갈라질 자리였다 (kimi 구조 감사, 2026-09-12).
+        iid = self.win.gallery_ops.selected_instruction_id()
         if iid is not None:
-            shown = getattr(self.win, "_gallery_shown", []) or []
-            if shown:
-                sentences = {e["instruction"] for e in shown}
+            sentences = {e["instruction"]
+                         for e in (getattr(self.win, "_gallery_episodes", []) or [])
+                         if e.get("instruction_id") == iid}
+            if sentences:
                 out = [e for e in out if e.task in sentences]
         return out
 
@@ -392,7 +393,10 @@ class StatsOps:
             "short": lambda e: e.n_frames,
             "long": lambda e: -e.n_frames,
         }.get(key) or (lambda e: _episode_sort_key(e.demo))
-        rows = sorted(self.filtered_stats(), key=score)[:60]
+        # 한 번만 계산해 돌린다 -- 예전에는 이 갱신 한 번에 filtered_stats()
+        # 가 네 번 돌았다 (목록·힌트·scope_label·refresh_dim_dist).
+        eps = self.filtered_stats()
+        rows = sorted(eps, key=score)[:60]
         self.win.rank_tree.clear()
         for e in rows:
             # scene 은 **짧은 이름**으로 적는다: "scene_022" 가 아니라 "S022"
@@ -426,27 +430,26 @@ class StatsOps:
             self.win.rank_tree.addTopLevelItem(item)
         # **무엇의 후보인지**는 상자 제목이 말한다. 회색 설명 줄에 섞어
         # 두었더니 정작 필요한 한 마디(판정선)가 묻혔다 (조작자, 2026-09-12).
-        eps = self.filtered_stats()
         box = getattr(self.win, "filt_box", None)
         if box is not None:
             more = tr(" · 위 {m}개만").format(m=len(rows)) if len(rows) < len(eps) else ""
             box.setTitle(tr("큐레이션 후보 — {s}{m}").format(
-                s=self.scope_label(), m=more))
+                s=self.scope_label(eps), m=more))
         flagged = [e for e in eps if e.flagged]
         band = tr("±{d} 밖 = 급함(빨강 바탕) / 늘어짐(파랑 바탕)").format(d=TASK_DEV_LIMIT)
         self.win.stats_hint.setText(
             tr("{b} — 지금 목록에 {k}개").format(b=band, k=len(flagged))
             if flagged else tr("{b} — 지금 목록에는 없음").format(b=band))
-        self.refresh_dim_dist()
+        self.refresh_dim_dist(eps)
 
-    def scope_label(self) -> str:
+    def scope_label(self, eps=None) -> str:
         """지금 목록이 **무엇의 목록인지** 한 줄로.
 
         왼쪽 패널이 고른 것을 되읽지 않고 **걸러진 결과에서 뽑는다** -- 화면
         두 곳이 각자 "지금 범위"를 계산하면 언젠가 갈라진다. 지시문이 하나로
         좁혀졌으면 그 문장을, 아직 씬만 골랐으면 문장 수를 말한다.
         """
-        eps = self.filtered_stats()
+        eps = self.filtered_stats() if eps is None else eps
         if not eps:
             return tr("빈 목록")
         scenes = {e.scene for e in eps if e.scene}
@@ -460,7 +463,7 @@ class StatsOps:
             what = tr("지시문 {n}개").format(n=len(tasks))
         return f"{where} · {what} · {len(eps)}개"
 
-    def refresh_dim_dist(self) -> None:
+    def refresh_dim_dist(self, eps=None) -> None:
         """차원별 σ(Δa) 분포 -- 모수는 **지금 걸러진 목록**이다.
 
         전체 데이터셋으로 재면 작업이 다른 에피소드의 퍼짐이 섞인다. 큐레이션은
@@ -468,10 +471,11 @@ class StatsOps:
         해야 "이 차원이 이 작업에서 유난히 흔들린다"가 된다. 그래서 목록이
         다시 그려질 때마다 함께 다시 그린다.
         """
+        eps = self.filtered_stats() if eps is None else eps
         box = getattr(self.win, "dim_box", None)
         if box is not None:
-            box.setTitle(tr("차원별 σ(Δa) 분포 — {s}").format(s=self.scope_label()))
-        eps = [e for e in self.filtered_stats() if e.per_dim_sigma is not None]
+            box.setTitle(tr("차원별 σ(Δa) 분포 — {s}").format(s=self.scope_label(eps)))
+        eps = [e for e in eps if e.per_dim_sigma is not None]
         if not eps:
             self.win.dim_bars.set_rows([])
             return

@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mstack.data.episode_label import episode_caption
 from mstack.data.proxy_clip import PROXY_DIR, proxy_path
 
 #: 기본 격자 (열 x 행). 조작자 요구: 최소 10개가 한 눈에 (2026-09-10).
@@ -160,21 +161,10 @@ class _Tile(QFrame):
         self.step()          # 첫 프레임을 바로 보여준다 -- 정지 상태에서도 보인다
 
     def _caption_text(self) -> str:
-        """``I000-E003 ✓ 152f`` -- 갤러리 목록과 같은 표기.
-
-        E번호는 slot 로컬(uid 의 마지막 조각)이다. 프레임 수를 늘 보여주는
-        이유는 큐레이션 대상 셋 중 하나가 "2~3틱만 찍힌 것" 이라서다 --
-        영상으로 찾을 것이 아니라 여기 숫자로 바로 보여야 한다.
-        """
-        ep = self.ep
-        if ep is None:
-            return ""
-        uid = ep.get("episode_uid", "")
-        mark = {"success": "✓", "failed": "✗"}.get(
-            ep.get("quality_status", ""), "·")
-        head = "🗑 " if self.marked else ""
-        return (f"{head}{ep.get('instruction_id', '')}-{uid.rsplit('-', 1)[-1]} "
-                f"{mark} {ep.get('num_samples', 0)}f")
+        """갤러리 목록과 **같은 표기**. 포맷은 한 곳에 있다
+        (mstack.data.episode_label) -- 전에는 여기와 dataset/ops.py 에
+        복사돼 있어서 실제로 갈라졌다 (2026-09-12 감사)."""
+        return "" if self.ep is None else episode_caption(self.ep, self.marked)
 
     def release(self) -> None:
         if self.cap is not None:

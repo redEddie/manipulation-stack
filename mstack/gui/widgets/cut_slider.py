@@ -37,6 +37,8 @@ class CutSlider(QSlider):
             self.update()
 
     def cut(self) -> int | None:
+        """지금 그려진 잘림 지점. 화면 코드는 set_cut 만 쓰고, 이 getter 의
+        유일한 소비자는 계약 테스트다 (test_trim_controls)."""
         return self._cut
 
     def _x_for(self, value: int) -> float:

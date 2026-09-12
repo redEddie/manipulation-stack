@@ -299,6 +299,8 @@ def build_menu(win) -> None:
     m.addSeparator()
     # 낱말은 저장되는 값과 같게 둔다 -- 파일에 적히는 것은 success/failed 다
     # (2026-09-12 에 버튼을 고치면서 메뉴가 "Pass" 로 남아 있었다).
+    # 툴바 버튼과 같은 항목이 여기 또 있는 것은 **의도다** -- build_toolbar 의
+    # "거울" 규칙 참고 (툴바는 현재 화면의 자주 쓰는 것, 메뉴는 전량 색인).
     m.addAction(tr("✓ Success"), win.dataset_ops.on_set_verdict_success)
     m.addAction(tr("✗ Failed"), win.dataset_ops.on_set_verdict_failed)
     m.addAction(tr("선택 재생 (실로봇)"), win.playback_ops.on_replay_selected)

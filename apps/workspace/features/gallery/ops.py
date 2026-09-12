@@ -104,6 +104,18 @@ class GalleryOps:
             return
         self.apply_gallery_filter()
 
+    def selected_instruction_id(self):
+        """지금 고른 지시문 id. "(all instructions)" 이거나 목록이 없으면 None.
+
+        **지시문의 정본은 이 목록 하나**다 (파일의 정본이 selected_file() 인
+        것과 같다). 전에는 Analysis 가 `_gallery_shown` 의 문장 집합으로
+        범위를 역추론했는데, 그러면 갤러리 필터에 조건이 하나라도 늘면
+        Analysis 의 범위가 조용히 갈라진다 (kimi 구조 감사, 2026-09-12).
+        """
+        lst = getattr(self.win, "instruction_list", None)
+        it = lst.currentItem() if lst is not None else None
+        return it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
+
     def apply_gallery_filter(self, *_args) -> None:
         """지시문으로 목록을 줄여 격자에 넘긴다.
 
@@ -111,8 +123,7 @@ class GalleryOps:
         아니라 (씬 → 지시문) 으로 좁혀 12칸에 담기게 만든 뒤, 그 12개를
         나란히 돌려 이상한 것을 고른다.
         """
-        it = self.win.instruction_list.currentItem()
-        want = it.data(0, Qt.ItemDataRole.UserRole) if it else None
+        want = self.selected_instruction_id()
         eps = self.win._gallery_episodes
 
         shown = [e for e in eps

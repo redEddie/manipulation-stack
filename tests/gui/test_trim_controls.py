@@ -142,8 +142,17 @@ def main() -> None:
         assert "#c0392b" in win.trim_views["agent"].styleSheet(), "잘릴 구간인데 테두리가 안 빨갛다"
         ops.trim_seek(0)
         assert "transparent" in win.trim_views["agent"].styleSheet()
-        ops.on_trim_play()                    # 멈춘다
-        print("1. 빨간 잘림선 · 잘림 지점에서 정지 · 빨간 테두리 OK")
+        # 재생의 끝은 **원본 길이**다 (자를 양을 바꿔도 같은 길이로 보인다).
+        ops.trim_seek(N_FRAMES - 3)
+        for _ in range(5):
+            ops.trim_tick()
+        assert win.trim_slider.value() == N_FRAMES - 1, win.trim_slider.value()
+        assert not win.playback.trim_timer.isActive()
+        # 재생바 폭은 불변이다 -- 위치 라벨이 글자 길이로 넓어지면 그 폭을
+        # 슬라이더에서 뺏는다 (2026-09-12 조작자: "길이가 무조건 불변").
+        assert win.trim_pos.minimumWidth() == win.trim_pos.maximumWidth(), (
+            win.trim_pos.minimumWidth(), win.trim_pos.maximumWidth())
+        print("1. 빨간 잘림선 · 잘림 지점에서 정지 · 빨간 테두리 · 고정 폭 재생바 OK")
 
         # ---------------------------------------------- 2. 사라진 문구
         ops.trim_seek(ops.trim_keep() - 1)

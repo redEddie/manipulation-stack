@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -231,12 +232,29 @@ def task_table(stats: list[EpisodeStat]) -> list[dict]:
     return sorted(rows, key=lambda r: -r["travel"])
 
 
+#: 마지막으로 읽은 시계열 한 칸. 한 번의 선택이 이것을 **두 번** 부른다 --
+#: Analysis 가 곡선을, Trim 이 같은 에피소드를 물기 때문이다 (kimi 구조 감사,
+#: 2026-09-12). 파일의 (mtime, 크기) 를 열쇠에 넣어, 트림으로 파일이 바뀌면
+#: 저절로 빗나간다. 한 칸만 두는 이유: 값이 작지만(수십 KB) 여러 칸을 두면
+#: "언제 비우나" 가 새 문제가 되고, 실제 이득은 연달아 같은 것을 읽을 때뿐이다.
+_SERIES_CACHE: dict = {}
+
+
 def load_series(path: str, demo: str) -> dict:
     """The three aligned series the LeRobot viewer plots, per joint.
 
     Returns {"state": (T,8), "commanded": (T,8)|None, "action": (T,8), "n": T}
     with the gripper appended as the 8th column so one loop covers all plots.
+
+    돌려주는 dict 는 **읽기 전용으로 다룬다** -- 캐시에 든 것과 같은 객체다.
     """
+    try:
+        st = os.stat(path)
+        key = (str(path), demo, st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None and key in _SERIES_CACHE:
+        return _SERIES_CACHE[key]
     with h5py.File(path, "r") as f:
         # legacy 는 data/demo_N, scene(scene-v1)은 루트의 episode_NNN --
         # 에피소드 안쪽 페이로드는 동일하다.
@@ -251,8 +269,12 @@ def load_series(path: str, demo: str) -> dict:
                   if OBS_COMMANDED_GRIPPER_STATES in obs
                   else np.zeros((len(state), 1), dtype=np.float32))
             commanded = np.concatenate([obs[OBS_COMMANDED_JOINT_STATES][:], cg], axis=1)
-    return {"state": state, "commanded": commanded, "action": action,
-            "n": int(len(action))}
+    out = {"state": state, "commanded": commanded, "action": action,
+           "n": int(len(action))}
+    if key is not None:
+        _SERIES_CACHE.clear()
+        _SERIES_CACHE[key] = out
+    return out
 
 
 def hdf5_files(data_root) -> list:
