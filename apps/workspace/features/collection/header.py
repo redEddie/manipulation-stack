@@ -93,23 +93,6 @@ def set_header_state(win, state: str) -> None:
     win.hud_state.setText(win.STATE_LABELS.get(state, state))
 
 
-def set_busy(win, text: str = "") -> None:
-    """상단 띠에 "지금 이것을 하고 있다"를 띄운다. ``text`` 가 비면 지운다.
-
-    끝났을 때 지우는 것을 잊으면 화면이 영영 거짓말을 하므로, 부르는 쪽은
-    반드시 ``try/finally`` 나 완료 슬롯에서 빈 문자열로 다시 부른다.
-    """
-    lab = getattr(win, "hud_busy", None)
-    if lab is None:
-        return
-    try:
-        lab.setText(f"⏳ {text}" if text else "")
-        lab.setVisible(bool(text))
-        if text:
-            # 백그라운드 스레드를 띄우기 **전에** 부르는 경우가 많다 --
-            # 이벤트 루프로 돌아가기 전에 한 번 그려야 글자가 보인다.
-            from PyQt6.QtWidgets import QApplication
-
-            QApplication.processEvents()
-    except RuntimeError:
-        pass  # 종료 중 C++ 쪽이 이미 사라졌다
+# set_busy 는 apps/workspace/shared/busy.py 로 옮겼다 (2026-09-12) -- 부르는
+# 쪽이 수집·갤러리·분석 셋이라 한 기능의 파일에 둘 것이 아니었다. 이 머리줄이
+# 만드는 라벨(win.hud_busy)을 그 함수가 찾아 쓴다.

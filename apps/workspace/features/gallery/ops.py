@@ -7,7 +7,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTreeWidgetItem
 
-from apps.workspace.features.collection.header import set_busy
+from apps.workspace.shared.busy import set_busy
 from apps.workspace.shared.tabs import show_center_tab
 from mstack.gui.i18n import tr
 from mstack.gui.workers import GalleryLoadWorker
@@ -250,10 +250,10 @@ class GalleryOps:
         """선택을 ``(파일경로, 에피소드이름)`` 목록으로. 격자 밖(재판정·실로봇
         재생)에서 쓰는 유일한 통로다 -- 선택을 읽는 방법이 여럿이면 격자를
         바꿀 때마다 그 수만큼 고쳐야 한다."""
-        path = self.win.gallery_scene_combo.currentData()
-        if not path:
+        path = self.win.dataset_ops.selected_file()   # 파일의 정본은 저쪽 하나
+        if path is None:
             return []
-        return [(path, e["name"]) for e in (self.win._gallery_selected or [])]
+        return [(str(path), e["name"]) for e in (self.win._gallery_selected or [])]
 
     def go_to_episode(self, path: str, demo: str) -> bool:
         """왼쪽 패널의 (씬 → 지시문) 을 그 에피소드가 보이는 자리로 옮긴다.

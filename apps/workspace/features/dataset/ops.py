@@ -306,20 +306,21 @@ class DatasetOps:
     def on_delete_selected(self) -> None:
         """고른 에피소드를 삭제 목록에 넣는다 (지우지 않는다).
 
-        선택은 공유 선택에서 읽는다 -- 목록 뷰와 격자가 같은 것을 가리키므로
-        어느 쪽에서 골랐든 같다.
+        선택은 **selected_keys() 하나로만** 읽는다 -- 목록 뷰와 격자가 같은
+        것을 가리키므로 어느 쪽에서 골랐든 같고, 통로가 여럿이면 격자를 바꿀
+        때 그 수만큼 고쳐야 한다 (gallery/ops.selected_keys 의 선언).
         """
-        eps = getattr(self.win, "_gallery_selected", []) or []
-        path = self.selected_file()
-        if not eps or path is None:
+        picks = self.win.gallery_ops.selected_keys()
+        if not picks:
             QMessageBox.information(
                 self.win, tr("선택 필요"),
                 tr("삭제 목록에 넣을 에피소드를 선택하세요 (Ctrl/Shift로 여러 개)."))
             return
-        for ep in eps:
-            self.win.basket.add((path, ep["name"]))
+        for key in picks:
+            self.win.basket.add(key)      # CurationBasket._norm 이 경로를 맞춘다
         self.refresh_basket_ui()
         self.win.gallery_grid.refresh_marks()
+
     def refresh_basket_ui(self) -> None:
         """삭제 목록의 개수를 화면에 반영한다.
 
@@ -330,8 +331,9 @@ class DatasetOps:
         if not hasattr(self.win, "basket_label"):
             return
         n = len(self.win.basket)
-        path = self.win.gallery_scene_combo.currentData() if hasattr(
-            self.win, "gallery_scene_combo") else None
+        # 파일은 **selected_file() 하나로만** 읽는다 (이 파일이 스스로 정한
+        # 규칙인데 여기만 콤보를 직접 읽고 있었다 -- kimi 구조 감사 2026-09-12).
+        path = self.selected_file()
         here = self.win.basket.count_for(path) if path else 0
         if not n:
             self.win.basket_label.setText("")

@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from apps.workspace.features.collection.header import set_busy
+from apps.workspace.shared.busy import set_busy
 from mstack.data.episode_stats import (
     TASK_DEV_LIMIT,
     hdf5_files,

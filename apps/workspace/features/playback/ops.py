@@ -51,8 +51,7 @@ class PlaybackOps:
         아무 일도 안 일어나는 것처럼 보였다 (조작자 보고).
         """
         self.sync_trim_to_selection()
-        eps = getattr(self.win, "_gallery_selected", []) or []
-        if len(eps) == 1 and self.win.dataset_ops.selected_file() is not None:
+        if len(self.win.gallery_ops.selected_keys()) == 1:
             show_center_tab(self.win, "trim")
 
     def sync_trim_to_selection(self) -> None:
@@ -62,15 +61,14 @@ class PlaybackOps:
         채로 아무거나 물면 어느 것을 자르는지 알 수 없다. 0개거나 2개 이상이면
         지금 것을 그대로 두고, 화면에 '하나만 고르세요' 를 띄운다.
         """
-        eps = getattr(self.win, "_gallery_selected", []) or []
-        path = self.win.dataset_ops.selected_file()
-        if len(eps) != 1 or path is None:
+        picks = self.win.gallery_ops.selected_keys()
+        if len(picks) != 1:
             warn = getattr(self.win, "trim_warn", None)
             if warn is not None:
                 warn.setText(tr("하나만 고르세요"))
             return
         try:
-            self.show_trim_for(str(path), eps[0]["name"])
+            self.show_trim_for(*picks[0])
         except Exception as e:  # noqa: BLE001 -- 트림 준비 실패가 선택을 죽이면 안 된다
             self.win.log(tr("[트림] 열기 실패: {e}").format(e=e))
 
@@ -391,21 +389,6 @@ class PlaybackOps:
             self.show_trim_for(path, demo)
         show_center_tab(self.win, "trim")
 
-    # --------------------------------------------------------------- gallery
-    def on_gallery_replay(self) -> None:
-        if self.replay_running():      # 토글: 재생 중이면 중단 버튼이다
-            self.on_replay_stop()
-            return
-        # 격자 탭에는 이 버튼이 없다 (Dataset 패널에 있다). 메뉴나 단축키로
-        # 들어올 수 있으므로 선택은 같은 통로에서 읽는다.
-        picks = self.win.gallery_ops.selected_keys()
-        if len(picks) != 1:
-            QMessageBox.information(
-                self.win, tr("선택 필요"),
-                tr("실로봇 재생은 에피소드 하나만 선택하세요."))
-            return
-        self.replay_on_robot(picks[0][0], picks[0][1])
-
     # ---------------------------------------------------------------- replay
     def replay_running(self) -> bool:
         return (self.win.procs.replay_process is not None and
@@ -416,14 +399,13 @@ class PlaybackOps:
         if self.replay_running():
             self.on_replay_stop()
             return
-        eps = getattr(self.win, "_gallery_selected", []) or []
-        path = self.win.dataset_ops.selected_file()
-        if len(eps) != 1 or path is None:
+        picks = self.win.gallery_ops.selected_keys()
+        if len(picks) != 1:
             QMessageBox.information(
                 self.win, tr("선택 필요"),
                 tr("실로봇 재생은 에피소드 하나만 선택하세요."))
             return
-        self.replay_on_robot(str(path), eps[0]["name"])
+        self.replay_on_robot(*picks[0])
     def replay_on_robot(self, path: str, demo: str) -> None:
         """Dataset 트리와 Gallery 가 공유하는 실로봇 재생 진입점.
 

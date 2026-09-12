@@ -77,12 +77,9 @@ class EpisodeStat:
     n_frames: int
     success: bool | None
     mean_da: float          # 평균 관절 속도 (rad/frame) = travel / (프레임수 * 7)
-    p95_da: float
-    max_da: float
     travel: float           # 팔 관절각 총 이동거리 (rad). task마다 다른 게 정상.
     still_frac: float       # 거의 멈춰 있던 프레임 비율 (0~1)
     per_dim_sigma: np.ndarray = field(repr=False, default=None)
-    per_dim_max: np.ndarray = field(repr=False, default=None)
     task_dev: float = 0.0   # 같은 (scene, task) 평균과의 차 (rad/frame). +면 급함, -면 느림
     scene: str = ""         # scene-v1 의 scene_id (legacy 는 빈 문자열)
 
@@ -155,12 +152,9 @@ def scan_dataset(paths) -> list[EpisodeStat]:
                         n_frames=int(a.shape[0]),
                         success=None if success is None else bool(success),
                         mean_da=float(da.mean()),
-                        p95_da=float(np.percentile(da, 95)),
-                        max_da=float(da.max()),
                         travel=float(da.sum()),
                         still_frac=float((vel < STILL_VEL).mean()),
                         per_dim_sigma=da.std(axis=0),
-                        per_dim_max=da.max(axis=0),
                     ))
         except Exception:  # noqa: BLE001
             continue
@@ -187,7 +181,7 @@ def summarize(stats: list[EpisodeStat]) -> dict:
     fact a curator can act on, "JERKY" would not be.
     """
     if not stats:
-        return {"n": 0, "verdict": "에피소드가 없습니다", "n_fast": 0, "n_slow": 0}
+        return {"n": 0, "verdict": "에피소드가 없습니다"}
     means = np.array([s.mean_da for s in stats])
     n_fast = sum(1 for s in stats if s.task_dev > TASK_DEV_LIMIT)
     n_slow = sum(1 for s in stats if s.task_dev < -TASK_DEV_LIMIT)
@@ -200,21 +194,16 @@ def summarize(stats: list[EpisodeStat]) -> dict:
         # 정작 그 버튼을 찾는 데 방해가 된다 (조작자, 2026-09-12).
         verdict = (f"자기 (scene·문장) 그룹 평균에서 {TASK_DEV_LIMIT} 넘게 벗어난 것 {off}개 "
                    f"(급함 {n_fast} / 늘어짐 {n_slow})")
-    per_dim = np.stack([s.per_dim_sigma for s in stats]).mean(axis=0)
+    # 돌려주는 것은 **읽는 곳이 있는 것만**이다. 한때 열넷이었는데 화면이
+    # 바뀌면서 열은 아무도 안 읽게 됐다 (per_dim_sigma 는 DistStrip 이 에피소드
+    # 별 값을 직접 쓰고, frames/tasks/len_* 는 2026-09-12 에 없앤 요약 줄이
+    # 마지막 독자였다). 안 쓰는 값을 돌려주면 다음 사람이 "이건 어디서
+    # 쓰나" 를 매번 다시 확인해야 한다 -- 필요해지면 그때 되살린다.
     return {
         "n": len(stats),
-        "frames": int(sum(s.n_frames for s in stats)),
-        "tasks": len({s.group for s in stats}),   # (scene, 문장) 그룹 수
         "p50": float(np.percentile(means, 50)),
-        "p90": float(np.percentile(means, 90)),
         "p99": float(np.percentile(means, 99)),
         "verdict": verdict,
-        "n_fast": n_fast, "n_slow": n_slow,
-        "per_dim_sigma": per_dim,
-        "len_min": min(s.n_frames for s in stats),
-        "len_max": max(s.n_frames for s in stats),
-        "still_p50": float(np.median([s.still_frac for s in stats])),
-        "travel_p50": float(np.median([s.travel for s in stats])),
     }
 
 
