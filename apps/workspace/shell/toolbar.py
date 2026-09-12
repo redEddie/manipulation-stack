@@ -408,6 +408,15 @@ def build_statusbar(win) -> None:
     # 저장하는 순간 실패하는데 그때는 이미 한 판을 찍은 뒤다. Statistics 의
     # '디스크' 상자에 있던 것을 여기로 옮겼다 (2026-09-06 사용자 요청) --
     # 화면을 옮겨야 보이는 값이라 정작 수집 중에는 아무도 안 봤다.
+    # 긴 작업(재압축·변환·업로드·프록시)이 도는 동안만 보인다. 몇십 분짜리가
+    # 있는데 화면 어디에도 그 사실이 없으면, 멈춘 건지 도는 건지 알 수 없어
+    # 조작자가 창을 닫아 버린다 (2026-09-13 요청).
+    win.sb_job = QLabel("")
+    win.sb_job.setStyleSheet("color:#f1c40f;")
+    win.sb_job.setToolTip(tr("지금 도는 긴 작업 — 도는 동안 데이터셋을 바꾸는 "
+                             "버튼은 잠깁니다"))
+    win.sb_job.setVisible(False)
+    sb.addPermanentWidget(win.sb_job)
     win.sb_disk = QLabel("")
     win.sb_disk.setToolTip(tr("저장 경로의 남은 용량 / 전체 용량"))
     sb.addPermanentWidget(win.sb_disk)

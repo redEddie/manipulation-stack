@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QMessageBox
 from apps.workspace.shared.caches import drop_scene_caches
 from mstack.data.libero_format import hdf5_repack_status, renumber_episodes
 from mstack.gui.i18n import tr
+from apps.workspace.shared.jobs import running_job
 from mstack.gui.text_utils import repo_id_error
 from mstack.scene.scene_format import (
     delete_scene_episodes,
@@ -180,7 +181,7 @@ class DeleteOps:
     def delete_episodes(self, by_file: dict) -> bool:
         """공용 삭제 경로. Dataset 패널과 Analysis 순위표가 같은 것을 쓴다 --
         세션 소유 검사와 실행 중 작업 검사를 두 벌로 두면 반드시 갈라진다."""
-        busy = self.win.dataset_ops.busy_reason()
+        busy = running_job(self.win)
         if busy:
             QMessageBox.warning(self.win, tr("삭제 불가"),
                                 tr("{job}이(가) 진행 중입니다. 끝난 뒤 삭제하세요.").format(job=busy))
@@ -263,7 +264,7 @@ class DeleteOps:
             QMessageBox.warning(self.win, tr("삭제 불가"),
                                 tr("지금 수집 중인 파일입니다. 먼저 세션을 종료하세요."))
             return
-        busy = self.win.dataset_ops.busy_reason()
+        busy = running_job(self.win)
         if busy:
             QMessageBox.warning(self.win, tr("삭제 불가"),
                                 tr("{job}이(가) 진행 중입니다. 끝난 뒤 삭제하세요.").format(job=busy))

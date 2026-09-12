@@ -41,6 +41,37 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\r")
 _PROGRESS_RE = re.compile(r"\d+%\|")
 
 
+#: 진행률을 말하는 세 가지 꼴. 자식 프로세스마다 다르게 찍는다 --
+#: tqdm 은 "45%|", 재압축은 "진행  12.3%", 업로드는 "[3/27]",
+#: 그리고 재압축의 MB 카운터는 "(120/480 MB)".
+_FRAC_RES = (
+    re.compile(r"(\d+(?:\.\d+)?)\s*%"),
+    re.compile(r"[\[(](\d+)\s*/\s*(\d+)"),
+)
+
+
+def parse_progress_fraction(line: str) -> "float | None":
+    """진행률 줄에서 0~1 을 뽑는다. 못 읽으면 None.
+
+    남은 시간을 말하려면 "얼마나 왔나" 가 필요한데, 그것을 아는 것은 자식
+    프로세스뿐이고 그 앎은 stdout 한 줄로만 나온다 (2026-09-13). 꼴이 여럿이라
+    한 곳에서 다 받는다 -- 못 읽으면 None 이고, 그러면 화면은 경과 시간만
+    말한다. **거짓 추정은 하지 않는다.**
+    """
+    m = _FRAC_RES[0].search(line)
+    if m:
+        try:
+            return max(0.0, min(1.0, float(m.group(1)) / 100.0))
+        except ValueError:
+            return None
+    m = _FRAC_RES[1].search(line)
+    if m:
+        done, total = int(m.group(1)), int(m.group(2))
+        if total > 0:
+            return max(0.0, min(1.0, done / total))
+    return None
+
+
 def is_progress_line(line: str) -> bool:
     """tqdm 진행률 줄인가. 로그에 쌓지 않고 한 줄을 갱신하는 데 쓴다."""
     return bool(_PROGRESS_RE.search(line))

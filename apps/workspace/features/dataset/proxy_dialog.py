@@ -15,6 +15,7 @@ scene_021 을 열고 있었다).
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -37,6 +38,7 @@ from mstack.data.proxy_clip import (
     PROXY_DIR,
     scan_file,
 )
+from apps.workspace.shared import jobs
 from mstack.gui.i18n import tr
 from mstack.gui.workers import ProxyBuildWorker
 
@@ -190,12 +192,22 @@ class ProxyBuildDialog(QDialog):
         self.worker.progress.connect(self.on_progress)
         self.worker.file_done.connect(self.on_file_done)
         self.worker.done.connect(self.on_done)
+        self._t0 = time.monotonic()
+        jobs.start_job(self.win, tr("프록시 굽기"))
         self.worker.start()
 
     def on_progress(self, done: int, total: int, label: str) -> None:
         self.bar.setRange(0, max(total, 1))
         self.bar.setValue(done)
-        self.status.setText(f"{done}/{total}  {label}")
+        # 남은 시간은 **실측 속도**로 낸다. 위의 예상치는 상수(_SEC_PER_CLIP)라
+        # 기계와 해상도에 따라 배로 틀리는데, 몇 개만 구우면 이 기계의 진짜
+        # 속도를 알 수 있다 (2026-09-13).
+        left = ""
+        if done >= 3 and total > done:
+            per = (time.monotonic() - self._t0) / done
+            left = tr("  · 남은 약 {m:.0f}분").format(m=per * (total - done) / 60)
+        self.status.setText(f"{done}/{total}  {label}{left}")
+        jobs.job_progress(self.win, done / total if total else None)
 
     def on_file_done(self, r: dict) -> None:
         name = Path(r["path"]).name
@@ -208,6 +220,7 @@ class ProxyBuildDialog(QDialog):
 
     def on_done(self, r: dict) -> None:
         self.worker = None
+        jobs.end_job(self.win)
         self.tree.setEnabled(True)
         self.scale_spin.setEnabled(True)
         self.crf_spin.setEnabled(True)

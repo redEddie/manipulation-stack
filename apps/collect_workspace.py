@@ -84,7 +84,12 @@ from mstack.gui.fonts import ensure_font
 from mstack.gui.wheel_guard import install_wheel_guard  # noqa: E402
 from mstack.gui.widgets import Recents  # noqa: E402
 from mstack.gui.workers import CameraPreviewWorker  # noqa: E402
-from mstack.gui.text_utils import clean_stream_lines, is_progress_line, repo_id_error  # noqa: E402
+from mstack.gui.text_utils import (  # noqa: E402
+    clean_stream_lines,
+    is_progress_line,
+    parse_progress_fraction,
+    repo_id_error,
+)
 from apps.workspace.constants import LOG_DIR  # noqa: E402
 from apps.workspace.features.camera import CameraOps, DepthOps  # noqa: E402
 from apps.workspace.features.collection import CollectionOps  # noqa: E402
@@ -103,6 +108,7 @@ from apps.workspace.models import (  # noqa: E402
     ProcessRegistry,
     SessionState,
 )
+from apps.workspace.shared import jobs  # noqa: E402
 from apps.workspace.shared.progress import log_progress  # noqa: E402
 from apps.workspace.shared.raw_logger_proc import spawn_logger
 from apps.workspace.shared.sizing import GROUP_BOX_QSS  # noqa: E402
@@ -314,6 +320,9 @@ class WorkspaceWindow(QMainWindow):
         # 5초 사이에 눈에 띄게 줄지 않는다.
         self.disk_timer = QTimer(self)
         self.disk_timer.timeout.connect(self.history_ops.refresh_disk)
+        # 긴 작업의 경과·남은 시간도 같은 박자로 갱신한다 (5초면 분 단위
+        # 표시에 충분하고, 잠금은 시작·끝에서 즉시 걸린다).
+        self.disk_timer.timeout.connect(lambda: jobs.refresh(self))
         self.disk_timer.start(5000)
         self.history_ops.refresh_disk()
 
@@ -819,6 +828,9 @@ class WorkspaceWindow(QMainWindow):
         # 진행률은 1초마다 받아 한 줄을 덮어쓴다. 3초로 줄여도 1.3GB 업로드가
         # 몇 분이면 수십 줄이 쌓여, 그 사이 지나간 다른 로그를 밀어낸다.
         for line in clean_stream_lines(data, state, every_s=1.0):
+            # 남은 시간은 자식이 말해 준 만큼만 안다 -- 진행률이 읽히면 쓰고,
+            # 안 읽히면 상태바는 경과 시간만 적는다.
+            jobs.job_progress(self, parse_progress_fraction(line))
             if is_progress_line(line):
                 log_progress(self, f"{prefix} {line}", view)
             else:
@@ -955,6 +967,18 @@ class WorkspaceWindow(QMainWindow):
             self.showMaximized()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        # 닫으면 죽는 것이 있으면 **한 번 묻는다** (조작자 요청 2026-09-13).
+        # 아래 정리 코드는 긴 작업을 terminate 로 죽인다 -- 15분짜리 재압축이
+        # 그렇게 조용히 사라지는 것이 실제로 비쌌다.
+        blockers = jobs.close_blockers(self)
+        if blockers and QMessageBox.question(
+                self, tr("정말 닫을까요?"),
+                tr("지금 {w} 이(가) 진행 중입니다.\n닫으면 중단됩니다.\n\n"
+                   "그래도 닫을까요?").format(w=", ".join(blockers)),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            event.ignore()
+            return
         self.depth_ops.stop_cloud(restore_previews=False)
         self.camera_ops.stop_previews_blocking()
         self.camera_ops.stop_camera_node()

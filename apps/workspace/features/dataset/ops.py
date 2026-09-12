@@ -6,13 +6,14 @@ import json
 from pathlib import Path
 
 import h5py
-from PyQt6.QtCore import QProcess, Qt
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QTreeWidgetItem
 
 from mstack.data.dataset_schema import OBS_AGENTVIEW_RGB, normalize_schema_version
 from mstack.data.episode_label import episode_label, quality_mark
 from mstack.data.libero_format import hdf5_repack_status
 from mstack.gui.i18n import tr
+from apps.workspace.shared.jobs import running_job
 from apps.workspace.features.dataset.right_panel import PHOTO_W
 from apps.workspace.shared.info import scene_fields
 from mstack.gui.widgets.video_view import np_to_pixmap
@@ -153,14 +154,12 @@ class DatasetOps:
         cb = getattr(self.win, "gallery_scene_combo", None)
         p = cb.currentData() if cb is not None else None
         return Path(p) if isinstance(p, str) else None
-    def busy_reason(self) -> str:
-        """Anything that may currently hold an .hdf5 open, by name."""
-        for proc, label in ((self.win.procs.repack_process, tr("재압축")),
-                            (self.win.procs.convert_process, tr("LeRobot 변환")),
-                            (self.win.procs.upload_process, tr("HDF5 업로드"))):
-            if proc is not None and proc.state() != QProcess.ProcessState.NotRunning:
-                return label
-        return ""
+    # busy_reason 은 apps/workspace/shared/jobs.running_job 으로 옮겼다
+    # (2026-09-13). "지금 무엇이 도는가" 를 잠금·상태바·닫기 확인 셋이 함께
+    # 봐야 하는데, 여기 있으면 데이터셋 화면만 아는 사실이 된다 -- 실제로
+    # 파이프라인(전체 처리)과 프록시 굽기를 세지 않아, 그동안 판정·삭제
+    # 버튼이 살아 있었다.
+
     def on_dataset_selection(self) -> None:
         """목록 뷰에서 골랐다 -- 공유 선택으로 올린다 (격자도 같이 표시된다)."""
         self.win.gallery_ops.set_selection(self.selected_episodes(), source="tree")
@@ -216,7 +215,7 @@ class DatasetOps:
         maintains. States other than success/failed (bad_data etc.)
         are left untouched.
         """
-        busy = self.busy_reason()
+        busy = running_job(self.win)
         if busy:
             QMessageBox.warning(self.win, tr("판정 불가"),
                                 tr("{job}이(가) 진행 중입니다.").format(job=busy))
@@ -292,7 +291,7 @@ class DatasetOps:
                 self.win, tr("파일 없음"),
                 tr("{r} 에 .hdf5 가 없습니다.").format(r=self.dataset_root()))
             return
-        ProxyBuildDialog(self.win, paths, self.busy_reason(),
+        ProxyBuildDialog(self.win, paths, running_job(self.win),
                          self.win.gallery_ops.proxy_dir()).exec()
     def update_dataset_panel(self, path: "Path | None" = None) -> None:
         """Fills the right panel's Dataset box.

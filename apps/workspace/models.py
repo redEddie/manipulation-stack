@@ -43,6 +43,17 @@ class ProcessRegistry:
     reset_protection_process: QProcess | None = None
 
     pipeline_proc: QProcess | None = None
+    #: 지금 도는 **긴 작업** 한 건 -- 이름과 시작 시각, 그리고 자식이 말해 준
+    #: 진행률(0~1, 모르면 None). 상태바가 "재압축 3분째 · 남은 약 7분" 을
+    #: 만드는 재료이고, 잠금(shared/jobs.refresh_locks)과 닫기 확인이 같은
+    #: 값을 본다 -- "무엇이 도는가" 의 답이 여럿이면 화면과 잠금이 갈라진다.
+    job_name: str = ""
+    job_t0: float = 0.0
+    job_frac: "float | None" = None
+    #: 잠금이 지금 걸려 있나. 풀 때 **한 번만** 주인들에게 다시 계산시키려고
+    #: 둔다 (매 타이머마다 부르면 조작자가 만지는 중에 버튼이 깜빡인다).
+    job_locked: bool = False
+
     pipeline_steps: list = field(default_factory=list)
     pipeline_results: list = field(default_factory=list)
     pipeline_t0: float = 0.0

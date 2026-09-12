@@ -26,6 +26,7 @@ from mstack.gui.dialogs import (
     hf_account,
 )
 from mstack.gui.text_utils import repo_id_error
+from apps.workspace.shared import jobs
 from mstack.gui.i18n import tr
 
 from apps.workspace.constants import CONVERT_SCRIPT, REPACK_SCRIPT, UPLOAD_SCRIPT
@@ -481,6 +482,9 @@ class UploadOps:
         proc.finished.connect(self.on_pipeline_step_finished)
         self.win.procs.pipeline_proc = proc
         self.win.procs.pipeline_step_t0 = time.monotonic()
+        # 단계마다 새 작업이다 -- 남은 시간은 단계 안에서만 뜻이 있다
+        # (재압축의 진행률로 업로드가 얼마 남았는지는 알 수 없다).
+        jobs.start_job(self.win, tr("전체 처리: {n}").format(n=step["name"]))
         self.win.log(f"\n[전체 처리] ▶ {step['name']} 시작", "upload")
         self.win.statusBar().showMessage(tr("전체 처리: {n}").format(n=step["name"]))
         proc.start()
@@ -500,6 +504,7 @@ class UploadOps:
         self.run_next_pipeline_step()
 
     def finish_pipeline(self, ok: bool) -> None:
+        jobs.end_job(self.win)
         remaining = [s["name"] for s in self.win.procs.pipeline_steps]
         self.win.procs.pipeline_steps = []
         total = time.monotonic() - self.win.procs.pipeline_t0
@@ -552,10 +557,12 @@ class UploadOps:
         proc.readyReadStandardOutput.connect(
             lambda: self.win._pipe(proc, "[재압축]", "upload"))
         proc.finished.connect(lambda c, _s: (self.win.log(f"[재압축] 종료 (exit={c})", "upload"),
+                                             jobs.end_job(self.win),
                                              self.win.dataset_ops.refresh_dataset_tree()))
         self.win.procs.repack_process = proc
         self.win.bottom_tabs.setCurrentWidget(self.win.upload_view)
         self.win.log(f"[재압축] 시작: {len(selected)}개 파일", "upload")
+        jobs.start_job(self.win, tr("재압축 {n}개").format(n=len(selected)))
         proc.start()
 
     def on_lerobot(self) -> None:
@@ -570,12 +577,13 @@ class UploadOps:
         proc.setArguments([CONVERT_SCRIPT, *args])
         proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         proc.readyReadStandardOutput.connect(lambda: self.win._pipe(proc, "[LeRobot]", "upload"))
-        proc.finished.connect(lambda c, _s: self.win.log(
+        proc.finished.connect(lambda c, _s: (self.win.log(
             f"[LeRobot] 종료 (exit={c})" + ("" if c == 0 else " -- 실패, 위 로그를 확인하세요"),
-            "upload"))
+            "upload"), jobs.end_job(self.win)))
         self.win.procs.convert_process = proc
         self.win.bottom_tabs.setCurrentWidget(self.win.upload_view)
         self.win.log(f"[LeRobot] 시작: {' '.join(args)}", "upload")
+        jobs.start_job(self.win, tr("LeRobot 변환"))
         proc.start()
 
     def on_hdf5_upload(self) -> None:
@@ -591,10 +599,11 @@ class UploadOps:
         proc.setArguments([UPLOAD_SCRIPT, *args])
         proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         proc.readyReadStandardOutput.connect(lambda: self.win._pipe(proc, "[HDF5 업로드]", "upload"))
-        proc.finished.connect(lambda c, _s: self.win.log(
+        proc.finished.connect(lambda c, _s: (self.win.log(
             f"[HDF5 업로드] 종료 (exit={c})" + ("" if c == 0 else " -- 실패, 위 로그를 확인하세요"),
-            "upload"))
+            "upload"), jobs.end_job(self.win)))
         self.win.procs.upload_process = proc
         self.win.bottom_tabs.setCurrentWidget(self.win.upload_view)
         self.win.log(f"[HDF5 업로드] 시작: {' '.join(args)}", "upload")
+        jobs.start_job(self.win, tr("HDF5 업로드"))
         proc.start()

@@ -14,6 +14,7 @@ from mstack.data.episode_trim import plan_trim, suggest_trim, trim_tail
 from mstack.gui.constants import PLAYBACK_FPS
 from mstack.gui.workers import EpisodeLoadWorker
 from mstack.gui.i18n import tr
+from apps.workspace.shared.jobs import running_job
 from mstack.gui.widgets.cut_slider import CUT_COLOR
 from mstack.data.libero_format import hdf5_repack_status
 from mstack.data.schema_description import describe_episode
@@ -408,7 +409,7 @@ class TrimOps:
                                 tr("수집 세션 중에는 실로봇 재생을 할 수 "
                                    "없습니다. 먼저 세션을 종료하세요."))
             return
-        busy = self.win.dataset_ops.busy_reason()
+        busy = running_job(self.win)
         if busy:
             QMessageBox.warning(self.win, tr("재생 불가"),
                                 tr("{w} 이(가) 파일을 사용 중입니다. 끝난 뒤 "
