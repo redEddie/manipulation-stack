@@ -139,4 +139,28 @@ up = [s_ for s_ in dlg.steps() if "HDF5" in s_["name"]]
 assert str(a2) in up[0]["args"] and "재압축" in up[0]["detail"]
 print("11. 재압축 대상 합집합 OK")
 
+# ---- 12. 장부 자리는 환경 변수로 옮길 수 있다 ----
+# 이 장부는 **데이터셋과 Hub 사이의 사실**이지 GUI 세션의 것이 아니다.
+# 기본 자리가 state_dir() 아래라, dev 아이콘이 GELLO_STATE_DIR 을 따로 주면
+# 같은 데이터셋·같은 repo 인데도 장부가 비어 보인다 -- 2026-09-13 에 실제로
+# 그랬다 (수집용에 25개 기록이 있는데 dev 화면은 전부 "신규"였다). 그래서
+# 두 아이콘이 MSTACK_HUB_STATE 로 같은 장부를 가리킨다.
+import importlib  # noqa: E402
+
+shared = tmp / "shared_state.json"
+os.environ[hus.STATE_PATH_ENV] = str(shared)
+try:
+    importlib.reload(hus)
+    assert hus.STATE_PATH == shared, hus.STATE_PATH
+    a3 = tmp / "scene_777.hdf5"
+    a3.write_bytes(b"ccc")
+    hus.record_uploaded("org/shared", a3)      # state_path 인자 없이 = 기본 자리
+    assert shared.is_file(), "환경 변수가 가리킨 자리에 안 썼다"
+    assert hus.upload_reason("org/shared", a3) is None
+finally:
+    del os.environ[hus.STATE_PATH_ENV]
+    importlib.reload(hus)
+assert hus.STATE_PATH != shared
+print("12. 장부 자리 환경 변수 덮어쓰기 OK")
+
 print("\n업로드 장부 검증 통과")

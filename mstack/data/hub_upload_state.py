@@ -24,12 +24,28 @@ old_data 이전 같은 경로 변경에도 같은 파일로 인식된다.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
 from mstack.config.paths import state_dir
 
-STATE_PATH = state_dir() / "hub_upload_state.json"
+#: 장부 자리를 바꾸는 환경 변수. 두 체크아웃(main/dev)이 이것을 같은 곳으로
+#: 가리키면 장부를 공유한다 -- ``MSTACK_PROXY_DIR`` 과 같은 규약이다.
+STATE_PATH_ENV = "MSTACK_HUB_STATE"
+
+#: 장부가 놓이는 곳.
+#:
+#: **왜 환경 변수로 덮을 수 있는가.** 이 장부는 *데이터셋 파일과 Hub 사이*의
+#: 사실이지 GUI 세션의 것이 아니다. 그런데 기본값이 ``state_dir()`` 아래라,
+#: dev 아이콘이 ``GELLO_STATE_DIR`` 을 따로 주면 **같은 데이터셋 같은 repo
+#: 인데도** 장부가 비어 보인다 -- 2026-09-13 에 실제로 그랬다: 수집용
+#: 상태폴더에 25개 기록이 있는데 dev 로 띄운 업로드 화면은 전부 "신규 —
+#: 업로드 기록 없음" 이었고, 그대로 눌렀으면 8~18GB 짜리 파일 25개를 다시
+#: 읽어 올릴 뻔했다 (Hub 이 해시로 전송은 건너뛰지만 읽기는 한다).
+#: 프록시 캐시가 같은 이유로 같은 해법을 쓴다 (proxy_clip.PROXY_DIR).
+STATE_PATH = Path(os.environ.get(STATE_PATH_ENV)
+                  or (state_dir() / "hub_upload_state.json"))
 
 
 def _load(state_path: Path | None = None) -> dict:
