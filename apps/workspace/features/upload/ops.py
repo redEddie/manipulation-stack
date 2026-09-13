@@ -14,10 +14,10 @@ from PyQt6.QtCore import QProcess, Qt
 from PyQt6.QtWidgets import QApplication, QCheckBox, QDialog, QMessageBox
 
 from apps.workspace.features.upload.pipeline_dialog import PipelineDialog
-from mstack.scene.dataset_sync import plan_sync
+from mstack.scene.dataset_sync import local_tasks, plan_sync
 from mstack.data.episode_stats import hdf5_files
-from mstack.data.hub_upload_state import changed_files
-from mstack.data.libero_format import hdf5_repack_status
+from apps.workspace.features.upload.hdf5_auto_dialog import Hdf5AutoDialog
+from mstack.data.lerobot_local import local_lerobot_status
 from mstack.gui.dialogs import (
     HdfUploadDialog,
     HfAccountDialog,
@@ -51,6 +51,44 @@ class UploadOps:
             return None
         self.win._recents.add(key, repo)
         return repo
+
+    def refresh_convert_state(self) -> None:
+        """"무엇이 변환됐나" 한 줄 -- 로컬만 본다 (네트워크 없음).
+
+        세는 것 둘: 데이터 경로의 **성공 에피소드**(변환 대상이 되는 것)와
+        로컬 변환 폴더의 `meta/info.json`. 둘을 나란히 놓으면 "아직 안 된 것"
+        이 뺄셈으로 나온다. Hub 과 맞는지는 여기서 말하지 않는다 -- 그것은
+        네트워크가 필요하고, 이어붙이기·전체 처리가 이미 그 일을 한다.
+        """
+        lab = getattr(self.win, "convert_state_label", None)
+        if lab is None:
+            return
+        data_root = self.win.root_edit.text().strip()
+        root = self.win._recents.most_recent(
+            "lerobot_root", str(Path.home() / "lerobot_upload"))
+        st = local_lerobot_status(root)
+        try:
+            tasks = local_tasks(data_root)
+        except Exception as e:  # noqa: BLE001
+            lab.setText(tr("{r} 를 읽지 못했습니다: {e}").format(r=data_root, e=e))
+            return
+        usable = sum(t["episodes"] for t in tasks.values())
+        if not st["exists"]:
+            lab.setText(tr(
+                "아직 변환한 적이 없습니다 ({o} 에 meta/info.json 없음).\n"
+                "데이터셋에는 올릴 수 있는 에피소드가 {u}개 (지시문 {t}개) "
+                "있습니다.").format(o=root, u=usable, t=len(tasks)))
+            return
+        left = usable - st["episodes"]
+        lab.setText(tr(
+            "변환본: 에피소드 {e}개 · 프레임 {f:,}개 · 지시문 {t}개  ({at} 변환)\n"
+            "데이터셋: 성공 에피소드 {u}개 · 지시문 {ut}개\n{diff}\n{o}").format(
+                e=st["episodes"], f=st["frames"], t=st["tasks"], at=st["at"],
+                u=usable, ut=len(tasks), o=root,
+                diff=(tr("→ 아직 변환 안 된 것 {n}개").format(n=left) if left > 0
+                      else tr("→ 변환본이 데이터셋보다 {n}개 많습니다 — 지운 것이 "
+                              "변환본에 남아 있을 수 있습니다").format(n=-left)
+                      if left < 0 else tr("→ 개수가 같습니다"))))
 
     def on_myhdf5(self) -> None:
         webbrowser.open("https://myhdf5.hdfgroup.org/")
@@ -111,59 +149,29 @@ class UploadOps:
         repo = self.check_repo("hdf5_repo_id", tr("HDF5 재압축 + 업로드"))
         if repo is None:
             return
-        todo = [x for x in paths if not hdf5_repack_status(x)["repacked"]]
-        # 업로드 대상은 업로드 장부가 고른다: 지난 업로드 성공 이후 바뀐
-        # 파일 + 기록 없는 파일 + 이번에 재압축될 파일. 예전 "재압축분만"
-        # 방식은 attr 만 고친 파일을 빠뜨렸다 (2026-08-25 교체). 어떤 파일이
-        # 왜 올라가는지 확인창에 그대로 보여준다.
-        sel = {str(x): r for x, r in changed_files(repo, paths)}
-        for x in todo:
-            sel.setdefault(str(x), tr("재압축 — 이번 실행에서 다시 압축됨"))
-        changed = [(str(x), sel[str(x)]) for x in paths if str(x) in sel]
-        listing = "\n".join(f"  · {Path(x).name}: {r}" for x, r in changed) \
-            or "  " + tr("(지난 업로드 이후 바뀐 파일 없음)")
-        box = QMessageBox(QMessageBox.Icon.Question, tr("HDF5 재압축 + 업로드"),
-                          tr("파일 {n}개 중 재압축 필요 {m}개, 업로드 대상 {c}개.\n"
-                             "재압축 후 {r} 에 원본을 업로드합니다.\n\n"
-                             "업로드 대상과 사유:\n{l}\n\n진행할까요?")
-                          .format(n=len(paths), m=len(todo), c=len(changed),
-                                  r=repo, l=listing),
-                          QMessageBox.StandardButton.Yes
-                          | QMessageBox.StandardButton.No, self.win)
-        box.setDefaultButton(QMessageBox.StandardButton.Yes)
-        only_new = QCheckBox(
-            tr("변경된 파일만 자동 선택 ({c}개) — 해제하면 전체 강제 업로드")
-            .format(c=len(changed)))
-        only_new.setChecked(True)
-        box.setCheckBox(only_new)
-        if box.exec() != QMessageBox.StandardButton.Yes:
+        # 고르는 화면은 셋과 같은 표다 (2026-09-13). 예전에는 확인창 하나에
+        # 파일 이름을 글로 늘어놓고 "변경분만 / 전체 강제" 체크박스 하나로
+        # 전부 아니면 전무를 골랐다 -- 가운데가 없었다.
+        dlg = Hdf5AutoDialog(self.win, paths, repo)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             self.win.log("[HDF5 자동] 취소했습니다.", "upload")
             return
+        todo = dlg.repack_paths()
+        picked = dlg.upload_paths()
         steps = []
         if todo:
-            steps.append({"name": tr("재압축"), "program": sys.executable,
-                          "args": [REPACK_SCRIPT, *todo]})
-        if only_new.isChecked():
-            if changed:
-                steps.append({"name": tr("HDF5 원본 업로드 (변경분 {n}개)")
-                              .format(n=len(changed)),
-                              "detail": "; ".join(
-                                  f"{Path(x).name}: {r}" for x, r in changed),
-                              "program": sys.executable,
-                              "args": [UPLOAD_SCRIPT, *[x for x, _ in changed],
-                                       "--repo-id", repo, "--no-private"]})
-            else:
-                steps.append({"name": tr("HDF5 원본 업로드 — 생략"),
-                              "note": tr("지난 업로드 이후 바뀐 파일이 "
-                                         "없습니다 (장부 기준).")})
-        else:
-            steps.append({"name": tr("HDF5 원본 업로드 (전체 강제)"),
+            steps.append({"name": tr("재압축 {n}개").format(n=len(todo)),
                           "program": sys.executable,
-                          "args": [UPLOAD_SCRIPT, *[str(x) for x in paths],
+                          "args": [REPACK_SCRIPT, *todo]})
+        if picked:
+            steps.append({"name": tr("HDF5 원본 업로드 ({n}개)").format(n=len(picked)),
+                          "detail": ", ".join(Path(x).name for x in picked),
+                          "program": sys.executable,
+                          "args": [UPLOAD_SCRIPT, *picked,
                                    "--repo-id", repo, "--no-private"]})
-        if not any("program" in st for st in steps):
-            self.win.log("[HDF5 자동] 할 일이 없습니다 — 재압축 대상도, "
-                     "변경된 파일도 없습니다.", "upload")
+        if not steps:
+            self.win.log("[HDF5 자동] 할 일이 없습니다 — 고른 파일이 없거나 "
+                         "두 동작을 모두 껐습니다.", "upload")
             return
         self.start_pipeline(steps, tr("HDF5 자동"))
 

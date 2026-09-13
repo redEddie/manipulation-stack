@@ -62,6 +62,23 @@ def build_upload(win) -> QWidget:
     col.addWidget(win.repo_warn)
     win._on_repo_edited()
 
+    # 첫 줄은 **무엇이 변환됐나** 다 (조작자, 2026-09-13). 이 화면에 들어와서
+    # 제일 먼저 묻는 것인데, 지금까지 그 답은 Hub 을 찌르는 버튼 안에만 있어
+    # 누르기 전에는 알 수 없었다. 로컬 meta/info.json 만 읽으므로 즉시 뜬다 --
+    # Hub 대조는 여전히 그 버튼들의 일이다.
+    state_box = QGroupBox(tr("변환 현황 (로컬)"))
+    scol = QVBoxLayout(state_box)
+    win.convert_state_label = QLabel(tr("세는 중..."))
+    win.convert_state_label.setWordWrap(True)
+    scol.addWidget(win.convert_state_label)
+    recount = QPushButton(tr("다시 세기"))
+    recount.setToolTip(tr("데이터 경로의 .hdf5 와 로컬 변환 폴더를 다시 셉니다 "
+                          "(네트워크 없음)"))
+    recount.clicked.connect(win.upload.refresh_convert_state)
+    scol.addWidget(recount)
+    col.addWidget(state_box)
+
+    col.addSpacing(10)
     # 세 묶음으로 나눈다. 위에서 아래로 갈수록 범위가 좁아진다 --
     # 전부 / 원본(HDF5)만 / 변환본(LeRobot)만. 묶음마다 첫 줄이 "자동"이고
     # 그 아래가 같은 일을 쪼갠 수동 단계라, 어느 버튼이 어느 버튼을 포함하는지

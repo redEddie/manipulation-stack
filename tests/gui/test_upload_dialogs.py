@@ -47,7 +47,9 @@ from mstack.gui.dialogs.convert import LerobotConvertDialog  # noqa: E402
 from mstack.gui.dialogs.parts import Hdf5FileTable, RepoIdEdit  # noqa: E402
 from mstack.gui.dialogs.repack import RepackDialog  # noqa: E402
 from mstack.gui.dialogs.upload import HdfUploadDialog  # noqa: E402
+from apps.workspace.features.upload.hdf5_auto_dialog import Hdf5AutoDialog  # noqa: E402
 from mstack.data.hub_upload_state import record_uploaded  # noqa: E402
+from mstack.data.lerobot_local import local_lerobot_status  # noqa: E402
 
 REPO = "knu-physical-ai/fr3-tabletop"
 
@@ -181,6 +183,43 @@ def main() -> None:
                                    str(root / "out"), "--push-only", "--no-private"]
         assert not cv.table.isEnabled(), "업로드만 모드인데 파일 표가 살아 있다"
         print("4. argv 그대로 OK (업로드 · 변환 · 업로드만)")
+
+        # ---------------- 5. 재압축+업로드(자동)도 같은 표를 쓴다
+        # 이 버튼만 확인창에 이름을 글로 늘어놓고 "전부 아니면 전무" 였다.
+        auto = Hdf5AutoDialog(None, paths, REPO)
+        assert isinstance(auto.table, Hdf5FileTable)
+        # paths[0] 은 이미 gzip(재압축 완료) + 장부에 올린 기록이 있다
+        # -> 둘 다 해당 없음이라 체크가 빠진다.
+        assert auto.table.checked_paths() == paths[1:], auto.table.checked_paths()
+        assert auto.repack_paths() == paths[1:]
+        assert auto.upload_paths() == paths[1:]
+        # 장부가 조용한 파일도 **직접 체크하면 올라간다** -- 그것이 강제다.
+        auto.table.set_all(True)
+        assert auto.upload_paths() == paths, auto.upload_paths()
+        # 이미 재압축된 것은 강제로도 다시 굽지 않는다 (GB 당 몇 분인데 두
+        # 번째는 얻는 것이 없다).
+        assert auto.repack_paths() == paths[1:], auto.repack_paths()
+        # 동작 스위치는 파일 선택과 따로다
+        auto.repack_check.setChecked(False)
+        assert auto.repack_paths() == [] and len(auto.upload_paths()) == 3
+        auto.upload_check.setChecked(False)
+        assert auto.upload_paths() == []
+        print("5. 재압축+업로드(자동)도 같은 표 · 동작 스위치 OK")
+
+        # ------------------------- 6. "무엇이 변환됐나" 는 로컬만 읽는다
+        empty = local_lerobot_status(str(root / "없는폴더"))
+        assert empty == {"exists": False, "episodes": 0, "frames": 0,
+                         "tasks": 0, "at": "", "error": ""}, empty
+        meta = root / "out" / "meta"
+        meta.mkdir(parents=True, exist_ok=True)
+        (meta / "info.json").write_text(
+            '{"total_episodes": 100, "total_frames": 26063, "total_tasks": 2}',
+            encoding="utf-8")
+        st = local_lerobot_status(str(root / "out"))
+        assert (st["exists"], st["episodes"], st["frames"], st["tasks"]) == \
+            (True, 100, 26063, 2), st
+        assert st["at"], "변환 시각이 비었다"
+        print("6. 변환 현황(로컬 meta/info.json) OK")
 
     print("test_upload_dialogs OK")
 

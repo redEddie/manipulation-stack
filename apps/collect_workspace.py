@@ -625,6 +625,9 @@ class WorkspaceWindow(QMainWindow):
             text, color = hf_account()
             self.hf_label.setText(text)
             self.hf_label.setStyleSheet(f"color:{color}; font-weight:bold;")
+            # "무엇이 변환됐나" 는 이 화면의 첫 질문이다. 로컬 파일만 읽으므로
+            # 들어올 때마다 다시 세도 싸다 (2026-09-13).
+            self.upload.refresh_convert_state()
 
     # -------------------------------------------------------------- utils
     def _view(self, view: str) -> QPlainTextEdit:
