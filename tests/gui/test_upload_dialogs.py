@@ -127,14 +127,38 @@ def main() -> None:
         ident = "knu-physical-ai/fr3-tabletop-lerobot-2026-09"
         fm = box.edit.fontMetrics()
         assert fm.horizontalAdvance(ident) > 240, fm.horizontalAdvance(ident)
-        assert box.edit.height() >= 2 * fm.lineSpacing(), box.edit.height()
+
+        # **접히는 것은 그림일 뿐 값이 아니다.** 좁은 칸에 넣어도 문단은 하나
+        # (줄바꿈 문자가 안 들어간다) 이고 값은 글자 그대로다.
+        from PyQt6.QtWidgets import QVBoxLayout, QWidget
+        host = QWidget()
+        host.resize(240, 120)
+        col = QVBoxLayout(host)
+        narrow = RepoIdEdit([], "")
+        col.addWidget(narrow)
+        host.show()
+        app.processEvents()
+        narrow.set_text(ident)
+        app.processEvents()
+        assert narrow.edit.document().blockCount() == 1, "줄바꿈 문자가 들어갔다"
+        assert "\n" not in narrow.edit.toPlainText()
+        assert narrow.text() == ident, narrow.text()
+        # 그리고 접힌 만큼 칸이 커져서 **다 보인다** (두 줄로 고정해 두었더니
+        # 세 줄짜리의 마지막 줄이 잘렸고, 스크롤 막대도 꺼 둔 터라 잘린 줄이
+        # 있다는 것조차 안 보였다).
+        lines = narrow._lines()
+        assert lines >= 2, lines
+        assert narrow.edit.height() >= lines * fm.lineSpacing(), (
+            lines, narrow.edit.height())
+        host.close()
         # 업로드 페이지(왼쪽 패널)의 칸도 같은 조각이라야 한다 -- 거기가
         # 제일 좁아서 잘림이 제일 잘 보인다.
         page_src = (Path(__file__).resolve().parents[2]
                     / "apps/workspace/features/upload/page.py").read_text(encoding="utf-8")
         assert "RepoIdEdit(" in page_src and "QLineEdit(win._recents_valid_repo" not in page_src
         print("3. Repo ID 줄바꿈 · 공백 제거 OK "
-              f"(id {fm.horizontalAdvance(ident)}px > 패널 240px)")
+              f"(id {fm.horizontalAdvance(ident)}px > 패널 240px · "
+              f"240px 에서 {lines}줄로 접히고 다 보인다)")
 
         # ------------------------------------------------ 4. argv 는 그대로
         up.path_in_repo_edit.setText("")

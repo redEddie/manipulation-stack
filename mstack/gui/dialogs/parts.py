@@ -137,7 +137,11 @@ class RepoIdEdit(QWidget):
     #: 매 키 입력마다 여는 셈이다.
     committed = pyqtSignal(str)
 
+    #: 처음 높이(줄). 내용에 따라 이 아래위로 움직인다.
     LINES = 2
+    #: 여기까지만 늘어나고, 그보다 길면 스크롤을 켠다. 끝없이 늘면 아래
+    #: 항목들이 화면 밖으로 밀린다.
+    MAX_LINES = 4
 
     def __init__(self, recents: list, placeholder: str = "",
                  parent: QWidget | None = None) -> None:
@@ -148,11 +152,14 @@ class RepoIdEdit(QWidget):
         self.edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.edit.setPlaceholderText(placeholder)
         self.edit.setStyleSheet(f"font-family: {MONO_STACK};")
-        fm = self.edit.fontMetrics()
-        h = fm.lineSpacing() * self.LINES + 12
-        self.edit.setFixedHeight(h)
         self.edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # **접힌 만큼 키운다.** 두 줄로 고정해 두었더니 좁은 패널에서 세 줄로
+        # 접히는 id 의 마지막 줄이 잘렸다 -- 스크롤 막대를 꺼 둔 터라 잘린
+        # 것이 보이지도 않았다. "한눈에 보이도록" 이 이 칸의 존재 이유다.
+        self.edit.textChanged.connect(self._fit_height)
+        self.edit.resizeEvent = self._resized
+        self._fit_height()
         self.edit.focusOutEvent = self._focus_out
         row.addWidget(self.edit, 1)
         self._recents = list(recents)
@@ -160,6 +167,34 @@ class RepoIdEdit(QWidget):
         self.recent_btn.setEnabled(bool(self._recents))
         self.recent_btn.clicked.connect(self._show_recents)
         row.addWidget(self.recent_btn)
+
+    def _resized(self, event) -> None:
+        QPlainTextEdit.resizeEvent(self.edit, event)
+        self._fit_height()          # 패널 폭이 바뀌면 접히는 줄 수도 바뀐다
+
+    def _lines(self) -> int:
+        """지금 **화면에 그려지는** 줄 수. 문단 수가 아니다 -- 줄바꿈 문자가
+        없어도 폭이 모자라면 여러 줄로 그려진다."""
+        doc = self.edit.document()
+        n = 0
+        block = doc.firstBlock()
+        while block.isValid():
+            layout = block.layout()
+            n += max(1, layout.lineCount() if layout is not None else 1)
+            block = block.next()
+        return max(1, n)
+
+    def _fit_height(self) -> None:
+        try:
+            fm = self.edit.fontMetrics()
+            lines = self._lines()
+        except RuntimeError:        # 창이 닫히는 중
+            return
+        shown = min(self.MAX_LINES, lines)
+        self.edit.setFixedHeight(fm.lineSpacing() * shown + 12)
+        self.edit.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if lines > self.MAX_LINES
+            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
     def _focus_out(self, event) -> None:
         QPlainTextEdit.focusOutEvent(self.edit, event)
