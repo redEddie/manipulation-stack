@@ -11,6 +11,7 @@
 로봇도 카메라도 필요 없다 (offscreen). 창 전체 대신 test_ui_surface 와 같은
 방식으로 빌더가 요구하는 것만 흉내 내는 스텁에 붙여 만든다.
 """
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -122,6 +123,23 @@ assert [r for r, _v in runs(back)] == ["r2", "r1"], "최근 실행이 앞에 와
 
 short = SessionRecord(saved=3, seconds=MIN_RATE_SECONDS - 1)
 assert short.per_minute == 0.0, "1분도 안 되는 세션의 분당 환산은 속도가 아니다"
+
+# 이력 자리는 환경 변수로 옮길 수 있다. 이 이력은 *사람이 언제 몇 개를
+# 찍었나* 이지 GUI 세션의 것이 아니라서, dev 아이콘처럼 GELLO_STATE_DIR 을
+# 따로 쓰는 실행도 같은 이력을 봐야 한다 -- 안 그러면 수집자 순위표가 통째로
+# 빈다 (2026-09-13 에 실제로 그랬다: 65세션이 다른 파일에 있었다).
+from mstack.data.collection_history import (  # noqa: E402
+    HISTORY_PATH_ENV,
+    history_path,
+)
+
+moved = Path(tempfile.mkdtemp()) / "shared.jsonl"
+os.environ[HISTORY_PATH_ENV] = str(moved)
+try:
+    assert history_path() == moved, history_path()
+finally:
+    del os.environ[HISTORY_PATH_ENV]
+assert history_path() != moved
 
 # 깨진 줄이 나머지 이력을 잃게 하지 않는다
 with open(tmp, "a", encoding="utf-8") as f:

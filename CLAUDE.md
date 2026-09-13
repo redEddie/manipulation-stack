@@ -127,13 +127,16 @@ Two things that look like safety layers and are not:
   The dev icon sets `GELLO_STATE_DIR=~/libero_gui_logs_dev` so its logs,
   settings and 1 kHz raw windows stay out of the collection ones (a shared raw
   log dir means one session's rolling windows evict the other's — that
-  destroyed evidence on 2026-09-10). **Two caches are deliberately shared back**
-  via env overrides in that same icon: `MSTACK_PROXY_DIR` (proxy clips) and
-  `MSTACK_HUB_STATE` (the Hub upload ledger). Both are facts about the dataset,
-  not about a GUI session — split them and dev re-encodes clips main already
-  baked (2026-09-11) and reports already-uploaded files as "신규", offering to
-  re-upload 25 files of 8–18 GB (2026-09-13). Anything else state-dir-scoped
-  that describes the *dataset* belongs on that list too. **The dataset root is a setting, not an
+  destroyed evidence on 2026-09-10). **Three stores are deliberately shared back**
+  via env overrides in that same icon: `MSTACK_PROXY_DIR` (proxy clips),
+  `MSTACK_HUB_STATE` (the Hub upload ledger) and `MSTACK_HISTORY` (the
+  collection-session history). None of them is a fact about a GUI session —
+  they describe the dataset, the Hub, and the people collecting. Split them and
+  dev re-encodes clips main already baked (2026-09-11), reports already-uploaded
+  files as "신규" and offers to re-upload 25 files of 8–18 GB (2026-09-13), and
+  shows an empty collector leaderboard while 65 sessions sit in the other file
+  (2026-09-13). Anything else state-dir-scoped that describes the *dataset, the
+  Hub, or the operators* belongs on that list too. **The dataset root is a setting, not an
   env var**, so a fresh dev state dir still defaults to the real
   `~/libero_datasets`; point it elsewhere on the dev GUI's first launch.
   The two cannot run at once: same ZMQ ports, and the FCI accepts one client.

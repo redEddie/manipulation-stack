@@ -31,6 +31,11 @@ from mstack.config.paths import state_dir
 
 HISTORY_FILENAME = "collection_history.jsonl"
 
+#: 이력 파일 자리를 바꾸는 환경 변수. 두 체크아웃(main/dev)이 이것을 같은
+#: 곳으로 가리키면 이력을 공유한다 -- ``MSTACK_PROXY_DIR``(프록시 클립),
+#: ``MSTACK_HUB_STATE``(업로드 장부)와 같은 규약이다.
+HISTORY_PATH_ENV = "MSTACK_HISTORY"
+
 #: 분당 속도를 의미 있게 계산할 수 있는 최소 세션 길이. 30초짜리 세션에서
 #: 한 개를 찍으면 "분당 2개"가 되는데, 그건 속도가 아니라 반올림 오차다
 #: (episode_stats 의 30초 문턱과 같은 이유).
@@ -38,7 +43,18 @@ MIN_RATE_SECONDS = 60.0
 
 
 def history_path() -> Path:
-    return state_dir() / HISTORY_FILENAME
+    """이력 파일. 환경 변수가 있으면 그 자리.
+
+    **왜 덮어쓸 수 있어야 하는가.** 이 이력은 *사람이 언제 몇 개를 찍었나*
+    이지 GUI 세션의 것이 아니다. 기본 자리가 ``state_dir()`` 아래라, dev
+    아이콘이 ``GELLO_STATE_DIR`` 을 따로 주면 수집자 순위표가 통째로 빈다 --
+    2026-09-13 에 실제로 그랬다 (수집용에 65세션이 있는데 dev 화면은 빈
+    표였다). 프록시 캐시·업로드 장부가 같은 이유로 같은 해법을 쓴다.
+
+    상수가 아니라 함수인 채로 둔다 -- 테스트가 ``GELLO_STATE_DIR`` 을
+    바꿔 끼우면 그 자리에서 따라와야 한다 (임포트 시점에 굳으면 안 된다).
+    """
+    return Path(os.environ.get(HISTORY_PATH_ENV) or (state_dir() / HISTORY_FILENAME))
 
 
 @dataclass
