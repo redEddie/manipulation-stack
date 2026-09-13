@@ -27,6 +27,7 @@ from mstack.data.hub_upload_state import changed_files
 from mstack.data.libero_format import hdf5_repack_status
 from mstack.gui.dialogs import HfAccountDialog, hf_account
 from mstack.gui.widgets import Recents
+from mstack.gui.dialogs.parts import RepoIdEdit
 from mstack.gui.i18n import tr
 
 
@@ -183,11 +184,16 @@ class PipelineDialog(QDialog):
         layout.addWidget(opts)
 
         grid = QGridLayout()
+        # Repo ID 칸은 **줄바꿈된다** -- 한 줄짜리 칸은 긴 id 의 앞뒤가 잘려
+        # 어디로 올리는지가 안 보인다 (다른 두 대화상자와 같은 조각,
+        # mstack/gui/dialogs/parts.RepoIdEdit, 2026-09-13).
         grid.addWidget(QLabel(tr("LeRobot Repo ID:")), 0, 0)
-        self.lerobot_repo_edit = QLineEdit(lerobot_repo)
+        self.lerobot_repo_edit = RepoIdEdit(self._recents.get("repo_id"))
+        self.lerobot_repo_edit.set_text(lerobot_repo)
         grid.addWidget(self.lerobot_repo_edit, 0, 1)
         grid.addWidget(QLabel(tr("HDF5 Repo ID:")), 1, 0)
-        self.hdf5_repo_edit = QLineEdit(hdf5_repo)
+        self.hdf5_repo_edit = RepoIdEdit(self._recents.get("hdf5_repo_id"))
+        self.hdf5_repo_edit.set_text(hdf5_repo)
         grid.addWidget(self.hdf5_repo_edit, 1, 1)
         grid.addWidget(QLabel(tr("로컬 변환 폴더:")), 2, 0)
         self.root_edit = QLineEdit(lerobot_root)
@@ -263,8 +269,8 @@ class PipelineDialog(QDialog):
     def steps(self) -> list:
         """The ordered subprocess steps this run will execute."""
         rebuild = self.mode_rebuild.isChecked()
-        lerobot_repo = self.lerobot_repo_edit.text().strip()
-        hdf5_repo = self.hdf5_repo_edit.text().strip()
+        lerobot_repo = self.lerobot_repo_edit.text()
+        hdf5_repo = self.hdf5_repo_edit.text()
         root = self.root_edit.text().strip()
         paths = self.plan["paths"]
         self._recents.add("repo_id", lerobot_repo)

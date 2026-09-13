@@ -39,7 +39,7 @@ class UploadOps:
         self.win = win
 
     def repo_id_for(self, key: str) -> str:
-        return self.win.repo_edits[key].text().strip()
+        return self.win.repo_edits[key].text()
 
     def check_repo(self, key: str, what: str) -> "str | None":
         """Returns the id, or None after telling the operator what is wrong."""
@@ -431,7 +431,7 @@ class UploadOps:
                                     tr("{w} Repo ID: {e}").format(w=what, e=err))
                 self.win.log(f"[전체 처리] 중단 — {what} Repo ID: {err}", "upload")
                 return
-            self.win.repo_edits[key].setText(edit.text().strip())
+            self.win.repo_edits[key].set_text(edit.text())
         steps = dlg.steps()
         if not steps:
             self.win.log("[전체 처리] 할 일이 없습니다.", "upload")

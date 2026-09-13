@@ -5,7 +5,6 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -19,7 +18,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mstack.data.hub_upload_state import upload_reason
+from mstack.data.libero_format import hdf5_repack_status
 from mstack.gui.dialogs.hf_account import HfAccountDialog, hf_account
+from mstack.gui.dialogs.parts import Hdf5FileTable, RepoIdEdit
 from mstack.gui.widgets import Recents
 from mstack.gui.fonts import MONO_STACK
 from mstack.gui.i18n import tr
@@ -48,20 +50,26 @@ class HdfUploadDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(tr("HDF5 원본 업로드"))
         self._start_dir = start_dir
-        default_file = ""
         layout = QVBoxLayout(self)
 
-        layout.addWidget(QLabel(tr("업로드할 .hdf5 파일 (여러 개 선택 가능, 이미 큐레이션 끝난 파일):")))
-        file_row = QHBoxLayout()
-        self.file_edit = QLineEdit(default_file)
-        self.file_edit.textChanged.connect(lambda: self._on_files_changed())
-        file_row.addWidget(self.file_edit, 1)
-        browse_btn = QPushButton(tr("찾아보기..."))
-        browse_btn.clicked.connect(self._browse_file)
-        file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
-
+        # 파일은 **재압축과 같은 표**로 고른다 (2026-09-13). 예전에는 경로를
+        # 공백으로 이어 붙인 한 줄 입력칸이라, 무엇이 골라졌는지도 그 파일이
+        # 올릴 만한 것인지도 화면에 없었다.
+        layout.addWidget(QLabel(tr(
+            "업로드할 .hdf5 파일을 선택하세요. **업로드 장부에 견주어** 올릴 "
+            "필요가 있는 것만 미리 체크됩니다.")))
         self._recents = Recents()
+        self.table = Hdf5FileTable([tr("에피소드"), tr("업로드 상태")])
+        layout.addWidget(self.table)
+        self._fill_table(start_dir)
+
+        browse_row = QHBoxLayout()
+        browse_row.addStretch()
+        browse_btn = QPushButton(tr("다른 폴더에서 추가..."))
+        browse_btn.setToolTip(tr("목록에 없는 .hdf5 를 더한다 (체크된 채로 들어온다)"))
+        browse_btn.clicked.connect(self._browse_file)
+        browse_row.addWidget(browse_btn)
+        layout.addLayout(browse_row)
 
         grid = QGridLayout()
         # Each row shows a filled-in example next to the field. Parts that must
@@ -71,21 +79,22 @@ class HdfUploadDialog(QDialog):
         ex.setStyleSheet(f"color: #888; font-family: {MONO_STACK};")
         grid.addWidget(QLabel(tr("Repo ID:")), 0, 0)
         grid.addWidget(ex, 0, 3)
-        self.repo_id_edit = QComboBox()
-        self.repo_id_edit.setEditable(True)
-        self.repo_id_edit.addItems(self._recents.get("hdf5_repo_id"))
-        self.repo_id_edit.setCurrentText(self._recents.most_recent("hdf5_repo_id"))
-        self.repo_id_edit.lineEdit().setPlaceholderText(
-            tr("<org>/<dataset-name> 형식")
-        )
-        grid.addWidget(self.repo_id_edit, 0, 1)
+        # 줄바꿈되는 칸이다 -- 한 줄짜리 입력칸은 긴 id 의 앞뒤가 잘려서
+        # 어디로 올리는지를 한눈에 못 본다 (조작자, 2026-09-13).
+        self.repo_id_edit = RepoIdEdit(self._recents.get("hdf5_repo_id"),
+                                       tr("<org>/<dataset-name> 형식"))
+        self.repo_id_edit.set_text(self._recents.most_recent("hdf5_repo_id"))
+        # 값이 **정해졌을 때만** 다시 훑는다 (칸을 떠나거나 최근에서 고를 때).
+        # 글자마다 훑으면 파일 27개를 키 입력마다 연다.
+        self.repo_id_edit.committed.connect(self._refresh_upload_status)
+        grid.addWidget(self.repo_id_edit, 0, 1, 1, 2)
 
         ex_name = QLabel(tr("예)  ****_demo.hdf5"))
         ex_name.setStyleSheet(f"color: #888; font-family: {MONO_STACK};")
         self.path_in_repo_label = QLabel(tr("Repo 안 파일 이름:"))
         grid.addWidget(self.path_in_repo_label, 1, 0)
         grid.addWidget(ex_name, 1, 2)
-        self.path_in_repo_edit = QLineEdit(Path(default_file).name if default_file else "")
+        self.path_in_repo_edit = QLineEdit()
         self.path_in_repo_edit.setPlaceholderText(
             tr("비워두면 로컬 파일 이름 그대로")
         )
@@ -133,6 +142,7 @@ class HdfUploadDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.table.tree.itemChanged.connect(lambda *_: self._on_files_changed())
         self._on_files_changed()
 
 
@@ -147,14 +157,73 @@ class HdfUploadDialog(QDialog):
         self.old_path_label.setEnabled(on)
         self.old_path_in_repo_edit.setEnabled(on)
 
+    def _fill_table(self, start_dir: str) -> None:
+        """데이터 경로의 .hdf5 를 훑어 표를 채운다.
+
+        미리 체크되는 것은 **업로드 장부가 올릴 필요가 있다고 말하는 것**뿐이다
+        (신규이거나 지난 업로드 뒤에 바뀐 것). 재압축 대화상자가
+        hdf5_repack_status 로 같은 일을 한다 -- 조작자가 "무엇을 이미 했더라"
+        를 기억할 필요가 없어야 한다.
+        """
+        root = Path(start_dir) if start_dir else None
+        if root is None or not root.is_dir():
+            return
+        repo_id = ""
+        try:
+            repo_id = self._recents.most_recent("hdf5_repo_id")
+        except Exception:  # noqa: BLE001
+            pass
+        for path in sorted(root.glob("*.hdf5")):
+            self._add_path(path, repo_id)
+        self._status_repo = repo_id
+        self.table.fit_columns()
+
+    def _add_path(self, path, repo_id: str, force_check: bool = False) -> None:
+        st = hdf5_repack_status(str(path))
+        reason = ""
+        try:
+            reason = upload_reason(repo_id, Path(path)) or "" if repo_id else ""
+        except Exception:  # noqa: BLE001 -- 장부를 못 읽는 것이 선택을 막지 않는다
+            reason = ""
+        if not repo_id:
+            status = tr("Repo ID 를 넣으면 업로드 이력을 봅니다")
+        elif reason:
+            status = reason
+        else:
+            status = tr("변경 없음 — 이미 올림")
+        self.table.add_row(
+            path, st["size"], extra=(st["episodes"], status),
+            checked=force_check or bool(reason),
+            disabled=bool(st["error"]))
+
+    def _refresh_upload_status(self, *_args) -> None:
+        """Repo ID 가 바뀌면 '이미 올렸나' 의 답이 통째로 바뀐다.
+
+        **다른 repo 로 바뀐 때만 체크를 다시 정한다.** 같은 repo 로 다시
+        들어온 것(칸을 떠났다 돌아온 것)이라면 조작자가 손으로 고른 것을
+        유지한다 -- 그 손길을 지우면 "왜 내 선택이 사라지나" 가 된다.
+        """
+        repo_id = self.repo_id_edit.text()
+        same_repo = repo_id == getattr(self, "_status_repo", None)
+        checked = set(self.table.checked_paths())
+        paths = [p for p, _it in self.table._rows]
+        self.table.tree.clear()
+        self.table._rows = []
+        for p in paths:
+            self._add_path(Path(p), repo_id, force_check=same_repo and p in checked)
+        self._status_repo = repo_id
+        self.table.fit_columns()
+        self._on_files_changed()
+
     def _browse_file(self) -> None:
-        first = self.file_edit.text().split()[0] if self.file_edit.text().strip() else ""
-        start = str(Path(first).parent) if first else (self._start_dir or str(Path.home()))
+        start = self._start_dir or str(Path.home())
         paths, _ = QFileDialog.getOpenFileNames(
             self, tr("업로드할 .hdf5 파일 (여러 개 선택 가능)"), start, "HDF5 (*.hdf5)")
-        if not paths:
-            return
-        self.file_edit.setText(" ".join(paths))
+        repo_id = self.repo_id_edit.text()
+        for p in paths:
+            if not self.table.has(p):
+                self._add_path(Path(p), repo_id, force_check=True)
+        self.table.fit_columns()
         self._on_files_changed()
 
     def _on_files_changed(self) -> None:
@@ -164,7 +233,7 @@ class HdfUploadDialog(QDialog):
         one name for many uploads would leave just the last one. Saying so here
         is cheaper than discovering it on the Hub afterwards.
         """
-        files = self.file_edit.text().split()
+        files = self.table.checked_paths()
         multi = len(files) > 1
         if multi:
             self.path_in_repo_label.setText(tr("Repo 안 폴더:"))
@@ -190,11 +259,11 @@ class HdfUploadDialog(QDialog):
     def build_args(self) -> "list[str] | None":
         """Returns the script's argv (sans program name), or None (with a
         warning dialog already shown) if required fields are missing."""
-        files = self.file_edit.text().split()
+        files = self.table.checked_paths()
         if not files:
             QMessageBox.warning(self, tr("파일 필요"), tr(".hdf5 파일을 하나 이상 선택하세요."))
             return None
-        repo_id = self.repo_id_edit.currentText().strip()
+        repo_id = self.repo_id_edit.text()
         err = repo_id_error(repo_id)
         if err:
             QMessageBox.warning(self, tr("Repo ID 오류"), tr(err))

@@ -446,12 +446,14 @@ class WorkspaceWindow(QMainWindow):
         msgs = []
         for key, label in (("repo_id", "LeRobot"), ("hdf5_repo_id", "HDF5")):
             e = self.repo_edits[key]
-            err = repo_id_error(e.text().strip())
+            err = repo_id_error(e.text())
             # 비어 있는 것은 경고하지 않는다 -- 쓰지 않는 저장소일 수 있고,
             # 실제로 필요할 때 각 버튼이 막는다.
-            if err and e.text().strip():
+            if err and e.text():
                 msgs.append(f"{label}: {err}")
-            e.setStyleSheet("" if not err else "border:1px solid #e67e22;")
+            # 테두리는 **안쪽 편집칸**에 그린다 -- 바깥 위젯에 걸면 [최근 ▾]
+            # 버튼까지 주황 테두리가 둘린다.
+            e.edit.setStyleSheet("" if not err else "border:1px solid #e67e22;")
         self.repo_warn.setText("\n".join(msgs))
 
     def _warn_ignored_legacy(self, plan: dict) -> None:

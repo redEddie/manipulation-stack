@@ -3,12 +3,12 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QLabel,
-    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from mstack.gui.dialogs.parts import RepoIdEdit
 from mstack.gui.i18n import tr
 
 
@@ -46,10 +46,13 @@ def build_upload(win) -> QWidget:
         ("hdf5_repo_id", tr("HDF5 repo"),
          tr("원본 .hdf5 가 올라갈 저장소. 변환본과 별개입니다.")),
     ):
-        e = QLineEdit(win._recents_valid_repo(key))
-        e.setPlaceholderText(tr("<조직 또는 사용자>/<이름>"))
+        # 줄바꿈되는 칸이다 (대화상자 셋과 같은 조각). 이 패널은 좁아서
+        # 한 줄짜리 칸에서는 `knu-physical-ai/fr3-...` 의 뒤가 잘렸다 --
+        # 정작 어디로 올리는지가 안 보였다 (조작자, 2026-09-13).
+        e = RepoIdEdit([], tr("<조직 또는 사용자>/<이름>"))
+        e.set_text(win._recents_valid_repo(key))
         e.setToolTip(tip)
-        e.textChanged.connect(win._on_repo_edited)
+        e.edit.textChanged.connect(win._on_repo_edited)
         win.repo_edits[key] = e
         form.addRow(QLabel(label), e)
     col.addLayout(form)

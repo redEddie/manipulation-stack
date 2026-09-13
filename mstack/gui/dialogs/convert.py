@@ -21,7 +21,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mstack.data.libero_format import hdf5_repack_status
 from mstack.gui.dialogs.hf_account import HfAccountDialog, hf_account
+from mstack.gui.dialogs.parts import Hdf5FileTable, RepoIdEdit
 from mstack.gui.widgets import Recents
 from mstack.gui.fonts import MONO_STACK
 from mstack.gui.i18n import tr
@@ -63,15 +65,23 @@ class LerobotConvertDialog(QDialog):
             b.toggled.connect(self._on_mode_changed)
         layout.addWidget(mode_box)
 
-        layout.addWidget(QLabel(tr("변환할 .hdf5 파일 (여러 개 선택 가능, 이미 큐레이션 끝난 파일):")))
-        file_row = QHBoxLayout()
-        self.files_edit = QLineEdit()
-        self.files_edit.setPlaceholderText(tr("찾아보기로 선택하세요"))
-        file_row.addWidget(self.files_edit, 1)
-        browse_files_btn = QPushButton(tr("찾아보기..."))
+        # 파일은 **재압축·업로드와 같은 표**로 고른다 (2026-09-13). 셋이 하는
+        # 일은 "어느 .hdf5 를 고를 것인가" 로 같은데 화면만 달랐다.
+        self.files_label = QLabel(tr(
+            "변환할 .hdf5 파일 (이미 큐레이션 끝난 파일). 데이터 경로의 것을 "
+            "모두 보여 주고, **전부 체크된 채로** 시작합니다."))
+        self.files_label.setWordWrap(True)
+        layout.addWidget(self.files_label)
+        self.table = Hdf5FileTable([tr("에피소드"), tr("이미지 압축")])
+        layout.addWidget(self.table)
+        self._fill_table(default_root)
+
+        browse_row = QHBoxLayout()
+        browse_row.addStretch()
+        browse_files_btn = QPushButton(tr("다른 폴더에서 추가..."))
         browse_files_btn.clicked.connect(lambda: self._browse_files(default_root))
-        file_row.addWidget(browse_files_btn)
-        layout.addLayout(file_row)
+        browse_row.addWidget(browse_files_btn)
+        layout.addLayout(browse_row)
 
         self._recents = Recents()
 
@@ -86,13 +96,11 @@ class LerobotConvertDialog(QDialog):
         # Editable combo, not a plain edit: the previous repo IDs are right
         # there in the dropdown, so a session that appends to an existing Hub
         # dataset never depends on retyping the ID exactly.
-        self.repo_id_edit = QComboBox()
-        self.repo_id_edit.setEditable(True)
-        self.repo_id_edit.addItems(self._recents.get("repo_id"))
-        self.repo_id_edit.setCurrentText(self._recents.most_recent("repo_id"))
-        self.repo_id_edit.lineEdit().setPlaceholderText(
-            tr("<org>/<dataset-name> 형식")
-        )
+        # 줄바꿈되는 칸 (mstack/gui/dialogs/parts.RepoIdEdit) -- 한 줄짜리
+        # 입력칸은 긴 id 의 앞뒤가 잘려서 어디로 올리는지가 안 보인다.
+        self.repo_id_edit = RepoIdEdit(self._recents.get("repo_id"),
+                                       tr("<org>/<dataset-name> 형식"))
+        self.repo_id_edit.set_text(self._recents.most_recent("repo_id"))
         grid.addWidget(self.repo_id_edit, 0, 1, 1, 2)
 
         ex_root = QLabel(tr("예)  ~/lerobot_upload/****"))
@@ -186,18 +194,44 @@ class LerobotConvertDialog(QDialog):
         self.upload_opts.setVisible(push_only)
         # The .hdf5 picker and FPS belong to conversion; they sit above the
         # mode box (shared layout) so hide-by-disable rather than by removal.
-        for w in (self.files_edit, self.fps_edit):
+        # .hdf5 표와 FPS 는 변환의 것이다. 업로드만 할 때는 끄되 지우지는
+        # 않는다 -- 모드를 되돌렸을 때 고른 것이 남아 있어야 한다.
+        for w in (self.table, self.fps_edit):
             w.setEnabled(not push_only)
+        self.files_label.setEnabled(not push_only)
         if hasattr(self, "_ok_btn"):
             self._ok_btn.setText(tr("업로드 시작") if push_only else tr("변환 시작"))
         self.adjustSize()
+
+    def _fill_table(self, default_root: str) -> None:
+        """데이터 경로의 .hdf5 를 전부 싣고 **전부 체크**한다.
+
+        변환은 파일의 상태와 무관하다 -- 재압축처럼 "이미 했나" 를 파일이
+        말해 주지도 않고(변환 결과는 다른 폴더에 있다), 보통은 데이터셋 전체를
+        한 번에 만든다. 그래서 기본이 전체 선택이고, 빼고 싶은 것만 푼다.
+        """
+        root = Path(default_root) if default_root else None
+        if root is None or not root.is_dir():
+            return
+        for path in sorted(root.glob("*.hdf5")):
+            self._add_path(path, checked=True)
+        self.table.fit_columns()
+
+    def _add_path(self, path, checked: bool = True) -> None:
+        st = hdf5_repack_status(str(path))
+        self.table.add_row(
+            path, st["size"],
+            extra=(st["episodes"], st["compression"] or ("?" if st["error"] else "없음")),
+            checked=checked, disabled=bool(st["error"]))
 
     def _browse_files(self, default_root: str) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self, tr("변환할 .hdf5 파일"), default_root or str(Path.home()), "HDF5 (*.hdf5)"
         )
-        if paths:
-            self.files_edit.setText(" ".join(paths))
+        for p in paths:
+            if not self.table.has(p):
+                self._add_path(Path(p), checked=True)
+        self.table.fit_columns()
 
     def _browse_root(self) -> None:
         d = QFileDialog.getExistingDirectory(
@@ -210,11 +244,11 @@ class LerobotConvertDialog(QDialog):
         """Returns the script's argv (sans program name), or None (with a
         warning dialog already shown) if required fields are missing."""
         push_only = self.mode_push_only.isChecked()
-        paths = self.files_edit.text().split()
+        paths = self.table.checked_paths()
         if not paths and not push_only:
             QMessageBox.warning(self, tr("파일 필요"), tr(".hdf5 파일을 하나 이상 선택하세요."))
             return None
-        repo_id = self.repo_id_edit.currentText().strip()
+        repo_id = self.repo_id_edit.text()
         err = repo_id_error(repo_id)
         if err:
             QMessageBox.warning(self, tr("Repo ID 오류"), tr(err))

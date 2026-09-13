@@ -6,16 +6,13 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QHBoxLayout,
     QLabel,
-    QPushButton,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from mstack.data.libero_format import DEAD_SPACE_RATIO, hdf5_repack_status
+from mstack.gui.dialogs.parts import Hdf5FileTable
 from mstack.gui.i18n import tr
 
 
@@ -37,13 +34,9 @@ class RepackDialog(QDialog):
             "재압축할 파일을 선택하세요. 이미 재압축된 파일은 기본으로 해제되어 있습니다."
         )))
 
-        self.tree = QTreeWidget()
-        self.tree.setColumnCount(5)
-        self.tree.setHeaderLabels([tr("파일"), tr("크기"), tr("에피소드"),
-                                   tr("이미지 압축"), tr("재압축 이력")])
-        self.tree.setRootIsDecorated(False)
-        self.tree.setMinimumSize(880, 240)
-        self._rows = []
+        # 표는 셋이 함께 쓰는 조각이다 (mstack/gui/dialogs/parts.py) -- 업로드와
+        # 변환도 같은 모양이라야 "같은 일" 로 읽힌다 (조작자, 2026-09-13).
+        self.table = Hdf5FileTable([tr("에피소드"), tr("이미지 압축"), tr("재압축 이력")])
         n_todo = 0
         for path in paths:
             st = hdf5_repack_status(path)
@@ -67,41 +60,21 @@ class RepackDialog(QDialog):
                 history = tr("완료 (gzip 감지)")
             else:
                 history = tr("안 됨")
-            item = QTreeWidgetItem([
-                Path(path).name,
-                f"{st['size']/1e6:,.1f} MB",
-                str(st["episodes"]),
-                st["compression"] or ("?" if st["error"] else "없음"),
-                history,
-            ])
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             todo = not st["repacked"] and not st["error"]
-            item.setCheckState(0, Qt.CheckState.Checked if todo else Qt.CheckState.Unchecked)
-            if st["error"]:
-                item.setText(4, st["error"])
-                item.setDisabled(True)
-            elif reasons:
-                for c in range(5):
-                    item.setForeground(c, Qt.GlobalColor.darkYellow)
-            elif st["repacked"]:
-                item.setForeground(0, Qt.GlobalColor.gray)
+            self.table.add_row(
+                path, st["size"],
+                extra=(st["episodes"],
+                       st["compression"] or ("?" if st["error"] else "없음"),
+                       st["error"] or history),
+                checked=todo, disabled=bool(st["error"]),
+                tint=(Qt.GlobalColor.darkYellow if reasons else
+                      Qt.GlobalColor.gray if st["repacked"] else None))
             n_todo += bool(todo)
-            self.tree.addTopLevelItem(item)
-            self._rows.append((path, item))
-        for c in range(5):
-            self.tree.resizeColumnToContents(c)
-        layout.addWidget(self.tree)
-
-        row = QHBoxLayout()
-        all_btn = QPushButton(tr("전체 선택"))
-        all_btn.clicked.connect(lambda: self._set_all(True))
-        none_btn = QPushButton(tr("전체 해제"))
-        none_btn.clicked.connect(lambda: self._set_all(False))
-        row.addWidget(all_btn)
-        row.addWidget(none_btn)
-        row.addStretch()
-        row.addWidget(QLabel(tr("재압축 안 된 파일: {n}개").format(n=n_todo)))
-        layout.addLayout(row)
+        self.table.fit_columns()
+        layout.addWidget(self.table)
+        todo_label = QLabel(tr("재압축 안 된 파일: {n}개").format(n=n_todo))
+        todo_label.setStyleSheet("color:#888;")
+        layout.addWidget(todo_label)
 
         note = QLabel(tr(
             "재압축은 삭제된 에피소드가 차지하던 공간을 회수하고 이미지를 gzip으로 다시 "
@@ -120,13 +93,5 @@ class RepackDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def _set_all(self, on: bool) -> None:
-        for _, item in self._rows:
-            if not item.isDisabled():
-                item.setCheckState(
-                    0, Qt.CheckState.Checked if on else Qt.CheckState.Unchecked
-                )
-
     def selected(self) -> list:
-        return [p for p, it in self._rows
-                if it.checkState(0) == Qt.CheckState.Checked and not it.isDisabled()]
+        return self.table.checked_paths()

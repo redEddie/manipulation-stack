@@ -246,7 +246,7 @@ cw.QMessageBox.warning = staticmethod(_capture_warning)
 cw.QMessageBox.question = staticmethod(_capture_question)
 win.dataset_ops.refresh_dataset_tree = lambda: None
 
-win.repo_edits["repo_id"].setText("test/repo")
+win.repo_edits["repo_id"].set_text("test/repo")
 uid9 = cur[0]["episode_uid"]
 _sync.hub_episode_uids = lambda repo: ({uid9}, "")
 _sync.hub_meta = lambda repo: ({cur[0]["instruction"]: 99}, {}, "")
