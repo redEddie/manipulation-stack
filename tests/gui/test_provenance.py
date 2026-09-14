@@ -180,13 +180,28 @@ with tempfile.TemporaryDirectory() as d:
         _Diag("S003", "knu-1.2.1", "knu-1.2.1"),
         _Diag("S002", "knu-1.2.2", "knu-1.2.2"),
         _Diag("S009", "?", "?", error="없는 파일"),
+        _Diag("S004", "knu-1.2.2", "knu-1.2.1", can_restamp=True),
     ])
-    assert [x[0] for x in up] == ["S003"], up
+    assert [x[0] for x in up] == ["S003", "S004"], up
+    # 어긋난 파일은 건너뛰지 않고 **버전만 내용에 맞춘다** -- 한 줄을 골랐을 때
+    # [버전 맞추기] 가 하는 일과 같아야 한다.
+    assert up[1][2:] == ("knu-1.2.1", "align"), up[1]
+    assert up[0][3] == "fill", up[0]
     assert up[0][2] == "knu-1.2.2", up
     reasons = dict(skip)
     assert "S002" in reasons and "S009" in reasons, reasons
     assert "읽지" in reasons["S009"], reasons["S009"]
-    print("7. 고른 것마다 따로 계산하고, 못 가는 것은 이유와 함께 건너뛴다 OK")
+    # 오른쪽 [버전 맞추기] 는 **선택 전체**로 간다. 예전에는 마지막으로 누른 줄
+    # (_diag) 하나만 바뀌었다 (조작자, 2026-09-14).
+    called = []
+    ops.selected_diags = lambda: [_Diag("S003", "knu-1.2.1", "knu-1.2.1"),
+                                  _Diag("S004", "knu-1.2.2", "knu-1.2.1", can_restamp=True)]
+    ops._align_many = lambda ds: called.append([d.scene_id for d in ds])
+    ops._diag = _Diag("S004", "knu-1.2.2", "knu-1.2.1", can_restamp=True)
+    ops.align_version()
+    assert called == [["S003", "S004"]], called
+    assert not hasattr(ops, "align_selected"), "두 번째 문이 돌아왔다"
+    print("7. 고른 것 전부에 적용 · 어긋난 것은 버전만 맞춤 · 오른쪽 버튼 하나로 OK")
 
     # ---- 8. 판번호는 **수집 세션 없이도** 읽힌다 ----
     # 처음에는 "다른 scene 에 적힌 값" 만 출처로 삼아서, 한 번 수집해야만 옛

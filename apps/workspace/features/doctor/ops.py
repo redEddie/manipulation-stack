@@ -807,8 +807,8 @@ class DoctorOps:
             if not bad else tr(
             "'찍힘' 과 '내용' 이 다른 줄은 검증이 실패합니다. 줄을 눌러 "
             "무엇이 빠졌는지 보세요."))
-        self.refresh_schema_buttons()
         self._show_schema_detail()
+        self.refresh_schema_buttons()
 
     def selected_diags(self) -> list:
         """지금 목록에서 고른 줄들. 아무것도 안 골랐으면 빈 목록."""
@@ -837,9 +837,13 @@ class DoctorOps:
                 skip.append((d.scene_id, tr("읽지 못했습니다")))
                 continue
             if d.can_restamp:
-                # 어긋난 파일의 첫 처방은 사실에 맞추는 것(내리기)이다.
-                skip.append((d.scene_id, tr("찍힘과 내용이 다릅니다 — 먼저 "
-                                            "버전을 내용에 맞추세요")))
+                # 찍힘과 내용이 어긋난 파일은 **버전만 내용에 맞춘다** (값을
+                # 채우지 않는다). 한 줄을 골랐을 때 [버전 맞추기] 가 하는 일과
+                # 같다 -- 여러 줄이라고 동작이 달라지면 안 된다.
+                if d.satisfied:
+                    up.append((d.scene_id, d.stamped or "?", d.satisfied, "align"))
+                else:
+                    skip.append((d.scene_id, tr("내용이 만족하는 버전이 없습니다")))
                 continue
             try:
                 v = reachable_version(self._path(d.scene_id), payload=payload,
@@ -849,7 +853,7 @@ class DoctorOps:
                 continue
             if v and schema_version_key(v) > schema_version_key(
                     d.satisfied or "knu-0.0.0"):
-                up.append((d.scene_id, d.stamped or "?", v))
+                up.append((d.scene_id, d.stamped or "?", v, "fill"))
             else:
                 skip.append((d.scene_id, tr("더 올라갈 곳이 없습니다")))
         return up, skip
@@ -903,8 +907,8 @@ class DoctorOps:
                           w=getattr(self, "_versions_from", "") or tr("알 수 없음"))
         return lines, note
 
-    def align_selected(self) -> None:
-        """**고른 것들**을 한 번에 올린다.
+    def _align_many(self, diags) -> None:
+        """**고른 것들**을 한 번에 맞춘다 (오른쪽 [버전 맞추기] 가 여러 줄일 때).
 
         고르는 것은 사람이고 (목록에서 Ctrl/Shift 로), 시스템은 "같이 올라갈 수
         있는가" 만 본다 (조작자, 2026-09-14). 미리 골라 주지 않는 이유가 그것
@@ -915,48 +919,52 @@ class DoctorOps:
             QMessageBox.information(win, tr("수집 중"),
                                     tr("세션을 끝낸 뒤 고치세요."))
             return
-        diags = self.selected_diags()
-        if not diags:
-            QMessageBox.information(win, tr("선택 필요"), tr(
-                "목록에서 올릴 scene 을 고르세요 (Ctrl/Shift 로 여러 개)."))
-            return
         up, skip = self.upgrade_targets(diags)
         if not up:
             QMessageBox.information(
-                win, tr("올릴 것 없음"),
-                tr("고른 {n}개 중 올릴 수 있는 것이 없습니다.\n\n{why}\n\n"
-                   "판번호(knu-1.x.2)로 올리려면 판번호를 읽을 수 있어야 합니다 — "
-                   "같은 데이터셋의 다른 scene 에 적혀 있거나, 로봇이 켜져 있어 "
-                   "지금 읽을 수 있거나.").format(
+                win, tr("바꿀 것 없음"),
+                tr("고른 {n}개 중 바꿀 수 있는 것이 없습니다.\n\n{why}").format(
                        n=len(diags),
                        why="\n".join(f"  · {sid}: {why}" for sid, why in skip[:10])))
             return
         payload, reset, from_file, versions = self._fill_sources()
-        src, src_note = self._fill_summary(payload, reset, from_file, versions)
-        lines = "\n".join(f"  · {sid}: {a} → {b}" for sid, a, b in up[:30])
+        fills = [x for x in up if x[3] == "fill"]
+        src, src_note = (self._fill_summary(payload, reset, from_file, versions)
+                         if fills else ([], ""))
+        lines = "\n".join(
+            f"  · {sid}: {a} → {b}" + (tr(" (버전만 맞춤)") if kind == "align" else "")
+            for sid, a, b, kind in up[:30])
         more = tr("\n  … 외 {n}개").format(n=len(up) - 30) if len(up) > 30 else ""
         note = ""
         if skip:
             note = tr("\n\n건너뛰는 {n}개:\n{l}").format(
                 n=len(skip),
                 l="\n".join(f"  · {sid}: {why}" for sid, why in skip[:10]))
+        fill_block = ""
+        if fills:
+            fill_block = tr("\n\n채워 넣을 값\n{src}\n{srcnote}").format(
+                src="\n".join(f"  · {x}" for x in src) or tr("  (없음)"),
+                srcnote=f"\n{src_note}" if src_note else "")
         if QMessageBox.question(
-                win, tr("데이터세트 버전 올리기"),
-                tr("고른 {n}개를 올립니다:\n{l}{more}\n\n채워 넣을 값\n{src}\n"
-                   "{srcnote}{note}\n\n되돌릴 수 없습니다. 진행할까요?").format(
+                win, tr("데이터세트 버전 맞추기"),
+                tr("고른 {n}개를 바꿉니다:\n{l}{more}{fill}{note}\n\n"
+                   "진행할까요?").format(
                        n=len(up), l=lines, more=more, note=note,
-                       src="\n".join(f"  · {x}" for x in src) or tr("  (없음)"),
-                       srcnote=f"\n{src_note}\n" if src_note else ""),
+                       fill=fill_block),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         done = failed = 0
         last_why = ""
-        for sid, a, _b in up:
+        for sid, a, b, kind in up:
             try:
-                got = fill_and_raise(self._path(sid), payload=payload,
-                                     reset=reset, versions=versions,
-                                     source=tr("같은 데이터셋의 다른 scene"))
+                if kind == "align":
+                    restamp(self._path(sid), b)
+                    got = b
+                else:
+                    got = fill_and_raise(self._path(sid), payload=payload,
+                                         reset=reset, versions=versions,
+                                         source=getattr(self, "_versions_from", ""))
                 win.log(f"[닥터] {sid} 데이터세트 버전 {a} → {got}")
                 done += 1
             except Exception as e:  # noqa: BLE001
@@ -964,35 +972,37 @@ class DoctorOps:
                 win.log(f"[닥터] {sid} 올리기 실패: {why}")
                 failed += 1
                 last_why = why
-        win.log(f"[닥터] 선택 {len(up)}개 중 {done}개 올렸습니다"
+        win.log(f"[닥터] 선택 {len(up)}개 중 {done}개 바꿨습니다"
                 + (f" · {failed}개 실패" if failed else ""))
         if failed:
             QMessageBox.warning(
                 win, tr("일부 실패"),
-                tr("{n}개를 올리지 못했습니다.\n\n{why}\n\n나머지 {d}개는 "
-                   "올렸습니다. 로그에 파일별로 남았습니다.").format(
+                tr("{n}개를 바꾸지 못했습니다.\n\n{why}\n\n나머지 {d}개는 "
+                   "바꿨습니다. 로그에 파일별로 남았습니다.").format(
                        n=failed, d=done, why=last_why))
         self.refresh_schema()
 
     def refresh_schema_buttons(self) -> None:
-        """선택이 바뀌면 버튼이 **그 선택에 대해** 말한다."""
-        btn = getattr(self.win, "schema_all_btn", None)
-        if btn is None:
-            return
+        """여러 줄을 골랐으면 오른쪽 [버전 맞추기] 가 **그 선택 전체**를 말한다.
+
+        한 줄이면 아무것도 하지 않는다 -- 그때는 _show_schema_detail 이 그 줄에
+        맞춰 라벨을 정한다. 예전에는 여러 줄 처리가 목록 아래 **다른 버튼**에만
+        있어서, 여러 줄을 고르고 오른쪽 버튼을 누르면 마지막으로 누른 줄 하나만
+        바뀌었다 (조작자, 2026-09-14). 같은 일을 하는 문은 하나다.
+        """
+        btn = getattr(self.win, "schema_buttons", {}).get("align_version")
         diags = self.selected_diags()
-        if not diags:
-            btn.setText(tr("선택한 것 버전 올리기"))
-            btn.setEnabled(False)
+        if btn is None or len(diags) <= 1:
             return
         up, _skip = self.upgrade_targets(diags)
-        btn.setText(tr("고른 {n}개 중 {m}개 올리기").format(
-            n=len(diags), m=len(up)) if up
-            else tr("고른 {n}개는 올릴 것이 없음").format(n=len(diags)))
+        btn.setText(tr("고른 {n}개 버전 맞추기").format(n=len(diags)) if up
+                    else tr("고른 {n}개는 바꿀 것 없음").format(n=len(diags)))
         btn.setEnabled(bool(up))
 
     def on_schema_picked(self, item) -> None:
         self._diag = item.data(0, Qt.ItemDataRole.UserRole) if item else None
         self._show_schema_detail()
+        self.refresh_schema_buttons()
 
     def _show_schema_detail(self) -> None:
         win = self.win
@@ -1165,6 +1175,12 @@ class DoctorOps:
         lab.setText("<br>".join(lines))
 
     def align_version(self) -> None:
+        diags = self.selected_diags()
+        if len(diags) > 1:
+            # 여러 줄을 골랐으면 **고른 것 전부**다. 마지막으로 누른 줄(_diag)만
+            # 보면 선택이 무시된다.
+            self._align_many(diags)
+            return
         win = self.win
         d = self._diag
         if d is None:

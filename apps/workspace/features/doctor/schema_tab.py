@@ -16,7 +16,6 @@
 """
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QPushButton,
     QHeaderView,
     QLabel,
     QTreeWidget,
@@ -58,17 +57,9 @@ def build_schema_tab(win) -> QWidget:
         lambda: win.doctor.refresh_schema_buttons())
     col.addWidget(win.schema_tree, 1)
 
-    # 고른 줄들을 한 번에 올린다. 27개를 한 줄씩 누르는 것은 실제로 못 할
-    # 일이고(조작자, 2026-09-14), 무엇을 건드릴지는 **선택이 말해야 한다** --
-    # 시스템이 미리 골라 주면 누르는 사람이 무엇을 바꾸는지 모른다.
-    win.schema_all_btn = QPushButton(tr("선택한 것 버전 올리기"))
-    win.schema_all_btn.setToolTip(tr(
-        "고른 scene 들의 빠진 값을 채우고 각자 닿는 가장 높은 버전으로 "
-        "올립니다. 버전이 섞여 있어도 됩니다 -- 파일마다 따로 계산하고, 못 "
-        "가는 것은 이유와 함께 건너뜁니다. 확인창이 전부 보여줍니다."))
-    win.schema_all_btn.setEnabled(False)
-    win.schema_all_btn.clicked.connect(lambda: win.doctor.align_selected())
-    col.addWidget(win.schema_all_btn)
+    # 여러 줄을 한 번에 바꾸는 것은 오른쪽 [버전 맞추기] 가 한다. 목록 아래에
+    # 따로 두었던 버튼은 뺐다 -- 문이 둘이면 오른쪽 버튼을 누른 사람은 마지막
+    # 줄 하나만 바뀌는 것을 보게 된다 (조작자, 2026-09-14).
 
     win.schema_hint = QLabel("")
     win.schema_hint.setWordWrap(True)
