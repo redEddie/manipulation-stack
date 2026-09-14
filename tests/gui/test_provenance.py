@@ -85,11 +85,12 @@ with tempfile.TemporaryDirectory() as d:
     assert attrs[META_COLLECTOR_COMMIT] == sha
     assert attrs[META_PYLIBFRANKA_VERSION] == "0.21.2"
     assert attrs[META_PROVENANCE_SOURCE] == "live"
-    assert "fr3_system_build" not in attrs, "안 준 값이 적혔다"
+    # 뜻을 모르는 Desk 응답의 나머지 두 줄은 기록하지 않는다 (2026-09-14).
+    assert "fr3_system_build" not in attrs, "뺀 빌드 해시 필드가 돌아왔다"
     assert attrs["dataset_version"] == SCHEMA_VERSION, attrs["dataset_version"]
     back = read_scene_metadata(root / "scene_000.hdf5")
     assert back.collector_commit == sha and back.provenance_source == "live"
-    assert back.fr3_system_build is None
+    assert not hasattr(back, "fr3_system_build")
     print("3. 아는 것만 적고, 읽으면 그대로 돌아온다 OK")
 
     # ---- 4. 판번호를 모르면 그 도장을 안 찍는다 ----
@@ -209,8 +210,8 @@ with tempfile.TemporaryDirectory() as d:
         got = _desk_version("10.0.0.9", 1.0)
     finally:
         prov_mod.urllib.request.urlopen = real
-    assert got == {"fr3_system_version": "5.10.0",
-                   "fr3_system_build": "ec764230 340b9610"}, got
+    # 첫 줄만 -- 뒤의 16진수 두 줄은 뜻이 확인되지 않아 적지 않는다.
+    assert got == {"fr3_system_version": "5.10.0"}, got
     # 로봇이 없으면 그 항목만 빠지고 나머지는 읽는다
     assert _desk_version("", 1.0) == {}
     # 스위치가 켜져 있으면 **아무것도 묻지 않는다** -- 인수 스위트가 실험실

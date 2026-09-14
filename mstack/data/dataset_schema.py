@@ -252,7 +252,6 @@ SCHEMA_FIELDS["knu-1.2.1"] = {
 META_COLLECTOR_COMMIT = "collector_commit"      # 수집기 저장소의 git 커밋
 META_PYLIBFRANKA_VERSION = "pylibfranka_version"  # 예: 0.21.2 (libfranka 0.21)
 META_FR3_SYSTEM_VERSION = "fr3_system_version"  # FR3 시스템 이미지, 예: 5.10.0
-META_FR3_SYSTEM_BUILD = "fr3_system_build"      # 그 이미지의 빌드 해시들
 #: "live" = 수집하면서 적었다 / "backfilled <날짜>" = 나중에 채웠다.
 #: 채워 넣은 값은 **그 시점의 사실이 아닐 수 있다** -- 그것을 구분하지 않으면
 #: 나중에 이 필드 전체를 믿을 수 없게 된다.
@@ -269,8 +268,10 @@ META_PROVENANCE_SOURCE = "provenance_source"
 _PROVENANCE_REQUIRED = (META_PROVENANCE_SOURCE,)
 
 #: 있으면 적는 것들 (검증이 요구하지는 않는다).
+#: (2026-09-14 까지는 Desk 응답의 나머지 두 줄을 fr3_system_build 로 적었다.
+#: 뜻이 확인되지 않은 값이라 뺐다 -- 한 파일에도 적히기 전이었다.)
 _PROVENANCE_OPTIONAL = (META_COLLECTOR_COMMIT, META_PYLIBFRANKA_VERSION,
-                        META_FR3_SYSTEM_VERSION, META_FR3_SYSTEM_BUILD)
+                        META_FR3_SYSTEM_VERSION)
 
 #: 세 갈래 모두에 provenance 를 더한 PATCH 판 (2026-09-13 조작자 결정).
 #: 갈래가 셋인 이유는 지금 데이터셋에 셋이 다 살아 있기 때문이다 --

@@ -552,11 +552,12 @@ class FrankaFR3Robot(Robot):
 
         * ``pylibfranka`` -- 바인딩 버전 (libfranka 버전을 함의한다: 0.21.2 →
           libfranka 0.21). 이 인터프리터에만 있으므로 여기서 읽어야 한다.
-        * ``fr3_system`` / ``fr3_system_build`` -- FR3 시스템 이미지.
+        * ``fr3_system`` -- FR3 시스템 이미지 버전.
           **FCI 로는 못 읽는다** -- libfranka 의 ``Robot::serverVersion()`` 이
           이 pylibfranka 빌드에 노출돼 있지 않다. 대신 로봇의 Desk 가 인증
           없이 답하는 ``GET /admin/api/system-version`` 을 쓴다. 실측 응답
-          (2026-09-13, 172.16.0.2): ``5.10.0`` + 빌드 해시 두 줄.
+          (2026-09-13, 172.16.0.2): 첫 줄이 ``5.10.0`` 이고 뒤에 40자리 16진수
+          두 줄이 오는데, 뜻이 확인되지 않아 적지 않는다.
 
         못 읽은 항목은 **넣지 않는다.** 판번호는 나중에 "그때 뭐였지" 를 푸는
         열쇠인데, 못 읽은 것을 "?" 로 채우면 열쇠가 아니라 소음이 된다.
@@ -594,15 +595,20 @@ class FrankaFR3Robot(Robot):
                 body = r.read().decode("utf-8", "replace")
         except Exception:  # noqa: BLE001 -- 판번호를 못 읽는 것이 수집을 막지 않는다
             return {}
-        # 실측 응답은 따옴표로 감싼 여러 줄이다:
-        #   "5.10.0\nec764230...\n340b9610...\n"
-        parts = [x for x in body.strip().strip('"').split("\n") if x.strip()]
+        # 응답은 **JSON 문자열 하나**다 -- 줄바꿈이 진짜 개행이 아니라 ``\n``
+        # 두 글자다 (실측 2026-09-14). 풀지 않으면 세 줄이 한 덩어리로 붙어
+        # 시스템 버전 자리에 "5.10.0\nec76..." 이 통째로 들어간다.
+        try:
+            text = _json.loads(body)
+            if not isinstance(text, str):
+                text = body
+        except ValueError:
+            text = body
+        parts = [x.strip() for x in text.strip().strip('"').splitlines() if x.strip()]
         if not parts:
             return {}
-        out = {"fr3_system": parts[0].strip()}
-        if len(parts) > 1:
-            out["fr3_system_build"] = " ".join(x.strip() for x in parts[1:])
-        return out
+        # 첫 줄만 적는다. 뒤의 두 줄은 뜻이 확인되지 않은 16진수라 뺀다.
+        return {"fr3_system": parts[0]}
 
     def _read_ft(self, st) -> None:
         """``self._ft`` 를 갱신한다. 호출자가 ``self._lock`` 을 쥐고 있어야 한다."""

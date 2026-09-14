@@ -233,29 +233,33 @@ data", and until now the only answer was someone's memory — while this dataset
 actually spans several control-constant changes (v_max 1.0 → 1.5, the jerk
 clamp, the leader-drop guard).
 
-Two **required** metadata attributes:
+One **required** metadata attribute:
+
+| attr | example | where it comes from |
+|---|---|---|
+| `provenance_source` | `live` / `backfilled 2026-09-14` | who wrote these fields, and when |
+
+Three **optional** ones, written only when they can be read:
 
 | attr | example | where it comes from |
 |---|---|---|
 | `collector_commit` | `b0d4649d469f` (`-dirty` if the tree was modified) | `git rev-parse` in the collector checkout |
-| `provenance_source` | `live` / `backfilled 2026-09-14` | who wrote these fields, and when |
-
-Three **optional** ones, written only when the robot answers:
-
-| attr | example | where it comes from |
-|---|---|---|
 | `pylibfranka_version` | `0.21.2` | `pylibfranka.__version__` on the node |
-| `fr3_system_version` | `5.10.0` | Desk `GET /admin/api/system-version` |
-| `fr3_system_build` | two build hashes | same response, lines 2-3 |
+| `fr3_system_version` | `5.10.0` | first line of Desk `GET /admin/api/system-version` |
 
-The robot-side three are optional on purpose: a simulator session, or one where
+The Desk response carries two more lines of 40-hex digits after the version.
+They are **not recorded**: nothing documents what they identify, and a value
+that may differ under the same `5.10.0` but cannot be explained cannot be
+interpreted either (removed 2026-09-14, before any file carried it).
+
+The robot-side two are optional on purpose: a simulator session, or one where
 the arm is off, must still produce a stamped file. The FCI itself cannot answer
 — libfranka's `Robot::serverVersion()` is not exposed by this pylibfranka build
 — so the system image is read over HTTPS from the robot's own Desk, which
 answers without credentials on this network.
 
-Only `provenance_source` is **required**. The other four are optional for two
-different reasons: the robot-side three cannot be read when the arm is off, and
+Only `provenance_source` is **required**. The other three are optional for two
+different reasons: the robot-side two cannot be read when the arm is off, and
 `collector_commit` cannot be recovered for a file recorded before this version
 existed. Requiring the commit would lock every existing file out of the version
 forever. So the promise the version makes is narrower and keepable: *this file

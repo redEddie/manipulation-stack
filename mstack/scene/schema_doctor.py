@@ -232,19 +232,16 @@ def known_versions(root: Path) -> "dict | None":
             continue
         if not md.pylibfranka_version and not md.fr3_system_version:
             continue
-        key = (md.pylibfranka_version or "", md.fr3_system_version or "",
-               md.fr3_system_build or "")
+        key = (md.pylibfranka_version or "", md.fr3_system_version or "")
         seen[key] = seen.get(key, 0) + 1
     if len(seen) != 1:
         return None
-    (pyl, sys_v, build), _n = next(iter(seen.items()))
+    (pyl, sys_v), _n = next(iter(seen.items()))
     out = {}
     if pyl:
         out["pylibfranka_version"] = pyl
     if sys_v:
         out["fr3_system_version"] = sys_v
-    if build:
-        out["fr3_system_build"] = build
     return out or None
 
 
@@ -256,7 +253,6 @@ def fill_versions(path: Path, values: dict, source: str = "") -> str:
     들어온 값은 수집 시점에 읽은 것이 아니므로 ``backfilled <날짜>`` 다.
     """
     from mstack.data.dataset_schema import (
-        META_FR3_SYSTEM_BUILD,
         META_FR3_SYSTEM_VERSION,
         META_PROVENANCE_SOURCE,
         META_PYLIBFRANKA_VERSION,
@@ -265,8 +261,7 @@ def fill_versions(path: Path, values: dict, source: str = "") -> str:
     import time as _time
 
     key_map = {"pylibfranka_version": META_PYLIBFRANKA_VERSION,
-               "fr3_system_version": META_FR3_SYSTEM_VERSION,
-               "fr3_system_build": META_FR3_SYSTEM_BUILD}
+               "fr3_system_version": META_FR3_SYSTEM_VERSION}
     stamp = f"backfilled {_time.strftime('%Y-%m-%d')}"
     if source:
         stamp += f" ({source})"
@@ -449,7 +444,6 @@ def fill_and_raise(path: Path, *, payload=None, reset=None,
     사실이 파일에 남아야 한다. 이미 ``live`` 로 적힌 파일은 건드리지 않는다.
     """
     from mstack.data.dataset_schema import (
-        META_FR3_SYSTEM_BUILD,
         META_FR3_SYSTEM_VERSION,
         META_PAYLOAD_COM,
         META_PAYLOAD_MASS,
@@ -473,8 +467,7 @@ def fill_and_raise(path: Path, *, payload=None, reset=None,
         live = str(meta.attrs.get(META_PROVENANCE_SOURCE, "")).startswith("live")
         if versions is not None and not live:
             for key, attr in (("pylibfranka_version", META_PYLIBFRANKA_VERSION),
-                              ("fr3_system_version", META_FR3_SYSTEM_VERSION),
-                              ("fr3_system_build", META_FR3_SYSTEM_BUILD)):
+                              ("fr3_system_version", META_FR3_SYSTEM_VERSION)):
                 if versions.get(key):
                     meta.attrs[attr] = str(versions[key])
             stamp = f"backfilled {_time.strftime('%Y-%m-%d')}"

@@ -134,10 +134,10 @@ def _desk_version(ip: str, timeout: float) -> dict:
     parts = [x.strip() for x in text.strip().strip('"').splitlines() if x.strip()]
     if not parts:
         return {}
-    out = {"fr3_system_version": parts[0]}
-    if len(parts) > 1:
-        out["fr3_system_build"] = " ".join(parts[1:])
-    return out
+    # 뒤의 두 줄(40자리 16진수)은 적지 않는다. 무엇을 가리키는지 문서로 확인되지
+    # 않았고, 같은 5.10.0 에서도 달라질 수 있는 값이라 뜻을 모르면 차이가 나도
+    # 해석할 수 없다 (조작자, 2026-09-14).
+    return {"fr3_system_version": parts[0]}
 
 
 def _node_pylibfranka(python_path: str, timeout: float) -> str:

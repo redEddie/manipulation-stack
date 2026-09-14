@@ -82,7 +82,6 @@ import numpy as np
 from mstack.data.dataset_schema import (
     META_PAYLOAD_COM,
     META_COLLECTOR_COMMIT,
-    META_FR3_SYSTEM_BUILD,
     META_FR3_SYSTEM_VERSION,
     META_PAYLOAD_MASS,
     META_PROVENANCE_SOURCE,
@@ -207,7 +206,6 @@ class SceneMetadata:
     collector_commit: Optional[str] = None
     pylibfranka_version: Optional[str] = None
     fr3_system_version: Optional[str] = None
-    fr3_system_build: Optional[str] = None
     #: "live" (수집하며 적음) / "backfilled <날짜>" (나중에 채움).
     provenance_source: Optional[str] = None
 
@@ -296,7 +294,6 @@ def _read_metadata(meta: h5py.Group) -> SceneMetadata:
         collector_commit=_opt_str(meta, META_COLLECTOR_COMMIT),
         pylibfranka_version=_opt_str(meta, META_PYLIBFRANKA_VERSION),
         fr3_system_version=_opt_str(meta, META_FR3_SYSTEM_VERSION),
-        fr3_system_build=_opt_str(meta, META_FR3_SYSTEM_BUILD),
         provenance_source=_opt_str(meta, META_PROVENANCE_SOURCE),
     )
 
@@ -498,7 +495,6 @@ class SceneWriter:
                     (META_COLLECTOR_COMMIT, metadata.collector_commit),
                     (META_PYLIBFRANKA_VERSION, metadata.pylibfranka_version),
                     (META_FR3_SYSTEM_VERSION, metadata.fr3_system_version),
-                    (META_FR3_SYSTEM_BUILD, metadata.fr3_system_build),
                     (META_PROVENANCE_SOURCE, metadata.provenance_source)):
                 if value:
                     self._meta.attrs[attr] = str(value)

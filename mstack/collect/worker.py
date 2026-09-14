@@ -1511,7 +1511,6 @@ class CollectionWorker(QThread):
                     meta.collector_commit = prov.get("collector_commit") or None
                     meta.pylibfranka_version = prov.get("pylibfranka") or None
                     meta.fr3_system_version = prov.get("fr3_system") or None
-                    meta.fr3_system_build = prov.get("fr3_system_build") or None
                     meta.provenance_source = "live" if prov else None
 
                 self._writer = SceneWriter(
