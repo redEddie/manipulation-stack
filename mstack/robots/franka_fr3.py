@@ -581,7 +581,7 @@ class FrankaFR3Robot(Robot):
         짧게 두는 이유: 이 호출은 세션 시작 경로에 있어서, 로봇이 응답하지
         않을 때 수집 시작이 그만큼 늦어진다.
         """
-        import json as _json  # noqa: F401 - 미래의 JSON 응답 대비
+        import json as _json
         import ssl
         import urllib.request
 

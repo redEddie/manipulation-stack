@@ -20,7 +20,10 @@ knu-1.1.0 이 모든 프레임 0 인 힘 필드를 적었다가 그 값을 아�
 
 from __future__ import annotations
 
+import json
+import ssl
 import subprocess
+import urllib.request
 from pathlib import Path
 
 #: 저장소 뿌리 (이 파일 기준 mstack/data/ -> 두 칸 위).
@@ -46,4 +49,90 @@ def collector_commit(repo_root=None, timeout: float = 3.0) -> str:
         dirty = _git("status", "--porcelain")
         return f"{sha}-dirty" if dirty else sha
     except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def robot_versions(timeout: float = 2.0) -> dict:
+    """**지금 이 리그의** 판번호. 로봇 세션도 노드도 필요 없다.
+
+    수집 세션을 거쳐야만 알 수 있는 값이 아니다 -- 둘 다 지금 바로 읽힌다:
+
+    * FR3 시스템 이미지 -- 로봇 Desk 의 ``GET /admin/api/system-version``.
+      HTTPS 한 번이라 GUI 인터프리터가 직접 친다 (FCI 도 pylibfranka 도
+      필요 없다). 로봇이 꺼져 있으면 그 항목이 빠진다.
+    * pylibfranka -- 노드 venv 의 인터프리터에게 물어본다. GUI 쪽
+      (lerobot-venv)에는 그 패키지가 없지만, 어느 파이썬이 노드를 띄우는지는
+      station 설정이 알고 있다 (``node.python``).
+
+    닥터가 옛 파일을 채울 때 쓰는 값이다. **그때 읽은 값이 아니므로**
+    부르는 쪽이 ``backfilled`` 로 표시해야 한다 -- 그 구분은 여기서 하지 않고
+    fill_and_raise 가 한다.
+    """
+    out: dict = {}
+    try:
+        from mstack.config.station import load_station
+
+        cfg = load_station()
+    except Exception:  # noqa: BLE001
+        return out
+    out.update(_desk_version(getattr(cfg.robot, "ip", "") or "", timeout))
+    ver = _node_pylibfranka(cfg.node.python_path, timeout)
+    if ver:
+        out["pylibfranka_version"] = ver
+    return out
+
+
+def _desk_version(ip: str, timeout: float) -> dict:
+    """Desk 가 말하는 시스템 이미지. 못 읽으면 빈 dict.
+
+    자체 서명 인증서라 검증을 끈다 (사설망의 로봇 한 대다). 실측 응답
+    (2026-09-13, 172.16.0.2)::
+
+        "5.10.0\nec764230...\n340b9610...\n"
+    """
+    if not ip:
+        return {}
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(f"https://{ip}/admin/api/system-version",
+                                    timeout=timeout, context=ctx) as r:
+            body = r.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 -- 로봇이 꺼져 있어도 나머지는 읽는다
+        return {}
+    # 응답은 **JSON 문자열 하나**다 -- 줄바꿈이 진짜 개행이 아니라 ``\n``
+    # 두 글자로 들어 있다 (실측 2026-09-14: od 로 확인). json 으로 풀어야
+    # 줄이 나뉜다; 못 풀면 원문 그대로 다룬다.
+    try:
+        text = json.loads(body)
+        if not isinstance(text, str):
+            text = body
+    except ValueError:
+        text = body
+    parts = [x.strip() for x in text.strip().strip('"').splitlines() if x.strip()]
+    if not parts:
+        return {}
+    out = {"fr3_system_version": parts[0]}
+    if len(parts) > 1:
+        out["fr3_system_build"] = " ".join(parts[1:])
+    return out
+
+
+def _node_pylibfranka(python_path: str, timeout: float) -> str:
+    """노드 venv 의 pylibfranka 버전. 못 읽으면 빈 문자열."""
+    if not python_path or not Path(python_path).exists():
+        return ""
+    try:
+        out = subprocess.run(
+            (python_path, "-c",
+             "import pylibfranka,json;print(json.dumps(getattr(pylibfranka,'__version__','')))"),
+            capture_output=True, text=True, timeout=max(timeout, 5.0))
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if out.returncode != 0:
+        return ""
+    try:
+        return str(json.loads(out.stdout.strip()) or "")
+    except ValueError:
         return ""

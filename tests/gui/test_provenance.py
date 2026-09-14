@@ -165,6 +165,7 @@ with tempfile.TemporaryDirectory() as d:
     ops._root = lambda: root
     ops._path = lambda sid: root / f"scene_{int(sid[1:]):03d}.hdf5"
     ops._fill_sources = lambda: (None, None, False, known_versions(root))
+    ops._versions_from = "테스트"
 
     # S002 는 방금 1.2.2 로 올라갔으니 더 갈 곳이 없고, 새로 만든 S003 은 간다.
     md3 = SceneMetadata(
@@ -185,5 +186,34 @@ with tempfile.TemporaryDirectory() as d:
     assert "S002" in reasons and "S009" in reasons, reasons
     assert "읽지" in reasons["S009"], reasons["S009"]
     print("7. 고른 것마다 따로 계산하고, 못 가는 것은 이유와 함께 건너뛴다 OK")
+
+    # ---- 8. 판번호는 **수집 세션 없이도** 읽힌다 ----
+    # 처음에는 "다른 scene 에 적힌 값" 만 출처로 삼아서, 한 번 수집해야만 옛
+    # 파일을 올릴 수 있었다 (조작자 지적, 2026-09-14). 부하 모델 경로를 그대로
+    # 따라한 탓이다 -- 판번호는 리그에 물어보면 그 자리에서 나온다.
+    from mstack.data.provenance import _desk_version, robot_versions  # noqa: E402
+
+    # Desk 응답은 **JSON 문자열 하나**다 (줄바꿈이 진짜 개행이 아니라 \n 두 글자).
+    import mstack.data.provenance as prov_mod  # noqa: E402
+
+    class _Fake:
+        def __init__(self, body): self._b = body.encode()
+        def read(self): return self._b
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    real = prov_mod.urllib.request.urlopen
+    prov_mod.urllib.request.urlopen = lambda *a, **k: _Fake(
+        '"5.10.0\\nec764230\\n340b9610\\n"')
+    try:
+        got = _desk_version("10.0.0.9", 1.0)
+    finally:
+        prov_mod.urllib.request.urlopen = real
+    assert got == {"fr3_system_version": "5.10.0",
+                   "fr3_system_build": "ec764230 340b9610"}, got
+    # 로봇이 없으면 그 항목만 빠지고 나머지는 읽는다
+    assert _desk_version("", 1.0) == {}
+    assert isinstance(robot_versions(timeout=0.2), dict)
+    print("8. 판번호를 리그에서 직접 읽는다 (JSON 문자열 파싱 포함) OK")
 
 print("test_provenance OK")

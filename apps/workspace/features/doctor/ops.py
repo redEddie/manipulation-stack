@@ -35,6 +35,7 @@ from mstack.scene.instruction_grammar import (
 from mstack.scene.props import props_by_id
 from mstack.scene.collection_progress import scan
 from mstack.data.dataset_schema import schema_version_key
+from mstack.data.provenance import robot_versions
 from mstack.scene.schema_doctor import (
     known_versions,
     RESET_TOLERANCE_DEG,
@@ -875,10 +876,9 @@ class DoctorOps:
             QMessageBox.information(
                 win, tr("올릴 것 없음"),
                 tr("고른 {n}개 중 올릴 수 있는 것이 없습니다.\n\n{why}\n\n"
-                   "판번호(knu-1.x.2)로 올리려면 **이 데이터셋에 판번호가 적힌 "
-                   "파일이 하나는 있어야 합니다** — 닥터는 같은 데이터셋의 다른 "
-                   "scene 에 적힌 값을 출처로 쓰기 때문입니다. 새 코드로 한 "
-                   "세션만 찍으면 그 파일이 생깁니다.").format(
+                   "판번호(knu-1.x.2)로 올리려면 판번호를 읽을 수 있어야 합니다 — "
+                   "같은 데이터셋의 다른 scene 에 적혀 있거나, 로봇이 켜져 있어 "
+                   "지금 읽을 수 있거나.").format(
                        n=len(diags),
                        why="\n".join(f"  · {sid}: {why}" for sid, why in skip[:10])))
             return
@@ -890,8 +890,9 @@ class DoctorOps:
             src.append(tr("리셋 자세 {n} ({w})").format(
                 n=reset[0], w=tr("다른 scene") if from_file else tr("station 설정")))
         if versions:
-            src.append(tr("판번호 {v} — backfilled 로 표시").format(
-                v=" · ".join(str(x) for x in versions.values())))
+            src.append(tr("판번호 {v} ({w}) — backfilled 로 표시").format(
+                v=" · ".join(str(x) for x in versions.values()),
+                w=getattr(self, "_versions_from", "")))
         lines = "\n".join(f"  · {sid}: {a} → {b}" for sid, a, b in up[:30])
         more = tr("\n  … 외 {n}개").format(n=len(up) - 30) if len(up) > 30 else ""
         note = ""
@@ -1040,10 +1041,22 @@ class DoctorOps:
         from_file = reset is not None
         if reset is None:
             reset = self._station_reset_pose()
-        # 판번호도 같은 근거로 가져온다 (knu-1.x.2) -- 같은 리그·같은 시기에
-        # 찍힌 파일에 적힌 값이다. 커밋은 가져오지 않는다: 다른 scene 의
-        # 커밋은 그 scene 의 것이지 이 파일의 것이 아니다.
+        # 판번호는 **두 곳**에서 온다. 먼저 같은 데이터셋의 다른 scene (같은
+        # 리그·같은 시기에 찍힌 파일에 적힌 값), 없으면 **지금 리그에서 직접**
+        # 읽는다 -- Desk 의 시스템 판번호와 노드 venv 의 pylibfranka 는 수집
+        # 세션 없이도 그 자리에서 읽힌다 (실측 111ms). 수집을 한 번 해야만
+        # 채울 수 있다고 만들었던 것은 부하 모델 경로를 그대로 따라한 탓이다
+        # (조작자 지적, 2026-09-14: "왜 한 번 수집해야 1.2.2 가 되죠?").
+        #
+        # 어느 쪽이든 **그때 읽은 값이 아니다** -- fill_and_raise 가
+        # backfilled 로 적는다. 커밋은 어느 쪽에서도 가져오지 않는다: 다른
+        # scene 의 커밋은 그 scene 의 것이고, 지금 커밋은 지금의 것이다.
         versions = known_versions(root)
+        ver_from = tr("같은 데이터셋의 다른 scene")
+        if not versions:
+            versions = robot_versions() or None
+            ver_from = tr("지금 리그에서 읽음 (Desk · 노드 venv)")
+        self._versions_from = ver_from
         return payload, reset, from_file, versions
 
     def _reachable(self, d):
@@ -1175,7 +1188,7 @@ class DoctorOps:
             got = fill_and_raise(self._path(d.scene_id),
                                  payload=payload, reset=reset,
                                  versions=versions,
-                                 source=tr("같은 데이터셋의 다른 scene"))
+                                 source=getattr(self, "_versions_from", ""))
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(win, tr("버전 변경 실패"), str(e))
             return
