@@ -806,67 +806,81 @@ class DoctorOps:
             if not bad else tr(
             "'찍힘' 과 '내용' 이 다른 줄은 검증이 실패합니다. 줄을 눌러 "
             "무엇이 빠졌는지 보세요."))
-        # 올릴 수 있는 것이 몇 개인지 버튼이 직접 말한다 -- 눌러 보기 전에
-        # 알 수 있어야 한다.
-        btn = getattr(win, "schema_all_btn", None)
-        if btn is not None:
-            n = len(self.upgradable())
-            btn.setText(tr("올릴 수 있는 {n}개 한 번에 올리기").format(n=n)
-                        if n else tr("한 번에 올릴 것 없음"))
-            btn.setEnabled(bool(n))
+        self.refresh_schema_buttons()
         self._show_schema_detail()
 
-    def upgradable(self) -> list:
-        """지금 **채워서 올릴 수 있는** scene 전부. [(scene_id, 찍힘, 닿는 곳)].
-
-        한 줄씩 눌러 올리기에는 27개가 너무 많다 (조작자, 2026-09-14).
-        버전이 같은지 묻지 않고 **파일마다 닿는 곳을 따로 계산한다** -- 같은
-        데이터셋에 1.0.0 과 1.2.1 이 섞여 있고 둘의 목적지가 다르기 때문이다
-        (1.0.0 은 힘·토크 관측이 없어 1.2.x 로는 못 간다). 섞여 있다고 막으면
-        정작 올릴 수 있는 것들이 함께 막힌다.
-        """
+    def selected_diags(self) -> list:
+        """지금 목록에서 고른 줄들. 아무것도 안 골랐으면 빈 목록."""
+        tree = getattr(self.win, "schema_tree", None)
+        if tree is None:
+            return []
         out = []
-        try:
-            files = iter_scene_files(self._root())
-        except Exception:  # noqa: BLE001
-            return out
+        for it in tree.selectedItems():
+            d = it.data(0, Qt.ItemDataRole.UserRole)
+            if d is not None:
+                out.append(d)
+        return out
+
+    def upgrade_targets(self, diags) -> tuple:
+        """고른 것들이 각자 어디까지 갈 수 있나. ``(올릴 것, 못 올릴 것)``.
+
+        **버전이 같은지 묻지 않는다.** 한 데이터셋에 1.0.0 과 1.2.1 이 섞여
+        있고 둘의 목적지가 다르다 (1.0.0 은 힘·토크 관측이 없어 1.2.x 로는
+        못 간다). 같아야 한다고 막으면 정작 올릴 수 있는 것들이 함께 막힌다 --
+        고른 것마다 따로 계산하고, 못 가는 것은 **이유와 함께** 돌려준다.
+        """
         payload, reset, _from_file, versions = self._fill_sources()
-        for path in files:
+        up, skip = [], []
+        for d in diags:
+            if d.error:
+                skip.append((d.scene_id, tr("읽지 못했습니다")))
+                continue
+            if d.can_restamp:
+                # 어긋난 파일의 첫 처방은 사실에 맞추는 것(내리기)이다.
+                skip.append((d.scene_id, tr("찍힘과 내용이 다릅니다 — 먼저 "
+                                            "버전을 내용에 맞추세요")))
+                continue
             try:
-                d = diagnose(path)
-                if d.error or d.can_restamp:
-                    continue        # 어긋난 파일은 먼저 사실에 맞춘다
-                v = reachable_version(path, payload=payload, reset=reset,
-                                      versions=versions)
-            except Exception:  # noqa: BLE001
+                v = reachable_version(self._path(d.scene_id), payload=payload,
+                                      reset=reset, versions=versions)
+            except Exception as e:  # noqa: BLE001
+                skip.append((d.scene_id, f"{type(e).__name__}: {e}"))
                 continue
             if v and schema_version_key(v) > schema_version_key(
                     d.satisfied or "knu-0.0.0"):
-                out.append((d.scene_id, d.stamped or "?", v))
-        return out
+                up.append((d.scene_id, d.stamped or "?", v))
+            else:
+                skip.append((d.scene_id, tr("더 올라갈 곳이 없습니다")))
+        return up, skip
 
-    def align_all(self) -> None:
-        """올릴 수 있는 것을 **한 번에** 올린다.
+    def align_selected(self) -> None:
+        """**고른 것들**을 한 번에 올린다.
 
-        확인창이 파일별로 어디서 어디로 가는지 전부 보여준다 -- 일괄 조작은
-        무엇이 바뀌는지 안 보이는 것이 가장 위험하고, 여기는 되돌릴 수 없는
-        파일 수정이다.
+        고르는 것은 사람이고 (목록에서 Ctrl/Shift 로), 시스템은 "같이 올라갈 수
+        있는가" 만 본다 (조작자, 2026-09-14). 미리 골라 주지 않는 이유가 그것
+        이다 -- 무엇을 건드릴지는 선택이 말해야 한다.
         """
         win = self.win
         if win.worker is not None:
             QMessageBox.information(win, tr("수집 중"),
                                     tr("세션을 끝낸 뒤 고치세요."))
             return
-        todo = self.upgradable()
-        if not todo:
+        diags = self.selected_diags()
+        if not diags:
+            QMessageBox.information(win, tr("선택 필요"), tr(
+                "목록에서 올릴 scene 을 고르세요 (Ctrl/Shift 로 여러 개)."))
+            return
+        up, skip = self.upgrade_targets(diags)
+        if not up:
             QMessageBox.information(
                 win, tr("올릴 것 없음"),
-                tr("지금 채워서 올릴 수 있는 scene 이 없습니다.\n\n"
+                tr("고른 {n}개 중 올릴 수 있는 것이 없습니다.\n\n{why}\n\n"
                    "판번호(knu-1.x.2)로 올리려면 **이 데이터셋에 판번호가 적힌 "
                    "파일이 하나는 있어야 합니다** — 닥터는 같은 데이터셋의 다른 "
                    "scene 에 적힌 값을 출처로 쓰기 때문입니다. 새 코드로 한 "
-                   "세션만 찍으면 그 파일이 생기고, 그때 나머지를 한 번에 "
-                   "올릴 수 있습니다."))
+                   "세션만 찍으면 그 파일이 생깁니다.").format(
+                       n=len(diags),
+                       why="\n".join(f"  · {sid}: {why}" for sid, why in skip[:10])))
             return
         payload, reset, from_file, versions = self._fill_sources()
         src = []
@@ -878,19 +892,24 @@ class DoctorOps:
         if versions:
             src.append(tr("판번호 {v} — backfilled 로 표시").format(
                 v=" · ".join(str(x) for x in versions.values())))
-        lines = "\n".join(f"  · {sid}: {a} → {b}" for sid, a, b in todo[:30])
-        more = tr("\n  … 외 {n}개").format(n=len(todo) - 30) if len(todo) > 30 else ""
+        lines = "\n".join(f"  · {sid}: {a} → {b}" for sid, a, b in up[:30])
+        more = tr("\n  … 외 {n}개").format(n=len(up) - 30) if len(up) > 30 else ""
+        note = ""
+        if skip:
+            note = tr("\n\n건너뛰는 {n}개:\n{l}").format(
+                n=len(skip),
+                l="\n".join(f"  · {sid}: {why}" for sid, why in skip[:10]))
         if QMessageBox.question(
-                win, tr("데이터세트 버전 일괄 올리기"),
-                tr("{n}개 scene 을 올립니다:\n{l}{more}\n\n채워 넣을 값:\n{src}\n\n"
-                   "되돌릴 수 없습니다. 진행할까요?").format(
-                       n=len(todo), l=lines, more=more,
+                win, tr("데이터세트 버전 올리기"),
+                tr("고른 {n}개를 올립니다:\n{l}{more}\n\n채워 넣을 값:\n{src}{note}"
+                   "\n\n되돌릴 수 없습니다. 진행할까요?").format(
+                       n=len(up), l=lines, more=more, note=note,
                        src="\n".join(f"  · {x}" for x in src) or tr("  (없음)")),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         done = failed = 0
-        for sid, a, _b in todo:
+        for sid, a, _b in up:
             try:
                 got = fill_and_raise(self._path(sid), payload=payload,
                                      reset=reset, versions=versions,
@@ -900,9 +919,25 @@ class DoctorOps:
             except Exception as e:  # noqa: BLE001
                 win.log(f"[닥터] {sid} 올리기 실패: {type(e).__name__}: {e}")
                 failed += 1
-        win.log(f"[닥터] 일괄 버전 올리기: {done}개 성공"
+        win.log(f"[닥터] 선택 {len(up)}개 중 {done}개 올렸습니다"
                 + (f" · {failed}개 실패" if failed else ""))
         self.refresh_schema()
+
+    def refresh_schema_buttons(self) -> None:
+        """선택이 바뀌면 버튼이 **그 선택에 대해** 말한다."""
+        btn = getattr(self.win, "schema_all_btn", None)
+        if btn is None:
+            return
+        diags = self.selected_diags()
+        if not diags:
+            btn.setText(tr("선택한 것 버전 올리기"))
+            btn.setEnabled(False)
+            return
+        up, _skip = self.upgrade_targets(diags)
+        btn.setText(tr("고른 {n}개 중 {m}개 올리기").format(
+            n=len(diags), m=len(up)) if up
+            else tr("고른 {n}개는 올릴 것이 없음").format(n=len(diags)))
+        btn.setEnabled(bool(up))
 
     def on_schema_picked(self, item) -> None:
         self._diag = item.data(0, Qt.ItemDataRole.UserRole) if item else None

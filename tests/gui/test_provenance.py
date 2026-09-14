@@ -148,4 +148,42 @@ with tempfile.TemporaryDirectory() as d:
     assert after.fr3_system_version == "5.10.0", after.fr3_system_version
     print("6. 수집 시점에 적힌 값(live)은 나중 추정으로 안 덮인다 OK")
 
+    # ---- 7. 고른 것만 올라간다 (선택이 정본) ----
+    # 시스템이 미리 골라 주지 않는다 (조작자, 2026-09-14): 무엇을 건드릴지는
+    # 선택이 말하고, 시스템은 "같이 올라갈 수 있는가" 만 본다.
+    class _Diag:
+        def __init__(self, sid, stamped, satisfied, error="", can_restamp=False):
+            self.scene_id, self.stamped, self.satisfied = sid, stamped, satisfied
+            self.error, self.can_restamp = error, can_restamp
+
+    import types  # noqa: E402
+
+    from apps.workspace.features.doctor.ops import DoctorOps  # noqa: E402
+
+    ops = DoctorOps.__new__(DoctorOps)          # 위젯 없이 로직만 쓴다
+    ops.win = types.SimpleNamespace()
+    ops._root = lambda: root
+    ops._path = lambda sid: root / f"scene_{int(sid[1:]):03d}.hdf5"
+    ops._fill_sources = lambda: (None, None, False, known_versions(root))
+
+    # S002 는 방금 1.2.2 로 올라갔으니 더 갈 곳이 없고, 새로 만든 S003 은 간다.
+    md3 = SceneMetadata(
+        scene_id="S003", objects=OBJ, layout=LAYOUT,
+        dataset_version="knu-1.2.1",
+        payload_mass=0.85, payload_com=[0.0, 0.0, 0.03],
+        reset_pose="libero", reset_qpos=[0.0] * 7)
+    SceneWriter(root, metadata=md3, known_prop_ids=active_prop_ids()).close()
+
+    up, skip = ops.upgrade_targets([
+        _Diag("S003", "knu-1.2.1", "knu-1.2.1"),
+        _Diag("S002", "knu-1.2.2", "knu-1.2.2"),
+        _Diag("S009", "?", "?", error="없는 파일"),
+    ])
+    assert [x[0] for x in up] == ["S003"], up
+    assert up[0][2] == "knu-1.2.2", up
+    reasons = dict(skip)
+    assert "S002" in reasons and "S009" in reasons, reasons
+    assert "읽지" in reasons["S009"], reasons["S009"]
+    print("7. 고른 것마다 따로 계산하고, 못 가는 것은 이유와 함께 건너뛴다 OK")
+
 print("test_provenance OK")

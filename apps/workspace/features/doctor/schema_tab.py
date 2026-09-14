@@ -15,6 +15,7 @@
 데이터를 안 읽는다. 그래서 이 화면은 분포를 보여주고 **어긋남만** 고친다.
 """
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QPushButton,
     QHeaderView,
     QLabel,
@@ -47,19 +48,26 @@ def build_schema_tab(win) -> QWidget:
         "버전입니다. 둘이 다르면 검증이 실패합니다.\n"
         "'초기 자세' 는 적힌 리셋 자세와 **실제로 찍힌 첫 프레임**을 맞댄 "
         "것입니다 (±5도).\n줄을 누르면 무엇이 어긋났는지 오른쪽에 나옵니다."))
+    # 여러 줄을 고를 수 있다 (2026-09-14 조작자): 무엇을 올릴지는 **선택**이
+    # 말하고, 시스템은 "같이 올라갈 수 있는가" 만 본다.
+    win.schema_tree.setSelectionMode(
+        QAbstractItemView.SelectionMode.ExtendedSelection)
     win.schema_tree.itemClicked.connect(
         lambda item, _c: win.doctor.on_schema_picked(item))
+    win.schema_tree.itemSelectionChanged.connect(
+        lambda: win.doctor.refresh_schema_buttons())
     col.addWidget(win.schema_tree, 1)
 
-    # 일괄 올리기는 **줄 선택과 무관**하다 -- 27개를 한 줄씩 눌러 올리는 것은
-    # 실제로 못 할 일이다 (조작자, 2026-09-14). 오른쪽 패널의 버튼은 고른
-    # 한 줄에 대한 것이고, 이것은 데이터셋 전체에 대한 것이라 여기 둔다.
-    win.schema_all_btn = QPushButton(tr("올릴 수 있는 것 한 번에 올리기"))
+    # 고른 줄들을 한 번에 올린다. 27개를 한 줄씩 누르는 것은 실제로 못 할
+    # 일이고(조작자, 2026-09-14), 무엇을 건드릴지는 **선택이 말해야 한다** --
+    # 시스템이 미리 골라 주면 누르는 사람이 무엇을 바꾸는지 모른다.
+    win.schema_all_btn = QPushButton(tr("선택한 것 버전 올리기"))
     win.schema_all_btn.setToolTip(tr(
-        "채워서 버전을 올릴 수 있는 scene 을 전부 올립니다. 파일마다 닿는 곳을 "
-        "따로 계산하므로 버전이 섞여 있어도 됩니다. 확인창이 무엇이 어디로 "
-        "가는지 전부 보여줍니다."))
-    win.schema_all_btn.clicked.connect(lambda: win.doctor.align_all())
+        "고른 scene 들의 빠진 값을 채우고 각자 닿는 가장 높은 버전으로 "
+        "올립니다. 버전이 섞여 있어도 됩니다 -- 파일마다 따로 계산하고, 못 "
+        "가는 것은 이유와 함께 건너뜁니다. 확인창이 전부 보여줍니다."))
+    win.schema_all_btn.setEnabled(False)
+    win.schema_all_btn.clicked.connect(lambda: win.doctor.align_selected())
     col.addWidget(win.schema_all_btn)
 
     win.schema_hint = QLabel("")
