@@ -867,9 +867,9 @@ class DoctorOps:
         """
         text = str(e)
         if "errno = 11" in text or "unable to lock file" in text:
-            return tr("그 파일을 다른 프로그램이 열고 있습니다. 수집 세션, "
-                      "다른 GUI 창(dev 아이콘 포함), 또는 이 창의 Curation "
-                      "화면이 잡고 있을 수 있습니다 — 닫고 다시 시도하세요.")
+            # 무엇이 잡고 있는지는 여기서 알 수 없다 -- 후보를 늘어놓으면
+            # 모르는 것을 아는 척하게 된다 (조작자, 2026-09-14).
+            return tr("그 파일을 다른 프로그램이 열고 있습니다.")
         return f"{type(e).__name__}: {e}"
 
     def _fill_summary(self, payload, reset, from_file, versions) -> tuple:
