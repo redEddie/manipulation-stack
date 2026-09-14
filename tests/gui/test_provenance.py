@@ -213,7 +213,10 @@ with tempfile.TemporaryDirectory() as d:
                    "fr3_system_build": "ec764230 340b9610"}, got
     # 로봇이 없으면 그 항목만 빠지고 나머지는 읽는다
     assert _desk_version("", 1.0) == {}
-    assert isinstance(robot_versions(timeout=0.2), dict)
+    # 스위치가 켜져 있으면 **아무것도 묻지 않는다** -- 인수 스위트가 실험실
+    # 로봇의 전원 상태에 따라 달라지면 안 된다.
+    assert os.environ.get(prov_mod.NO_RIG_QUERY_ENV)
+    assert robot_versions(timeout=0.2) == {}, "스위치가 켜졌는데 리그에 물었다"
     print("8. 판번호를 리그에서 직접 읽는다 (JSON 문자열 파싱 포함) OK")
 
 print("test_provenance OK")

@@ -22,6 +22,9 @@ def isolate_state() -> str:
     경로 상수들이 임포트 시점에 state_dir() 로 정해지므로 **임포트보다 먼저**
     불러야 한다. 이미 설정돼 있으면 그대로 둔다 (스위트가 준 것을 덮지 않게).
     """
+    # 실험실 리그에 묻지 않는다. 로봇이 켜졌는지에 따라 결과가 달라지는
+    # 테스트는 테스트가 아니다 (2026-09-14: 닥터 테스트가 실제로 그랬다).
+    os.environ.setdefault("MSTACK_NO_RIG_QUERY", "1")
     cur = os.environ.get("GELLO_STATE_DIR")
     if not cur:
         cur = tempfile.mkdtemp(prefix="gui-test-state-")

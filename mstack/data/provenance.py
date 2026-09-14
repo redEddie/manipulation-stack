@@ -52,6 +52,19 @@ def collector_commit(repo_root=None, timeout: float = 3.0) -> str:
         return ""
 
 
+#: 이 값이 설정돼 있으면 리그에 **아무것도 묻지 않는다** (빈 dict).
+#:
+#: 인수 스위트가 켜 둔다 (tests/gui/helpers.isolate_state). 테스트가 실험실
+#: 로봇의 전원 상태에 따라 결과가 달라지면 그것은 테스트가 아니다 --
+#: 2026-09-14 에 실제로 그랬다: 닥터 테스트가 로봇이 켜져 있다는 이유로
+#: 다른 버전에 닿아 실패했다.
+NO_RIG_QUERY_ENV = "MSTACK_NO_RIG_QUERY"
+
+#: 한 프로세스에서 한 번만 묻는다. 화면이 갱신될 때마다(선택이 바뀔 때마다)
+#: HTTPS 를 치면 111ms 가 매번 붙는다 -- 리그의 판번호는 도중에 안 바뀐다.
+_RIG_CACHE: "dict | None" = None
+
+
 def robot_versions(timeout: float = 2.0) -> dict:
     """**지금 이 리그의** 판번호. 로봇 세션도 노드도 필요 없다.
 
@@ -68,6 +81,13 @@ def robot_versions(timeout: float = 2.0) -> dict:
     부르는 쪽이 ``backfilled`` 로 표시해야 한다 -- 그 구분은 여기서 하지 않고
     fill_and_raise 가 한다.
     """
+    global _RIG_CACHE
+    import os
+
+    if os.environ.get(NO_RIG_QUERY_ENV):
+        return {}
+    if _RIG_CACHE is not None:
+        return dict(_RIG_CACHE)
     out: dict = {}
     try:
         from mstack.config.station import load_station
@@ -79,6 +99,7 @@ def robot_versions(timeout: float = 2.0) -> dict:
     ver = _node_pylibfranka(cfg.node.python_path, timeout)
     if ver:
         out["pylibfranka_version"] = ver
+    _RIG_CACHE = dict(out)
     return out
 
 
