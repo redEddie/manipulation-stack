@@ -58,6 +58,15 @@ class Robot(Protocol):
         filter currently is, so the stop cannot be composed from outside.
         """
 
+    def versions(self) -> Dict[str, str]:
+        """이 로봇을 모는 소프트웨어·펌웨어 판번호. 기본: 모른다(빈 dict).
+
+        정적 값이라 관측이 아니라 **파일 메타에 한 번** 적는다 (payload 와
+        같은 규약). 못 주는 로봇은 빈 dict 를 돌려주고, 그러면 상류가 그
+        필드를 아예 안 쓴다 -- "?" 를 적으면 읽은 값처럼 보인다.
+        """
+        return {}
+
     @abstractmethod
     def get_observations(self) -> Dict[str, np.ndarray]:
         """Get the current observations of the robot.

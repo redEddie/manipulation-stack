@@ -68,6 +68,11 @@ class ZMQServerRobot:
                         result = fn() if fn is not None else None
                     elif method == "get_observations":
                         result = self._robot.get_observations()
+                    elif method == "versions":
+                        # payload 와 같은 규약: 정적 값이라 세션당 한 번,
+                        # 못 주는 로봇이면 빈 dict (상류가 기록을 생략한다).
+                        fn = getattr(self._robot, "versions", None)
+                        result = fn() if fn is not None else {}
                     elif method == "payload":
                         # 정적 값이라 obs 에 싣지 않는다. 이 로봇이 못 주면
                         # 빈 dict -- 상류가 그걸 보고 기록을 생략한다.
@@ -185,6 +190,22 @@ class ZMQClientRobot(Robot):
             return result
         except zmq.Again:
             raise RuntimeError("ZMQ timeout - robot may be disconnected")
+
+    def versions(self) -> dict:
+        """이 팔을 모는 소프트웨어·펌웨어 판번호. 못 주면 빈 dict.
+
+        GUI 인터프리터에는 pylibfranka 가 없고 로봇 IP 도 노드가 쥐고 있어서,
+        이 값은 반드시 노드를 거쳐 온다 (payload 와 같은 길).
+        """
+        request = {"method": "versions"}
+        try:
+            self._socket.send(pickle.dumps(request))
+            result = pickle.loads(self._socket.recv())
+            if isinstance(result, dict) and "error" in result:
+                raise RuntimeError(result["error"])
+            return result or {}
+        except Exception:  # noqa: BLE001 -- 판번호를 못 읽는 것이 수집을 막지 않는다
+            return {}
 
     def payload(self) -> dict:
         """로봇의 부하 모델 (질량 kg, 무게중심 m). 못 주는 로봇이면 빈 dict.

@@ -50,7 +50,7 @@ DEFAULT_CONFIG_PATH = state_dir() / "dataset_schema.json"
 # 정본이다 (문서와 어긋나면 검증기가 잡는다).
 #: 지금 쓰는(기록하는) 버전. 읽기는 같은 MAJOR 안에서 위아래 모두 된다
 #: (schema_is_readable 참조).
-SCHEMA_VERSION = "knu-1.2.1"
+SCHEMA_VERSION = "knu-1.2.2"
 
 # --------------------------------------------------------- observation/dataset keys
 # Robot observation keys (returned by Robot.get_observations / RobotEnv.get_obs).
@@ -236,6 +236,51 @@ SCHEMA_FIELDS["knu-1.2.1"] = {
         META_RESET_POSE, META_RESET_QPOS,
     ),
 }
+
+
+#: 이 파일을 **무엇이 만들었는가** (knu-1.2.2). metadata 그룹 attrs.
+#:
+#: 물리 셋업(station·payload·reset)은 적어 왔는데 그것을 돌린 소프트웨어는
+#: 어디에도 없었다 -- 정책이 이상하게 움직일 때 "이 데이터는 어느 컨트롤러,
+#: 어느 수집기 코드에서 나왔나" 가 첫 질문인데 답이 사람 기억뿐이었다
+#: (조작자, 2026-09-13). 실제로 이 데이터셋 안에는 제어 상수를 여러 번 바꾼
+#: 전후가 섞여 있다 (v_max 1.0→1.5, 저크 클램프 도입, 리더 드롭 가드).
+#:
+#: 넷 다 **자동으로 읽은 값**이고, 못 읽으면 적지 않는다 (0 이나 "?" 를
+#: 적으면 측정한 것처럼 읽힌다 -- knu-1.1.0 의 0 으로 찬 힘 필드가 그
+#: 교훈이다). 마지막 하나는 그 값들이 언제 어떻게 들어왔는지를 말한다.
+META_COLLECTOR_COMMIT = "collector_commit"      # 수집기 저장소의 git 커밋
+META_PYLIBFRANKA_VERSION = "pylibfranka_version"  # 예: 0.21.2 (libfranka 0.21)
+META_FR3_SYSTEM_VERSION = "fr3_system_version"  # FR3 시스템 이미지, 예: 5.10.0
+META_FR3_SYSTEM_BUILD = "fr3_system_build"      # 그 이미지의 빌드 해시들
+#: "live" = 수집하면서 적었다 / "backfilled <날짜>" = 나중에 채웠다.
+#: 채워 넣은 값은 **그 시점의 사실이 아닐 수 있다** -- 그것을 구분하지 않으면
+#: 나중에 이 필드 전체를 믿을 수 없게 된다.
+META_PROVENANCE_SOURCE = "provenance_source"
+
+#: 버전이 **요구**하는 둘. 나머지 셋(pylibfranka·시스템 이미지·빌드)은
+#: 로봇이 답할 때만 오므로 요구하지 않는다 -- 시뮬레이터나 로봇이 꺼진
+#: 세션에도 파일은 찍혀야 하고, 그때 없는 값을 요구하면 도장이 통째로
+#: 내려간다. 커밋은 git 만 있으면 늘 읽히고, provenance_source 는 "이 값들이
+#: 언제 어떻게 들어왔는가" 라서 **판단에 필요한 최소**다.
+_PROVENANCE_REQUIRED = (META_COLLECTOR_COMMIT, META_PROVENANCE_SOURCE)
+
+#: 있으면 적는 것들 (검증이 요구하지는 않는다).
+_PROVENANCE_OPTIONAL = (META_PYLIBFRANKA_VERSION, META_FR3_SYSTEM_VERSION,
+                        META_FR3_SYSTEM_BUILD)
+
+#: 세 갈래 모두에 provenance 를 더한 PATCH 판 (2026-09-13 조작자 결정).
+#: 갈래가 셋인 이유는 지금 데이터셋에 셋이 다 살아 있기 때문이다 --
+#: fr3-tabletop 에 1.0.0 이 14개, 1.1.1 이 1개, 1.2.1 이 12개.
+#: 각자 자기 갈래에서 한 칸만 올라간다: 없던 관측이 생기는 것이 아니라
+#: **누가 찍었는지**가 붙는 것이라 PATCH 다 (1.2.1 의 선례와 같은 결).
+for _base, _new in (("knu-1.0.0", "knu-1.0.1"),
+                    ("knu-1.1.1", "knu-1.1.2"),
+                    ("knu-1.2.1", "knu-1.2.2")):
+    SCHEMA_FIELDS[_new] = {
+        **SCHEMA_FIELDS[_base],
+        "metadata_attrs": SCHEMA_FIELDS[_base]["metadata_attrs"] + _PROVENANCE_REQUIRED,
+    }
 
 
 def schema_version_key(value) -> tuple:

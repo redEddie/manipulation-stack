@@ -81,7 +81,12 @@ import numpy as np
 
 from mstack.data.dataset_schema import (
     META_PAYLOAD_COM,
+    META_COLLECTOR_COMMIT,
+    META_FR3_SYSTEM_BUILD,
+    META_FR3_SYSTEM_VERSION,
     META_PAYLOAD_MASS,
+    META_PROVENANCE_SOURCE,
+    META_PYLIBFRANKA_VERSION,
     META_RESET_POSE,
     META_RESET_QPOS,
     SCHEMA_VERSION,
@@ -196,6 +201,15 @@ class SceneMetadata:
     #: 사람이 그것이 무엇인지 알아보지 못한다.
     reset_pose: Optional[str] = None
     reset_qpos: Optional[list] = None
+    #: 이 파일을 만든 소프트웨어 (knu-1.2.2). 물리 셋업은 위에서 적고 있었는데
+    #: 그것을 돌린 코드·펌웨어는 어디에도 없었다 (조작자, 2026-09-13).
+    #: 자동으로 읽은 것만 담고, 못 읽은 항목은 None 이라 attrs 에도 안 쓴다.
+    collector_commit: Optional[str] = None
+    pylibfranka_version: Optional[str] = None
+    fr3_system_version: Optional[str] = None
+    fr3_system_build: Optional[str] = None
+    #: "live" (수집하며 적음) / "backfilled <날짜>" (나중에 채움).
+    provenance_source: Optional[str] = None
 
     def validate(self, known_prop_ids: Optional[set[str]] = None) -> None:
         """구조가 틀린 metadata 로 파일을 만드는 것을 생성 시점에 막는다.
@@ -253,6 +267,12 @@ class SceneMetadata:
                 raise ValueError(f"relations 항목은 [주어, 관계, 목적어] 3개여야 한다: {rel!r}")
 
 
+def _opt_str(meta: h5py.Group, key: str):
+    """있으면 문자열, 없으면 None. **없는 것과 빈 것을 구분한다** -- 판번호
+    필드는 "안 적혔다" 와 "빈 값으로 적혔다" 가 다른 뜻이다."""
+    return str(meta.attrs[key]) if key in meta.attrs else None
+
+
 def _read_metadata(meta: h5py.Group) -> SceneMetadata:
     return SceneMetadata(
         scene_id=str(meta.attrs["scene_id"]),
@@ -273,6 +293,11 @@ def _read_metadata(meta: h5py.Group) -> SceneMetadata:
                     if META_RESET_POSE in meta.attrs else None),
         reset_qpos=(json.loads(meta.attrs[META_RESET_QPOS])
                     if META_RESET_QPOS in meta.attrs else None),
+        collector_commit=_opt_str(meta, META_COLLECTOR_COMMIT),
+        pylibfranka_version=_opt_str(meta, META_PYLIBFRANKA_VERSION),
+        fr3_system_version=_opt_str(meta, META_FR3_SYSTEM_VERSION),
+        fr3_system_build=_opt_str(meta, META_FR3_SYSTEM_BUILD),
+        provenance_source=_opt_str(meta, META_PROVENANCE_SOURCE),
     )
 
 
@@ -299,20 +324,32 @@ def _episode_summary(name: str, grp: h5py.Group) -> dict:
 
 # ------------------------------------------------------------------- writer
 def _stampable_version(want: str, has_payload: bool,
-                       has_reset: bool = False) -> str:
+                       has_reset: bool = False,
+                       has_provenance: bool = False) -> str:
     """찍어도 되는 가장 높은 버전. 못 채우는 요구가 있으면 내린다.
 
-    생성 시점에 모를 수 있는 것은 세션이 로봇에서 받아 오는 값들이다 -- 부하
-    모델(knu-1.2.0)과 리셋 자세(knu-1.2.1). 나머지 요구(관측·에피소드 attrs)는
-    이 세션이 직접 쓰는 값이라 늘 채워진다. 새 요구가 생기면 여기에 조건을
-    더한다.
+    생성 시점에 모를 수 있는 것은 세션이 밖에서 받아 오는 값들이다 -- 부하
+    모델(knu-1.2.0), 리셋 자세(knu-1.2.1), 그리고 판번호(knu-1.2.2: git 커밋과
+    로봇 쪽 버전). 나머지 요구(관측·에피소드 attrs)는 이 세션이 직접 쓰는
+    값이라 늘 채워진다. 새 요구가 생기면 여기에 조건을 더한다.
+
+    **"모르면 있는 것으로 친다"(have.get(a, True))가 기본이라 새 요구를 여기
+    안 적으면 조용히 통과한다.** 2026-09-13 에 판번호를 더하면서 실제로
+    그랬고, doctor 테스트가 잡았다 (판번호 없는 파일이 knu-1.1.2 로 찍혔다).
     """
     from mstack.data.dataset_schema import SCHEMA_FIELDS
 
     want = normalize_schema_version(want)
     if want not in SCHEMA_FIELDS:
         return want
-    have = {META_PAYLOAD_MASS: has_payload, META_RESET_POSE: has_reset}
+    from mstack.data.dataset_schema import (
+        META_COLLECTOR_COMMIT,
+        META_PROVENANCE_SOURCE,
+    )
+
+    have = {META_PAYLOAD_MASS: has_payload, META_RESET_POSE: has_reset,
+            META_COLLECTOR_COMMIT: has_provenance,
+            META_PROVENANCE_SOURCE: has_provenance}
 
     def _ok(version: str) -> bool:
         need = SCHEMA_FIELDS[version].get("metadata_attrs", ())
@@ -421,7 +458,8 @@ class SceneWriter:
             asked = normalize_schema_version(metadata.dataset_version)
             metadata.dataset_version = _stampable_version(
                 asked, metadata.payload_mass is not None,
-                bool(metadata.reset_pose and metadata.reset_qpos))
+                bool(metadata.reset_pose and metadata.reset_qpos),
+                bool(metadata.collector_commit and metadata.provenance_source))
             if metadata.dataset_version != asked:
                 # **말없이 내리지 않는다.** _resume_version 이 못 올릴 때
                 # 이유를 남기는 것과 같은 이유다 -- 마법사에서 고른 버전과
@@ -458,6 +496,16 @@ class SceneWriter:
                 self._meta.attrs[META_RESET_POSE] = str(metadata.reset_pose)
                 self._meta.attrs[META_RESET_QPOS] = json.dumps(
                     [float(x) for x in metadata.reset_qpos])
+            # 판번호도 **있을 때만**. 못 읽은 것을 "?" 로 적으면 읽은 값처럼
+            # 보인다 (knu-1.1.0 의 0 으로 찬 힘 필드가 그 교훈이다).
+            for attr, value in (
+                    (META_COLLECTOR_COMMIT, metadata.collector_commit),
+                    (META_PYLIBFRANKA_VERSION, metadata.pylibfranka_version),
+                    (META_FR3_SYSTEM_VERSION, metadata.fr3_system_version),
+                    (META_FR3_SYSTEM_BUILD, metadata.fr3_system_build),
+                    (META_PROVENANCE_SOURCE, metadata.provenance_source)):
+                if value:
+                    self._meta.attrs[attr] = str(value)
             self._meta.attrs["next_episode_idx"] = 0
 
         if "next_episode_idx" not in self._meta.attrs:

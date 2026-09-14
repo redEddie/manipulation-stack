@@ -26,6 +26,7 @@ import numpy as np
 import zmq
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from mstack.data.provenance import collector_commit
 from mstack.data.dataset_schema import (
     FT_OBS_KEYS,
     ROBOT_EE_POS_QUAT,
@@ -1430,6 +1431,27 @@ class CollectionWorker(QThread):
         except Exception:  # noqa: BLE001 -- 못 읽으면 그 버전을 안 찍을 뿐이다
             return None
 
+    def _read_versions(self) -> dict:
+        """이 파일을 만든 소프트웨어 판번호. 못 읽은 항목은 빠진다.
+
+        둘에서 모은다: 수집기 커밋은 이 프로세스가 직접(git), pylibfranka·FR3
+        시스템 이미지는 로봇 노드가(그쪽 인터프리터에만 pylibfranka 가 있고
+        로봇 주소도 거기 있다). 어느 쪽이 실패해도 나머지는 적는다 -- 부분적인
+        출처가 없는 것보다 낫다.
+        """
+        out: dict = {}
+        commit = collector_commit()
+        if commit:
+            out["collector_commit"] = commit
+        try:
+            out.update(self._robot._client.versions() or {})
+        except Exception as e:  # noqa: BLE001 -- 판번호가 수집을 막지 않는다
+            self.log_message.emit(f"[판번호] 로봇에서 못 읽었습니다: {e}")
+        if out:
+            self.log_message.emit("[판번호] " + " · ".join(
+                f"{k}={v}" for k, v in out.items()))
+        return out
+
     def _read_payload(self) -> dict:
         """로봇의 부하 모델. 못 물어보면 빈 dict.
 
@@ -1473,6 +1495,11 @@ class CollectionWorker(QThread):
                 # 궤적을 읽는 데 필요한데, 파일에 station 이름만 있으면 그
                 # 시점의 설정을 알아야 자세를 복원할 수 있다 -- 설정은 바뀐다.
                 reset = self._read_reset_pose()
+                # 그리고 **무엇이 이 파일을 만들었는가** (knu-1.2.2): 수집기
+                # 커밋과 로봇 쪽 판번호. 같은 이유다 -- 나중에 "이 데이터는
+                # 어느 코드/펌웨어에서 나왔나" 를 물을 때 파일 밖에 답이 있으면
+                # 그 답은 사람 기억뿐이다.
+                prov = self._read_versions()
                 if self.cfg.scene_metadata is not None and not self.cfg.scene_resume:
                     if payload:
                         self.cfg.scene_metadata.payload_mass = float(payload["mass"])
@@ -1480,6 +1507,12 @@ class CollectionWorker(QThread):
                     if reset:
                         self.cfg.scene_metadata.reset_pose = reset["name"]
                         self.cfg.scene_metadata.reset_qpos = list(reset["qpos"])
+                    meta = self.cfg.scene_metadata
+                    meta.collector_commit = prov.get("collector_commit") or None
+                    meta.pylibfranka_version = prov.get("pylibfranka") or None
+                    meta.fr3_system_version = prov.get("fr3_system") or None
+                    meta.fr3_system_build = prov.get("fr3_system_build") or None
+                    meta.provenance_source = "live" if prov else None
 
                 self._writer = SceneWriter(
                     root=self.cfg.data_root,

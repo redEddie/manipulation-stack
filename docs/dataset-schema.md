@@ -224,6 +224,50 @@ A robot that cannot report it (simulator, `PrintRobot`) leaves the attributes
 absent rather than writing zero — a zero would read as "no payload", which is
 worse than missing. Such a file is then checked against `knu-1.1.1`'s rules.
 
+## `knu-1.0.1` / `knu-1.1.2` / `knu-1.2.2` — frozen 2026-09-13
+
+**What made this file.** The physical setup was recorded (station, payload,
+reset pose); the software that drove it was not. When a policy misbehaves the
+first question is "which controller and which collector code produced this
+data", and until now the only answer was someone's memory — while this dataset
+actually spans several control-constant changes (v_max 1.0 → 1.5, the jerk
+clamp, the leader-drop guard).
+
+Two **required** metadata attributes:
+
+| attr | example | where it comes from |
+|---|---|---|
+| `collector_commit` | `b0d4649d469f` (`-dirty` if the tree was modified) | `git rev-parse` in the collector checkout |
+| `provenance_source` | `live` / `backfilled 2026-09-14` | who wrote these fields, and when |
+
+Three **optional** ones, written only when the robot answers:
+
+| attr | example | where it comes from |
+|---|---|---|
+| `pylibfranka_version` | `0.21.2` | `pylibfranka.__version__` on the node |
+| `fr3_system_version` | `5.10.0` | Desk `GET /admin/api/system-version` |
+| `fr3_system_build` | two build hashes | same response, lines 2-3 |
+
+The robot-side three are optional on purpose: a simulator session, or one where
+the arm is off, must still produce a stamped file. The FCI itself cannot answer
+— libfranka's `Robot::serverVersion()` is not exposed by this pylibfranka build
+— so the system image is read over HTTPS from the robot's own Desk, which
+answers without credentials on this network.
+
+`provenance_source` is what keeps the field trustworthy. Values backfilled by
+`scripts/convert/backfill_provenance.py` are **not** facts about recording time,
+and a reader must be able to tell. That script deliberately does not write
+`collector_commit` — the commit for an old file is not recoverable, only
+guessable from timestamps — and therefore does not raise the stamp either: a
+file must never claim a version whose fields it does not have (`knu-1.1.0` is
+the cautionary tale).
+
+Three versions because the dataset currently holds three branches at once
+(fr3-tabletop: 14 files at `knu-1.0.0`, 1 at `knu-1.1.1`, 12 at `knu-1.2.1`).
+Each moves one PATCH step within its own branch. Adding metadata attributes is a
+PATCH here by the same reasoning as `knu-1.2.1`: nothing about the recorded
+observation changed.
+
 ## How to bump a MINOR
 
 1. Add the fields to the writer.
@@ -234,6 +278,11 @@ worse than missing. Such a file is then checked against `knu-1.1.1`'s rules.
 4. Add a section to this document describing what was added and why.
 5. Run `python scripts/check/check_scene_file.py <files>` over both an old and a
    new file — both must pass, each against its own version's field list.
+6. If the new fields come from outside the session (the robot, git, the network),
+   add them to `_stampable_version` in `mstack/scene/scene_format.py`. Anything
+   not listed there defaults to "we have it", so a file can quietly get a stamp
+   whose fields are missing — that happened on 2026-09-13 and the doctor test
+   caught it.
 
 Old files are never rewritten. A dataset directory legitimately holds several
 versions at once; the LeRobot conversion records all of them in

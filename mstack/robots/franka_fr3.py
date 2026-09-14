@@ -337,6 +337,10 @@ class FrankaFR3Robot(Robot):
 
         rt = pf.RealtimeConfig.kEnforce if enforce_rt else pf.RealtimeConfig.kIgnore
         print(f"[FR3] connecting to {robot_ip} (realtime={'enforce' if enforce_rt else 'ignore'})")
+        # 판번호(versions)가 Desk 에 물어보려면 주소가 필요하다. 세션당 한 번
+        # 읽고 캐시한다 -- 돌아가는 동안 바뀔 수 있는 값이 아니다.
+        self._robot_ip = robot_ip
+        self._versions: "dict | None" = None
         self.robot = pf.Robot(robot_ip, rt)
 
         # Clear a leftover reflex/error state (e.g. joint_reflex from the last
@@ -542,6 +546,63 @@ class FrankaFR3Robot(Robot):
     def payload(self) -> dict:
         """부하 모델 (질량 kg, 플랜지 기준 무게중심 m). 연결 때 한 번 읽은 값."""
         return dict(self._payload)
+
+    def versions(self) -> dict:
+        """이 팔을 모는 소프트웨어·펌웨어 판번호. 세션당 한 번 읽어 캐시한다.
+
+        * ``pylibfranka`` -- 바인딩 버전 (libfranka 버전을 함의한다: 0.21.2 →
+          libfranka 0.21). 이 인터프리터에만 있으므로 여기서 읽어야 한다.
+        * ``fr3_system`` / ``fr3_system_build`` -- FR3 시스템 이미지.
+          **FCI 로는 못 읽는다** -- libfranka 의 ``Robot::serverVersion()`` 이
+          이 pylibfranka 빌드에 노출돼 있지 않다. 대신 로봇의 Desk 가 인증
+          없이 답하는 ``GET /admin/api/system-version`` 을 쓴다. 실측 응답
+          (2026-09-13, 172.16.0.2): ``5.10.0`` + 빌드 해시 두 줄.
+
+        못 읽은 항목은 **넣지 않는다.** 판번호는 나중에 "그때 뭐였지" 를 푸는
+        열쇠인데, 못 읽은 것을 "?" 로 채우면 열쇠가 아니라 소음이 된다.
+        """
+        if self._versions is not None:
+            return dict(self._versions)
+        out: dict = {}
+        try:
+            out["pylibfranka"] = str(getattr(self._pf, "__version__", "") or "")
+            if not out["pylibfranka"]:
+                out.pop("pylibfranka")
+        except Exception:  # noqa: BLE001
+            pass
+        out.update(self._read_desk_version())
+        self._versions = out
+        return dict(out)
+
+    def _read_desk_version(self) -> dict:
+        """Desk 의 시스템 판번호. 못 읽으면 빈 dict.
+
+        자체 서명 인증서라 검증을 끈다 (사설망의 로봇 한 대다). 타임아웃을
+        짧게 두는 이유: 이 호출은 세션 시작 경로에 있어서, 로봇이 응답하지
+        않을 때 수집 시작이 그만큼 늦어진다.
+        """
+        import json as _json  # noqa: F401 - 미래의 JSON 응답 대비
+        import ssl
+        import urllib.request
+
+        url = f"https://{self._robot_ip}/admin/api/system-version"
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urllib.request.urlopen(url, timeout=2.0, context=ctx) as r:
+                body = r.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 -- 판번호를 못 읽는 것이 수집을 막지 않는다
+            return {}
+        # 실측 응답은 따옴표로 감싼 여러 줄이다:
+        #   "5.10.0\nec764230...\n340b9610...\n"
+        parts = [x for x in body.strip().strip('"').split("\n") if x.strip()]
+        if not parts:
+            return {}
+        out = {"fr3_system": parts[0].strip()}
+        if len(parts) > 1:
+            out["fr3_system_build"] = " ".join(x.strip() for x in parts[1:])
+        return out
 
     def _read_ft(self, st) -> None:
         """``self._ft`` 를 갱신한다. 호출자가 ``self._lock`` 을 쥐고 있어야 한다."""
