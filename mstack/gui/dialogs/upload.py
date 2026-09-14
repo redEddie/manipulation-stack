@@ -56,8 +56,8 @@ class HdfUploadDialog(QDialog):
         # 공백으로 이어 붙인 한 줄 입력칸이라, 무엇이 골라졌는지도 그 파일이
         # 올릴 만한 것인지도 화면에 없었다.
         layout.addWidget(QLabel(tr(
-            "업로드할 .hdf5 파일을 선택하세요. **업로드 장부에 견주어** 올릴 "
-            "필요가 있는 것만 미리 체크됩니다.")))
+            "업로드할 .hdf5 파일을 선택하세요. 업로드 장부에 견주어 올릴 필요가 "
+            "있는 것만 미리 체크됩니다.")))
         self._recents = Recents()
         self.table = Hdf5FileTable([tr("에피소드"), tr("업로드 상태")])
         layout.addWidget(self.table)

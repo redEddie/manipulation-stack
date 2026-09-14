@@ -69,7 +69,7 @@ class LerobotConvertDialog(QDialog):
         # 일은 "어느 .hdf5 를 고를 것인가" 로 같은데 화면만 달랐다.
         self.files_label = QLabel(tr(
             "변환할 .hdf5 파일 (이미 큐레이션 끝난 파일). 데이터 경로의 것을 "
-            "모두 보여 주고, **전부 체크된 채로** 시작합니다."))
+            "모두 보여 주고, 전부 체크된 채로 시작합니다."))
         self.files_label.setWordWrap(True)
         layout.addWidget(self.files_label)
         self.table = Hdf5FileTable([tr("에피소드"), tr("이미지 압축")])

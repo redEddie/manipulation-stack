@@ -854,6 +854,57 @@ class DoctorOps:
                 skip.append((d.scene_id, tr("더 올라갈 곳이 없습니다")))
         return up, skip
 
+    @staticmethod
+    def _why_failed(e: Exception) -> str:
+        """실패 이유를 **사람 말로**. 모르면 원문 그대로.
+
+        HDF5 는 쓰기로 열 때 배타 잠금을 요구해서, 그 파일을 **읽고 있는**
+        프로세스가 하나만 있어도 errno 11 로 튕긴다. 원문
+        (``unable to lock file, errno = 11, Resource temporarily unavailable``)
+        만 보면 디스크가 고장 난 것처럼 읽히는데, 실제 원인은 늘 "누가 그
+        파일을 열어 두었다" 이고 할 일도 하나다 (2026-09-14 조작자 질문 --
+        그때 범인은 이틀 전에 안 죽은 탐색용 GUI 였다).
+        """
+        text = str(e)
+        if "errno = 11" in text or "unable to lock file" in text:
+            return tr("그 파일을 다른 프로그램이 열고 있습니다. 수집 세션, "
+                      "다른 GUI 창(dev 아이콘 포함), 또는 이 창의 Curation "
+                      "화면이 잡고 있을 수 있습니다 — 닫고 다시 시도하세요.")
+        return f"{type(e).__name__}: {e}"
+
+    def _fill_summary(self, payload, reset, from_file, versions) -> tuple:
+        """확인창에 보일 "채워 넣을 값" 목록과 그 아래 한 줄. (줄 목록, 주석)
+
+        짧게 쓴다. 이 창에서 조작자가 판단하는 것은 **무엇이 들어가는가**
+        하나이고, 그 답은 값 세 개다 (조작자, 2026-09-14: "뭐가 이렇게 복잡한
+        문구가 뜨지?"). 그래서:
+
+        * 빌드 해시 40자 두 개는 안 보여준다 -- 파일에는 들어가지만 사람이
+          창에서 대조할 값이 아니다.
+        * 출처는 줄마다 되풀이하지 않고 **아래 한 줄**로 모은다.
+        * 별표(``**``) 강조는 쓰지 않는다. QMessageBox 는 그냥 글자로 찍는다.
+        """
+        lines = []
+        if payload:
+            lines.append(tr("부하 모델 {m} kg").format(m=payload[0]))
+        if reset:
+            lines.append(tr("리셋 자세 {n}").format(n=reset[0]) if from_file
+                         else tr("리셋 자세 {n} (지금 station 설정)").format(
+                             n=reset[0]))
+        note = ""
+        if versions:
+            shown = []
+            if versions.get("fr3_system_version"):
+                shown.append(tr("FR3 {v}").format(v=versions["fr3_system_version"]))
+            if versions.get("pylibfranka_version"):
+                shown.append(tr("pylibfranka {v}").format(
+                    v=versions["pylibfranka_version"]))
+            lines.append(tr("판번호 {v}").format(v=" · ".join(shown)))
+            note = tr("판번호 출처: {w}. 수집 당시 읽은 값이 아니라 나중에 "
+                      "채운 것으로 파일에 남습니다.").format(
+                          w=getattr(self, "_versions_from", "") or tr("알 수 없음"))
+        return lines, note
+
     def align_selected(self) -> None:
         """**고른 것들**을 한 번에 올린다.
 
@@ -883,16 +934,7 @@ class DoctorOps:
                        why="\n".join(f"  · {sid}: {why}" for sid, why in skip[:10])))
             return
         payload, reset, from_file, versions = self._fill_sources()
-        src = []
-        if payload:
-            src.append(tr("부하 모델 {m} kg").format(m=payload[0]))
-        if reset:
-            src.append(tr("리셋 자세 {n} ({w})").format(
-                n=reset[0], w=tr("다른 scene") if from_file else tr("station 설정")))
-        if versions:
-            src.append(tr("판번호 {v} ({w}) — backfilled 로 표시").format(
-                v=" · ".join(str(x) for x in versions.values()),
-                w=getattr(self, "_versions_from", "")))
+        src, src_note = self._fill_summary(payload, reset, from_file, versions)
         lines = "\n".join(f"  · {sid}: {a} → {b}" for sid, a, b in up[:30])
         more = tr("\n  … 외 {n}개").format(n=len(up) - 30) if len(up) > 30 else ""
         note = ""
@@ -902,14 +944,16 @@ class DoctorOps:
                 l="\n".join(f"  · {sid}: {why}" for sid, why in skip[:10]))
         if QMessageBox.question(
                 win, tr("데이터세트 버전 올리기"),
-                tr("고른 {n}개를 올립니다:\n{l}{more}\n\n채워 넣을 값:\n{src}{note}"
-                   "\n\n되돌릴 수 없습니다. 진행할까요?").format(
+                tr("고른 {n}개를 올립니다:\n{l}{more}\n\n채워 넣을 값\n{src}\n"
+                   "{srcnote}{note}\n\n되돌릴 수 없습니다. 진행할까요?").format(
                        n=len(up), l=lines, more=more, note=note,
-                       src="\n".join(f"  · {x}" for x in src) or tr("  (없음)")),
+                       src="\n".join(f"  · {x}" for x in src) or tr("  (없음)"),
+                       srcnote=f"\n{src_note}\n" if src_note else ""),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         done = failed = 0
+        last_why = ""
         for sid, a, _b in up:
             try:
                 got = fill_and_raise(self._path(sid), payload=payload,
@@ -918,10 +962,18 @@ class DoctorOps:
                 win.log(f"[닥터] {sid} 데이터세트 버전 {a} → {got}")
                 done += 1
             except Exception as e:  # noqa: BLE001
-                win.log(f"[닥터] {sid} 올리기 실패: {type(e).__name__}: {e}")
+                why = self._why_failed(e)
+                win.log(f"[닥터] {sid} 올리기 실패: {why}")
                 failed += 1
+                last_why = why
         win.log(f"[닥터] 선택 {len(up)}개 중 {done}개 올렸습니다"
                 + (f" · {failed}개 실패" if failed else ""))
+        if failed:
+            QMessageBox.warning(
+                win, tr("일부 실패"),
+                tr("{n}개를 올리지 못했습니다.\n\n{why}\n\n나머지 {d}개는 "
+                   "올렸습니다. 로그에 파일별로 남았습니다.").format(
+                       n=failed, d=done, why=last_why))
         self.refresh_schema()
 
     def refresh_schema_buttons(self) -> None:
@@ -1145,7 +1197,7 @@ class DoctorOps:
         try:
             restamp(self._path(d.scene_id), d.satisfied)
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(win, tr("버전 변경 실패"), str(e))
+            QMessageBox.warning(win, tr("버전 변경 실패"), self._why_failed(e))
             return
         win.log(f"[닥터] {d.scene_id} 데이터세트 버전 {d.stamped} → {d.satisfied}")
         self.refresh_schema()
@@ -1158,25 +1210,13 @@ class DoctorOps:
             QMessageBox.information(win, tr("수집 중"),
                                     tr("세션을 끝낸 뒤 고치세요."))
             return
-        src = []
-        if payload:
-            src.append(tr("부하 모델 {m} kg (데이터셋의 다른 scene)")
-                       .format(m=payload[0]))
-        if reset:
-            src.append(tr("리셋 자세 {n} ({where})").format(
-                n=reset[0], where=tr("데이터셋의 다른 scene") if from_file
-                else tr("지금 station 설정")))
-        if versions:
-            src.append(tr("판번호 {v} (데이터셋의 다른 scene) — "
-                          "**수집 당시 읽은 값이 아니라** 나중에 채운 것으로 "
-                          "표시됩니다 (backfilled)").format(
-                              v=" · ".join(f"{k.split('_')[0]}={x}"
-                                           for k, x in versions.items())))
+        src, src_note = self._fill_summary(payload, reset, from_file, versions)
         ok = QMessageBox.question(
             win, tr("데이터세트 버전 올리기"),
-            tr("{sid} 를 {a} → {b} 로 올립니다.\n\n채워 넣을 값:\n{src}\n\n"
-               "{why}").format(
+            tr("{sid} 를 {a} → {b} 로 올립니다.\n\n채워 넣을 값\n{src}\n"
+               "{srcnote}\n{why}").format(
                    sid=d.scene_id, a=d.stamped or "?", b=up_to,
+                   srcnote=f"\n{src_note}\n" if src_note else "",
                    src="\n".join(f"  · {x}" for x in src) or tr("  (없음)"),
                    why=tr("이 파일에는 에피소드가 없어 잘못 기술할 데이터가 "
                           "없습니다.") if not d.episodes else tr(
@@ -1190,7 +1230,7 @@ class DoctorOps:
                                  versions=versions,
                                  source=getattr(self, "_versions_from", ""))
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(win, tr("버전 변경 실패"), str(e))
+            QMessageBox.warning(win, tr("버전 변경 실패"), self._why_failed(e))
             return
         win.log(f"[닥터] {d.scene_id} 값을 채우고 데이터세트 버전 "
                 f"{d.stamped} → {got}")

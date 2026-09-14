@@ -45,8 +45,8 @@ class Hdf5AutoDialog(QDialog):
         self.repo_id = repo_id
         layout = QVBoxLayout(self)
         head = QLabel(tr(
-            "처리할 파일을 고르세요. **재압축이 필요하거나 업로드 장부가 "
-            "바뀌었다고 말하는 것**이 미리 체크됩니다.\n업로드 대상: {r}")
+            "처리할 파일을 고르세요. 재압축이 필요하거나 업로드 장부가 바뀌었다고 "
+            "말하는 것이 미리 체크됩니다.\n업로드 대상: {r}")
             .format(r=repo_id))
         head.setWordWrap(True)
         layout.addWidget(head)

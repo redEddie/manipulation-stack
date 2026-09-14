@@ -219,4 +219,18 @@ with tempfile.TemporaryDirectory() as d:
     assert robot_versions(timeout=0.2) == {}, "스위치가 켜졌는데 리그에 물었다"
     print("8. 판번호를 리그에서 직접 읽는다 (JSON 문자열 파싱 포함) OK")
 
+    # ---- 9. 잠긴 파일 에러를 사람 말로 ----
+    # HDF5 는 쓰기로 열 때 배타 잠금을 요구해서, 그 파일을 **읽고 있는**
+    # 프로세스 하나만 있어도 errno 11 로 튕긴다. 원문만 보면 디스크가 고장
+    # 난 것처럼 읽힌다 (2026-09-14 조작자 질문).
+    locked = OSError(
+        "[Errno 11] Unable to synchronously open file (unable to lock file, "
+        "errno = 11, error message = 'Resource temporarily unavailable')")
+    why = DoctorOps._why_failed(locked)
+    assert "다른 프로그램이 열고" in why, why
+    assert "errno" not in why, why
+    other = DoctorOps._why_failed(ValueError("무언가 다른 것"))
+    assert other == "ValueError: 무언가 다른 것", other
+    print("9. 잠긴 파일 에러를 사람 말로 OK")
+
 print("test_provenance OK")
