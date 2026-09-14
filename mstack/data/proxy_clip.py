@@ -198,6 +198,60 @@ def invalidate_scene_proxies(scene_id: str, proxy_dir: Path = PROXY_DIR) -> int:
     return removed
 
 
+def remap_scene_proxies(deleted_uids, moved: dict,
+                        proxy_dir: Path = PROXY_DIR) -> dict:
+    """에피소드를 지운 뒤 프록시를 **맞춘다**. ``{"removed": n, "renamed": m}``.
+
+    예전에는 씬 통째를 버렸다 (invalidate_scene_proxies). renumber 가 slot 의
+    E번호를 당겨서, 지운 것만 지우면 살아남은 에피소드가 남의 클립을 물려받기
+    때문이다. 그런데 그러면 **에피소드 하나를 지워도 씬 전체를 다시 구워야**
+    했다 (조작자, 2026-09-14). renumber 는 옛 uid → 새 uid 표를 알고 있으므로,
+    지운 것의 클립만 지우고 당겨진 것은 파일 이름만 옮기면 된다.
+
+    이름 옮기기는 **두 단계**다. 같은 slot 에서 E2→E1, E3→E2 처럼 새 이름이
+    다른 에피소드의 옛 이름이라, 한 번에 옮기면 순서에 따라 덮어쓴다. 먼저
+    전부 임시 이름으로 빼고 나서 제자리에 놓는다.
+    """
+    proxy_dir = Path(proxy_dir)
+    removed = 0
+    for uid in deleted_uids or ():
+        for p in proxy_dir.glob(f"{uid}__*.mp4"):
+            try:
+                p.unlink()
+                removed += 1
+            except OSError:
+                pass
+    _audit(proxy_dir, f"episodes {', '.join(deleted_uids or ())}", removed)
+    staged = []
+    for old, new in (moved or {}).items():
+        for p in proxy_dir.glob(f"{old}__*.mp4"):
+            suffix = p.name[len(old):]              # "__<obs_key>.mp4"
+            tmp = p.with_name(p.name + ".remap")
+            try:
+                p.rename(tmp)
+                staged.append((tmp, proxy_dir / f"{new}{suffix}"))
+            except OSError:
+                pass
+    renamed = 0
+    for tmp, dest in staged:
+        try:
+            if dest.exists():
+                # 제자리에 남은 것은 다른 에피소드의 낡은 클립이다 -- 보여주면
+                # 남의 영상이 된다.
+                dest.unlink()
+            tmp.rename(dest)
+            renamed += 1
+        except OSError:
+            pass
+    return {"removed": removed, "renamed": renamed}
+
+
+def remap_scene_caches(dataset_root, deleted_uids, moved: dict) -> dict:
+    """삭제 뒤 **파생 캐시 전부**를 맞추는 문. 지금은 프록시 하나뿐이다
+    (invalidate_scene_caches 와 같은 규칙: 캐시가 늘면 여기 한 곳만 늘린다)."""
+    return remap_scene_proxies(deleted_uids, moved, proxy_dir_for(dataset_root))
+
+
 def invalidate_scene_caches(scene_id: str, dataset_root) -> dict:
     """한 scene 의 **파생 캐시 전부**를 무효화한다. ``{"proxies": n}``.
 

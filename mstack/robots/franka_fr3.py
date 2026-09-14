@@ -394,6 +394,9 @@ class FrankaFR3Robot(Robot):
             "mass": float(np.asarray(st.m_total, dtype=float).ravel()[0]),
             "com": np.asarray(st.F_x_Ctotal, dtype=float).ravel().tolist(),
         } if hasattr(st, "m_total") else {}
+        # 최신 로봇 상태 참조. payload() 가 부를 때마다 여기서 푼다 -- 매 틱
+        # 숫자로 바꾸면 1 kHz 루프에 일이 늘고, 필요한 것은 세션 시작 때뿐이다.
+        self._last_state = st
         if self._payload:
             print(f"[FR3] payload {self._payload['mass'] * 1000:.0f} g, "
                   f"com {np.round(self._payload['com'], 4).tolist()}")
@@ -544,8 +547,24 @@ class FrankaFR3Robot(Robot):
         return out
 
     def payload(self) -> dict:
-        """부하 모델 (질량 kg, 플랜지 기준 무게중심 m). 연결 때 한 번 읽은 값."""
-        return dict(self._payload)
+        """부하 모델 (질량 kg, 플랜지 기준 무게중심 m). **부를 때마다 최신 상태에서.**
+
+        측정값이 아니라 Desk 에 사람이 넣은 설정을 로봇이 돌려주는 값이다
+        (``m_total`` / ``F_x_Ctotal``). 예전에는 노드가 켜질 때 한 번 읽어
+        캐시했는데, 노드는 GUI 가 떠 있는 동안 계속 살아 있어서 그 사이 Desk
+        설정을 바꾸면 컨트롤러는 새 값을 쓰는데 파일에는 옛 값이 적혔다
+        (조작자, 2026-09-14). 워커가 세션을 시작할 때마다 이것을 부르므로
+        이제 그 세션의 설정이 적힌다. 상태를 아직 못 읽었으면 연결 때 값을 준다.
+        """
+        with self._lock:
+            st = getattr(self, "_last_state", None)
+        if st is None or not hasattr(st, "m_total"):
+            return dict(self._payload)
+        try:
+            return {"mass": float(np.asarray(st.m_total, dtype=float).ravel()[0]),
+                    "com": np.asarray(st.F_x_Ctotal, dtype=float).ravel().tolist()}
+        except Exception:  # noqa: BLE001 -- 못 풀면 연결 때 값이 없느니보다 낫다
+            return dict(self._payload)
 
     def versions(self) -> dict:
         """이 팔을 모는 소프트웨어·펌웨어 판번호. 세션당 한 번 읽어 캐시한다.
@@ -660,6 +679,7 @@ class FrankaFR3Robot(Robot):
                     self._dq = np.asarray(st.dq, dtype=float)
                     self._ee_pose = np.asarray(st.O_T_EE, dtype=float)
                     self._success_rate = float(st.control_command_success_rate)
+                    self._last_state = st
                     if self._has_ft:
                         self._read_ft(st)
             except Exception as e:  # noqa: BLE001
@@ -737,6 +757,7 @@ class FrankaFR3Robot(Robot):
                     self._dq = np.asarray(state.dq, dtype=float)
                     self._ee_pose = np.asarray(state.O_T_EE, dtype=float)
                     self._success_rate = float(state.control_command_success_rate)
+                    self._last_state = state
                     if self._has_ft:
                         self._read_ft(state)
                 # 목표를 읽은 뒤에 발행한다 -- 필터의 입력과 출력이 같은

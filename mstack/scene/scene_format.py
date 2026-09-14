@@ -803,7 +803,7 @@ def _next_slot_idx(f: h5py.File, meta: h5py.Group, instruction_id: str) -> int:
 
 
 
-def renumber_scene_episodes(f: h5py.File, meta: h5py.Group) -> None:
+def renumber_scene_episodes(f: h5py.File, meta: h5py.Group) -> dict:
     """삭제로 생긴 빈자리를 메운다 -- legacy ``renumber_episodes`` 의 scene 판.
 
     - 그룹 이름 ``episode_NNN`` 을 현재 번호 오름차순으로 0..N-1 재부여
@@ -816,6 +816,11 @@ def renumber_scene_episodes(f: h5py.File, meta: h5py.Group) -> None:
       재배정되므로 이 파일은 이후 resume 대상이 될 수 없다)
     빈자리가 없어도 마커는 올라간다 -- 이 함수가 불렸다는 것 자체가 삭제가
     있었다는 뜻이다 (호출자는 delete 경로뿐).
+
+    돌려주는 것: **uid 가 바뀐 에피소드의** ``{옛 uid: 새 uid}``. 프록시 클립이
+    uid 로 이름 붙어 있어서, 이 표가 있으면 씬 통째를 버리지 않고 파일 이름만
+    옮길 수 있다 (2026-09-14 -- 에피소드 하나를 지워도 씬 전체를 다시 구워야
+    했다).
     """
     names = sorted((k for k in f.keys() if EPISODE_GROUP_RE.match(k)),
                    key=lambda k: int(EPISODE_GROUP_RE.match(k).group(1)))
@@ -827,6 +832,7 @@ def renumber_scene_episodes(f: h5py.File, meta: h5py.Group) -> None:
     meta.attrs["next_episode_idx"] = len(names)
     sid = str(meta.attrs.get("scene_id", ""))
     per_slot: dict = {}
+    moved: dict = {}
     for i in range(len(names)):
         g = f[f"episode_{i:03d}"]
         iid = str(g.attrs.get("instruction_id", ""))
@@ -834,22 +840,33 @@ def renumber_scene_episodes(f: h5py.File, meta: h5py.Group) -> None:
         per_slot[iid] = e + 1
         g.attrs["slot_episode_idx"] = e
         if sid and iid:
-            g.attrs["episode_uid"] = episode_uid(sid, iid, e)
+            old = str(g.attrs.get("episode_uid", ""))
+            new = episode_uid(sid, iid, e)
+            g.attrs["episode_uid"] = new
+            if old and old != new:
+                moved[old] = new
     mark_scene_edited(meta)
+    return moved
 
 
-def delete_scene_episodes(path: Path, names: list) -> None:
+def delete_scene_episodes(path: Path, names: list) -> tuple:
     """세션이 파일을 쥐고 있지 않을 때 GUI 가 직접 쓰는 삭제 경로 (규칙은
     SceneWriter.delete_episode 와 동일: 삭제 후 renumber). 이름 하나라도 없으면
-    아무것도 지우지 않고 KeyError."""
+    아무것도 지우지 않고 KeyError.
+
+    돌려주는 것: ``(지운 uid 목록, {옛 uid: 새 uid})`` -- 프록시 캐시를 씬
+    통째로 버리지 않고 맞추는 데 쓴다 (proxy_clip.remap_scene_caches).
+    """
     with h5py.File(path, "a") as f:
         meta = f["metadata"]
         missing = [n for n in names if n not in f or not EPISODE_GROUP_RE.match(n)]
         if missing:
             raise KeyError(", ".join(missing))
+        deleted = [str(f[n].attrs.get("episode_uid", "")) for n in names]
         for n in names:
             del f[n]
-        renumber_scene_episodes(f, meta)
+        moved = renumber_scene_episodes(f, meta)
+    return [u for u in deleted if u], moved
 
 
 #: (해석된 경로) -> (stat 지문, 결과). list_scene_episodes 전용.

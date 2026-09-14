@@ -249,4 +249,21 @@ with tempfile.TemporaryDirectory() as d:
     assert other == "ValueError: 무언가 다른 것", other
     print("9. 잠긴 파일 에러를 사람 말로 OK")
 
+    # ---- 10. 부하 모델은 부를 때마다 최신 로봇 상태에서 읽는다 ----
+    # 예전에는 노드가 켜질 때 한 번 읽어 캐시해서, GUI 를 켜 둔 채 Desk 설정을
+    # 바꾸면 파일에 옛 값이 적혔다 (조작자, 2026-09-14). 로봇 없이 가짜 상태로 본다.
+    import threading  # noqa: E402
+
+    from mstack.robots.franka_fr3 import FrankaFR3Robot  # noqa: E402
+
+    rob = FrankaFR3Robot.__new__(FrankaFR3Robot)
+    rob._lock = threading.Lock()
+    rob._payload = {"mass": 0.85, "com": [-0.01, 0.0, 0.03]}     # 연결 때 값
+    rob._last_state = None
+    assert rob.payload() == rob._payload, "상태가 없으면 연결 때 값을 줘야 한다"
+    rob._last_state = types.SimpleNamespace(m_total=[0.95], F_x_Ctotal=[0.0, 0.0, 0.05])
+    got = rob.payload()
+    assert abs(got["mass"] - 0.95) < 1e-9 and got["com"] == [0.0, 0.0, 0.05], got
+    print("10. 부하 모델은 부를 때마다 최신 상태에서 읽는다 OK")
+
 print("test_provenance OK")

@@ -8,9 +8,12 @@
   * **부분 파일을 "있음" 으로 착각하지 않는다.** 중간에 죽으면 다음 실행이
     다시 만들어야 한다. 반쯤 쓰인 mp4 가 남으면 그 에피소드는 영영 깨진다.
   * **크기가 짝수다.** yuv420p 크로마 서브샘플링이 홀수 치수를 못 받는다.
-  * **무효화는 scene 통째로.** uid 는 renumber 때 재배정되므로 (지운
-    에피소드의 uid 를 뒤가 물려받는다) 지워진 것만 지우면 살아남은
-    에피소드가 남의 클립을 물려받는다 -- 썸네일과 같은 함정이다.
+  * **삭제 뒤에는 맞춘다, 버리지 않는다.** uid 는 renumber 때 재배정되므로
+    (지운 에피소드의 uid 를 뒤가 물려받는다) 지워진 것만 지우면 살아남은
+    에피소드가 남의 클립을 물려받는다. 그래서 예전에는 씬 통째를 버렸는데,
+    그러면 하나만 지워도 다시 구워야 했다 (2026-09-14). 이제 renumber 의
+    uid 대응표로 당겨진 클립의 이름을 옮긴다 (7b). 대응표가 없는 경로(수집
+    세션 중 삭제)만 여전히 씬 통째를 버린다 (7).
 
 합성 데이터로 돈다. 조작자의 .hdf5 는 열지 않는다.
 """
@@ -118,6 +121,26 @@ assert proxy_path("EP-S004-I000-E000", "agentview_rgb", TMP).exists(), \
     "다른 scene 을 지웠다"
 assert not proxy_path("EP-S003-I001-E000", "eye_in_hand_rgb", TMP).exists()
 print(f"7. scene 통째 무효화 ({removed}개, 다른 scene 은 보존) OK")
+
+# ---- 7b. 삭제 뒤에는 맞춘다: 지운 것만 지우고, 당겨진 것은 이름만 옮긴다 ----
+# 같은 slot 에서 E1 을 지우면 E2→E1, E3→E2 로 당겨진다. 새 이름이 다른
+# 에피소드의 옛 이름이라 한 번에 옮기면 순서에 따라 덮어쓴다 -- 두 단계로 옮기는
+# 것이 지켜지는지 **내용**으로 본다.
+from mstack.data.proxy_clip import remap_scene_proxies  # noqa: E402
+
+R = Path(tempfile.mkdtemp(prefix="remap_"))
+for e in range(4):
+    proxy_path(f"EP-S005-I000-E{e:03d}", "agentview_rgb", R).write_bytes(f"clip{e}".encode())
+proxy_path("EP-S005-I001-E000", "agentview_rgb", R).write_bytes(b"other-slot")
+r = remap_scene_proxies(["EP-S005-I000-E001"],
+                        {"EP-S005-I000-E002": "EP-S005-I000-E001",
+                         "EP-S005-I000-E003": "EP-S005-I000-E002"}, R)
+assert r == {"removed": 1, "renamed": 2}, r
+got = {p.name.split("__")[0]: p.read_bytes() for p in R.glob("*.mp4")}
+assert got == {"EP-S005-I000-E000": b"clip0", "EP-S005-I000-E001": b"clip2",
+               "EP-S005-I000-E002": b"clip3", "EP-S005-I001-E000": b"other-slot"}, got
+assert not list(R.glob("*.remap")), "임시 이름이 남았다"
+print("7b. 삭제 뒤 맞추기 (지운 1개 삭제 · 당겨진 2개 이름만 옮김 · 다른 slot 보존) OK")
 
 print("\n프록시 클립 캐시 통과")
 

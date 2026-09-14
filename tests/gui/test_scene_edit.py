@@ -313,6 +313,43 @@ assert c == {"proxies": 2}, c
 assert (pd / "EP-S001-I000-E000__agentview_rgb.mp4").exists()
 print("10 통과: scene 캐시 무효화 한 문 (프록시만), 썸네일 캐시는 없다")
 
+# ---- 11. 에피소드 하나를 지워도 씬 전체를 다시 굽지 않는다 ----
+# 예전에는 삭제가 씬 통째 프록시를 버려서, 하나만 지워도 다시 구워야 했다
+# (조작자, 2026-09-14). renumber 가 돌려주는 uid 대응표로 맞춘다. 검사는
+# **내용**으로 한다: 각 에피소드에 표식을 달고, 지운 뒤 새 uid 의 클립이 그
+# 에피소드의 것인지 본다 (남의 클립을 물려받는 것이 이 캐시의 고전적 함정이다).
+from mstack.data.proxy_clip import proxy_path, remap_scene_proxies  # noqa: E402
+
+d3 = Path(tempfile.mkdtemp(prefix="sceneedit_remap_"))
+subprocess.run([sys.executable, WT + "/scripts/check/check_scene_file.py",
+                "--selftest", "--keep", str(d3)], check=True, capture_output=True)
+sc3 = d3 / "scene_000.hdf5"
+eps3 = list_scene_episodes(sc3)
+slots3 = {}
+for e in eps3:
+    slots3.setdefault(e["instruction_id"], []).append(e)
+_iid3, slot3 = max(slots3.items(), key=lambda kv: len(kv[1]))
+assert len(slot3) >= 2, "당겨질 에피소드가 있는 slot 이 필요하다"
+slot3.sort(key=lambda e: e["episode_uid"])
+with h5py.File(sc3, "a") as f:
+    for e in eps3:
+        f[e["name"]].attrs["probe_id"] = e["name"]
+pd3 = Path(tempfile.mkdtemp(prefix="proxy_remap_"))
+for e in eps3:
+    proxy_path(e["episode_uid"], "agentview_rgb", pd3).write_text(e["name"])
+first = slot3[0]
+deleted, moved = delete_scene_episodes(sc3, [first["name"]])
+assert deleted == [first["episode_uid"]], deleted
+assert len(moved) == len(slot3) - 1, moved      # 같은 slot 의 뒤만 한 칸씩 당겨진다
+r = remap_scene_proxies(deleted, moved, pd3)
+assert r["removed"] == 1 and r["renamed"] == len(slot3) - 1, r
+with h5py.File(sc3, "r") as f:
+    for e in list_scene_episodes(sc3):
+        clip = proxy_path(e["episode_uid"], "agentview_rgb", pd3)
+        want = str(f[e["name"]].attrs["probe_id"])
+        assert clip.exists() and clip.read_text() == want, (e["episode_uid"], want)
+print(f"11 통과: 하나 지워도 씬을 다시 굽지 않는다 (삭제 1 · 이름 옮김 {r['renamed']})")
+
 print("\nscene 편집(삭제·트림) 검증 통과")
 import os  # noqa: E402
 

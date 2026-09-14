@@ -12,7 +12,11 @@
 
 from __future__ import annotations
 
-from mstack.data.proxy_clip import invalidate_episode_proxies, invalidate_scene_caches
+from mstack.data.proxy_clip import (
+    invalidate_episode_proxies,
+    invalidate_scene_caches,
+    remap_scene_caches,
+)
 
 
 def drop_scene_caches(win, scene_id, label: str = "") -> None:
@@ -30,6 +34,22 @@ def drop_scene_caches(win, scene_id, label: str = "") -> None:
             win.log(f"[캐시] {label or sid}: 프록시 {n}개 무효화")
     except Exception as e:  # noqa: BLE001 -- 캐시 정리 실패는 조작의 실패가 아니다
         win.log(f"[캐시 정리 실패] {label or scene_id}: {e}")
+
+
+def remap_caches_after_delete(win, deleted_uids, moved: dict,
+                              label: str = "") -> None:
+    """에피소드를 지운 뒤 캐시를 **맞춘다** -- 씬 통째로 버리지 않는다.
+
+    지운 것의 클립만 지우고, 번호가 당겨진 것은 파일 이름만 옮긴다. 예전에는
+    하나만 지워도 씬 전체 프록시가 날아가 다시 구워야 했다 (2026-09-14).
+    """
+    try:
+        r = remap_scene_caches(win.dataset_ops.dataset_root(), deleted_uids, moved)
+        if r["removed"] or r["renamed"]:
+            win.log(f"[캐시] {label}: 프록시 {r['removed']}개 삭제 · "
+                    f"{r['renamed']}개 번호 옮김")
+    except Exception as e:  # noqa: BLE001 -- 캐시 정리 실패는 조작의 실패가 아니다
+        win.log(f"[캐시 정리 실패] {label}: {e}")
 
 
 def drop_episode_caches(win, uid, label: str = "") -> None:

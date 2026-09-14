@@ -5,7 +5,7 @@ from __future__ import annotations
 import h5py
 from PyQt6.QtWidgets import QMessageBox
 
-from apps.workspace.shared.caches import drop_scene_caches
+from apps.workspace.shared.caches import remap_caches_after_delete
 from mstack.data.libero_format import hdf5_repack_status, renumber_episodes
 from mstack.gui.i18n import tr
 from apps.workspace.shared.jobs import running_job
@@ -13,7 +13,6 @@ from mstack.gui.text_utils import repo_id_error
 from mstack.scene.scene_format import (
     delete_scene_episodes,
     list_scene_episodes,
-    read_scene_metadata,
 )
 
 
@@ -227,14 +226,13 @@ class DeleteOps:
                 continue
             try:
                 if is_scene:
-                    delete_scene_episodes(path, names)
-                    # renumber 로 uid 가 재배정되므로 해당 scene 의 파생 캐시를
-                    # (프록시 클립) 전부 무효화한다. 삭제와 별도 try --
-                    # 캐시 정리 실패가 "삭제 실패" 로 오표기되면 안 된다
-                    # (삭제는 이미 성공했다).
-                    drop_scene_caches(
-                        self.win, lambda p=path: read_scene_metadata(p).scene_id,
-                        path.name)
+                    deleted, moved = delete_scene_episodes(path, names)
+                    # renumber 가 돌려준 uid 대응표로 캐시를 **맞춘다**: 지운
+                    # 것의 클립만 지우고, 당겨진 것은 이름만 옮긴다. 예전에는
+                    # 씬 통째를 버려 하나만 지워도 다시 구워야 했다 (2026-09-14).
+                    # 삭제와 별도 try -- 캐시 정리 실패가 "삭제 실패" 로
+                    # 오표기되면 안 된다 (삭제는 이미 성공했다).
+                    remap_caches_after_delete(self.win, deleted, moved, path.name)
                 else:
                     with h5py.File(path, "a") as f:
                         data = f["data"]
