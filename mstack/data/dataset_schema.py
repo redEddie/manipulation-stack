@@ -258,16 +258,19 @@ META_FR3_SYSTEM_BUILD = "fr3_system_build"      # 그 이미지의 빌드 해시
 #: 나중에 이 필드 전체를 믿을 수 없게 된다.
 META_PROVENANCE_SOURCE = "provenance_source"
 
-#: 버전이 **요구**하는 둘. 나머지 셋(pylibfranka·시스템 이미지·빌드)은
-#: 로봇이 답할 때만 오므로 요구하지 않는다 -- 시뮬레이터나 로봇이 꺼진
-#: 세션에도 파일은 찍혀야 하고, 그때 없는 값을 요구하면 도장이 통째로
-#: 내려간다. 커밋은 git 만 있으면 늘 읽히고, provenance_source 는 "이 값들이
-#: 언제 어떻게 들어왔는가" 라서 **판단에 필요한 최소**다.
-_PROVENANCE_REQUIRED = (META_COLLECTOR_COMMIT, META_PROVENANCE_SOURCE)
+#: 버전이 **요구하는 것은 하나뿐**이다: 이 값들이 어디서 왔는지.
+#:
+#: 커밋과 로봇 판번호를 요구하지 않는 이유가 각각 있다. 로봇 판번호는 팔이
+#: 꺼진 세션이나 시뮬레이터에서는 못 읽는다. 커밋은 **옛 파일에서 복구할 수
+#: 없다** -- 닥터가 뒤늦게 채울 때 쓸 수 있는 정직한 출처가 없고(다른 scene 의
+#: 커밋은 그 파일의 커밋이 아니다), 요구에 넣으면 이미 찍힌 파일들은 영원히
+#: 이 버전에 못 올라간다. 그래서 약속은 "**이 파일은 자기 출처가 어디서
+#: 왔는지 말한다**" 하나이고, live / backfilled 구분이 그 약속을 지킨다.
+_PROVENANCE_REQUIRED = (META_PROVENANCE_SOURCE,)
 
 #: 있으면 적는 것들 (검증이 요구하지는 않는다).
-_PROVENANCE_OPTIONAL = (META_PYLIBFRANKA_VERSION, META_FR3_SYSTEM_VERSION,
-                        META_FR3_SYSTEM_BUILD)
+_PROVENANCE_OPTIONAL = (META_COLLECTOR_COMMIT, META_PYLIBFRANKA_VERSION,
+                        META_FR3_SYSTEM_VERSION, META_FR3_SYSTEM_BUILD)
 
 #: 세 갈래 모두에 provenance 를 더한 PATCH 판 (2026-09-13 조작자 결정).
 #: 갈래가 셋인 이유는 지금 데이터셋에 셋이 다 살아 있기 때문이다 --

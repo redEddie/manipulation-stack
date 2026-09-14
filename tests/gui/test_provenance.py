@@ -49,14 +49,18 @@ LAYOUT = {"grid": [3, 3], "placements": {OBJ[0]: {"zone": [0, 0]}}}
 # ---- 1. 기본 기록 버전이 판번호를 요구한다 ----
 assert SCHEMA_VERSION == "knu-1.2.2", SCHEMA_VERSION
 need = SCHEMA_FIELDS[SCHEMA_VERSION]["metadata_attrs"]
-assert META_COLLECTOR_COMMIT in need and META_PROVENANCE_SOURCE in need, need
-# 로봇이 답해야만 아는 것들은 **요구하지 않는다** -- 시뮬레이터나 로봇이 꺼진
-# 세션에도 파일은 찍혀야 한다.
-assert META_PYLIBFRANKA_VERSION not in need and META_FR3_SYSTEM_VERSION not in need
+# 요구하는 것은 **하나**다: 이 값들이 어디서 왔는지.
+assert META_PROVENANCE_SOURCE in need, need
+# 나머지는 요구하지 않는다. 로봇 판번호는 팔이 꺼진 세션에서 못 읽고,
+# 커밋은 **옛 파일에서 복구할 수 없다** -- 요구하면 이미 찍힌 파일이 영원히
+# 이 버전에 못 올라간다 (닥터가 채워 올릴 길이 막힌다).
+for optional in (META_COLLECTOR_COMMIT, META_PYLIBFRANKA_VERSION,
+                 META_FR3_SYSTEM_VERSION):
+    assert optional not in need, optional
 # 세 갈래 모두 한 칸씩 올라간 판이 있다 (지금 데이터셋에 셋이 다 살아 있다).
 for v in ("knu-1.0.1", "knu-1.1.2", "knu-1.2.2"):
-    assert META_COLLECTOR_COMMIT in SCHEMA_FIELDS[v]["metadata_attrs"], v
-print("1. knu-1.2.2 가 요구하는 것 / 요구하지 않는 것 OK")
+    assert META_PROVENANCE_SOURCE in SCHEMA_FIELDS[v]["metadata_attrs"], v
+print("1. knu-1.2.2 가 요구하는 것 하나 / 요구하지 않는 것 셋 OK")
 
 # ---- 2. git 커밋을 읽는다 ----
 sha = collector_commit()
@@ -102,5 +106,46 @@ with tempfile.TemporaryDirectory() as d:
     assert v == "knu-1.2.1", v      # 한 칸 내려서 찍힌다
     assert "knu-1.2.2" in (w.version_note or ""), w.version_note
     print(f"4. 판번호 없으면 {v} 로 내려 찍고 이유를 남긴다 OK")
+
+    # ---- 5. 닥터가 옛 파일의 칸을 채워 도장을 올린다 ----
+    # 스크립트를 따로 두지 않는다 (조작자, 2026-09-13): 닥터가 이미 "같은
+    # 데이터셋의 다른 scene 에 적힌 값으로 채우고 올리는" 기계를 갖고 있다.
+    from mstack.scene.schema_doctor import (  # noqa: E402
+        diagnose,
+        fill_and_raise,
+        known_versions,
+    )
+
+    old = SceneMetadata(
+        scene_id="S002", objects=OBJ, layout=LAYOUT,
+        dataset_version="knu-1.2.1",
+        payload_mass=0.85, payload_com=[0.0, 0.0, 0.03],
+        reset_pose="libero", reset_qpos=[0.0] * 7)
+    SceneWriter(root, metadata=old, known_prop_ids=active_prop_ids()).close()
+    path = root / "scene_002.hdf5"
+    assert diagnose(path).stamped == "knu-1.2.1"
+
+    # 출처는 **같은 데이터셋의 다른 scene** 이다 (S000 이 live 로 갖고 있다).
+    known = known_versions(root)
+    assert known == {"pylibfranka_version": "0.21.2",
+                     "fr3_system_version": "5.10.0"}, known
+    got = fill_and_raise(path, versions=known, source="다른 scene")
+    assert got == "knu-1.2.2", got
+    with h5py.File(path, "r") as f:
+        a = dict(f["metadata"].attrs)
+    assert a[META_PYLIBFRANKA_VERSION] == "0.21.2"
+    assert str(a[META_PROVENANCE_SOURCE]).startswith("backfilled"), a[META_PROVENANCE_SOURCE]
+    assert "다른 scene" in str(a[META_PROVENANCE_SOURCE])
+    # 커밋은 **안 채운다** -- 다른 scene 의 커밋은 이 파일의 커밋이 아니다.
+    assert META_COLLECTOR_COMMIT not in a, "남의 커밋을 이 파일에 적었다"
+    print(f"5. 닥터가 채워 올린다 knu-1.2.1 → {got} (backfilled 로 표시) OK")
+
+    # ---- 6. live 는 덮지 않는다 ----
+    before = read_scene_metadata(root / "scene_000.hdf5").provenance_source
+    fill_and_raise(root / "scene_000.hdf5", versions={"fr3_system_version": "9.9.9"})
+    after = read_scene_metadata(root / "scene_000.hdf5")
+    assert after.provenance_source == before == "live", (before, after.provenance_source)
+    assert after.fr3_system_version == "5.10.0", after.fr3_system_version
+    print("6. 수집 시점에 적힌 값(live)은 나중 추정으로 안 덮인다 OK")
 
 print("test_provenance OK")

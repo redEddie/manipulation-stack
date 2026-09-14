@@ -342,13 +342,9 @@ def _stampable_version(want: str, has_payload: bool,
     want = normalize_schema_version(want)
     if want not in SCHEMA_FIELDS:
         return want
-    from mstack.data.dataset_schema import (
-        META_COLLECTOR_COMMIT,
-        META_PROVENANCE_SOURCE,
-    )
+    from mstack.data.dataset_schema import META_PROVENANCE_SOURCE
 
     have = {META_PAYLOAD_MASS: has_payload, META_RESET_POSE: has_reset,
-            META_COLLECTOR_COMMIT: has_provenance,
             META_PROVENANCE_SOURCE: has_provenance}
 
     def _ok(version: str) -> bool:
@@ -459,7 +455,7 @@ class SceneWriter:
             metadata.dataset_version = _stampable_version(
                 asked, metadata.payload_mass is not None,
                 bool(metadata.reset_pose and metadata.reset_qpos),
-                bool(metadata.collector_commit and metadata.provenance_source))
+                bool(metadata.provenance_source))
             if metadata.dataset_version != asked:
                 # **말없이 내리지 않는다.** _resume_version 이 못 올릴 때
                 # 이유를 남기는 것과 같은 이유다 -- 마법사에서 고른 버전과

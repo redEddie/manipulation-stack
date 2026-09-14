@@ -254,13 +254,25 @@ the arm is off, must still produce a stamped file. The FCI itself cannot answer
 — so the system image is read over HTTPS from the robot's own Desk, which
 answers without credentials on this network.
 
-`provenance_source` is what keeps the field trustworthy. Values backfilled by
-`scripts/convert/backfill_provenance.py` are **not** facts about recording time,
-and a reader must be able to tell. That script deliberately does not write
-`collector_commit` — the commit for an old file is not recoverable, only
-guessable from timestamps — and therefore does not raise the stamp either: a
-file must never claim a version whose fields it does not have (`knu-1.1.0` is
-the cautionary tale).
+Only `provenance_source` is **required**. The other four are optional for two
+different reasons: the robot-side three cannot be read when the arm is off, and
+`collector_commit` cannot be recovered for a file recorded before this version
+existed. Requiring the commit would lock every existing file out of the version
+forever. So the promise the version makes is narrower and keepable: *this file
+says where its provenance came from*.
+
+Backfilling is the **schema Doctor's** job, not a script's — it already fills a
+missing payload or reset pose from a sibling scene in the same dataset and
+raises the stamp in one step (`fill_and_raise`), and provenance rides along the
+same path (`known_versions` → `fill_and_raise(versions=...)`). Two rules there:
+
+* it writes `provenance_source = backfilled <date> (source)`, never `live`;
+* it never copies `collector_commit` from a sibling. A payload is a property of
+  the rig, so a sibling's value is evidence about this file too; a commit is not
+  — the sibling's commit is the sibling's.
+
+A file already marked `live` is left alone: a value read at recording time is
+never overwritten by a later inference.
 
 Three versions because the dataset currently holds three branches at once
 (fr3-tabletop: 14 files at `knu-1.0.0`, 1 at `knu-1.1.1`, 12 at `knu-1.2.1`).

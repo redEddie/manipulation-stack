@@ -210,6 +210,82 @@ def known_reset_pose(root: Path) -> "tuple[str, list] | None":
     return name, list(qpos)
 
 
+def known_versions(root: Path) -> "dict | None":
+    """이 데이터셋의 다른 scene 에 적힌 **판번호**. 없거나 섞였으면 None.
+
+    known_payload 와 같은 근거다 -- 같은 리그에서 같은 시기에 찍은 파일에
+    남아 있는 사실이지 추측이 아니다. 값이 갈리면(펌웨어를 올린 적이 있으면)
+    None 이고, 그때는 어느 것이 맞는지 파일이 말해 주지 않으므로 사람이
+    확인해야 한다.
+
+    **커밋은 가져오지 않는다.** 다른 scene 의 커밋은 그 scene 의 커밋이지 이
+    파일의 것이 아니다 -- 부하 모델(리그의 성질)과 달리 파일마다 다를 수 있는
+    값이라, 같은 논리가 서지 않는다.
+    """
+    from mstack.scene.scene_format import iter_scene_files
+
+    seen: dict = {}
+    for path in iter_scene_files(Path(root)):
+        try:
+            md = read_scene_metadata(path)
+        except Exception:  # noqa: BLE001
+            continue
+        if not md.pylibfranka_version and not md.fr3_system_version:
+            continue
+        key = (md.pylibfranka_version or "", md.fr3_system_version or "",
+               md.fr3_system_build or "")
+        seen[key] = seen.get(key, 0) + 1
+    if len(seen) != 1:
+        return None
+    (pyl, sys_v, build), _n = next(iter(seen.items()))
+    out = {}
+    if pyl:
+        out["pylibfranka_version"] = pyl
+    if sys_v:
+        out["fr3_system_version"] = sys_v
+    if build:
+        out["fr3_system_build"] = build
+    return out or None
+
+
+def fill_versions(path: Path, values: dict, source: str = "") -> str:
+    """판번호를 채우고, 그러고 나서 만족하는 버전으로 다시 찍는다.
+
+    ``provenance_source`` 를 **반드시 함께 쓴다** -- 그것이 이 버전이 요구하는
+    유일한 값이고, "이 값들이 언제 어떻게 들어왔는가" 를 말하는 자리다. 여기서
+    들어온 값은 수집 시점에 읽은 것이 아니므로 ``backfilled <날짜>`` 다.
+    """
+    from mstack.data.dataset_schema import (
+        META_FR3_SYSTEM_BUILD,
+        META_FR3_SYSTEM_VERSION,
+        META_PROVENANCE_SOURCE,
+        META_PYLIBFRANKA_VERSION,
+    )
+
+    import time as _time
+
+    key_map = {"pylibfranka_version": META_PYLIBFRANKA_VERSION,
+               "fr3_system_version": META_FR3_SYSTEM_VERSION,
+               "fr3_system_build": META_FR3_SYSTEM_BUILD}
+    stamp = f"backfilled {_time.strftime('%Y-%m-%d')}"
+    if source:
+        stamp += f" ({source})"
+    with h5py.File(Path(path), "r+") as f:
+        meta = f["metadata"]
+        if str(meta.attrs.get(META_PROVENANCE_SOURCE, "")).startswith("live"):
+            # 수집하며 적힌 값을 나중 추정으로 덮지 않는다.
+            raise ValueError("이 파일의 판번호는 수집 시점에 적힌 값(live)이다")
+        for k, attr in key_map.items():
+            if values.get(k):
+                meta.attrs[attr] = str(values[k])
+        meta.attrs[META_PROVENANCE_SOURCE] = stamp
+    after = diagnose(Path(path))
+    if after.satisfied and after.satisfied != after.stamped:
+        restamp(Path(path), after.satisfied)
+        return after.satisfied
+    return after.stamped
+
+
 def fill_reset_pose(path: Path, name: str, qpos: list) -> str:
     """리셋 자세를 채우고, 그러고 나서 만족하는 버전으로 다시 적는다."""
     from mstack.data.dataset_schema import META_RESET_POSE, META_RESET_QPOS
@@ -305,7 +381,8 @@ def reset_drift(path: Path, expected: "list | None" = None) -> "dict | None":
     return {"checked": checked, "worst": worst, "over": over}
 
 
-def reachable_version(path: Path, *, payload=None, reset=None) -> str:
+def reachable_version(path: Path, *, payload=None, reset=None,
+                      versions=None) -> str:
     """지금 파일에 **줄 수 있는 값까지 채웠을 때** 닿는 가장 높은 버전.
 
     ``satisfied`` 는 "지금 파일이 만족하는" 이고 이것은 "채우면 만족할 수
@@ -315,7 +392,11 @@ def reachable_version(path: Path, *, payload=None, reset=None) -> str:
 
     쓰지 않는다 -- 무엇에 닿는지만 계산한다.
     """
-    from mstack.data.dataset_schema import META_PAYLOAD_COM, META_PAYLOAD_MASS
+    from mstack.data.dataset_schema import (
+        META_PAYLOAD_COM,
+        META_PAYLOAD_MASS,
+        META_PROVENANCE_SOURCE,
+    )
 
     with h5py.File(Path(path), "r") as f:
         have = set(f["metadata"].attrs)
@@ -323,6 +404,10 @@ def reachable_version(path: Path, *, payload=None, reset=None) -> str:
             have |= {META_PAYLOAD_MASS, META_PAYLOAD_COM}
         if reset:
             have |= {META_RESET_POSE, META_RESET_QPOS}
+        if versions:
+            # 판번호를 채울 수 있으면 provenance_source 도 함께 적힌다 --
+            # 그 둘은 한 연산이다 (fill_and_raise).
+            have |= {META_PROVENANCE_SOURCE}
         best = ""
         for v in _versions():
             need = SCHEMA_FIELDS[v]
@@ -352,15 +437,28 @@ def _missing_ep_fields(f: h5py.File, version: str) -> bool:
     return False
 
 
-def fill_and_raise(path: Path, *, payload=None, reset=None) -> str:
+def fill_and_raise(path: Path, *, payload=None, reset=None,
+                   versions=None, source: str = "") -> str:
     """빠진 metadata 를 채우고 만족하는 가장 높은 버전으로 올린다.
 
     채우기와 버전 변경을 한 연산으로 묶는 이유는 fill_payload 와 같다 --
     따로면 "채웠는데 버전은 그대로" 인 파일이 남는다.
+
+    ``versions`` 는 판번호(knu-1.x.2)다. 채우면 ``provenance_source`` 를
+    ``backfilled <날짜>`` 로 함께 적는다 -- 수집 시점에 읽은 값이 아니라는
+    사실이 파일에 남아야 한다. 이미 ``live`` 로 적힌 파일은 건드리지 않는다.
     """
-    from mstack.data.dataset_schema import META_PAYLOAD_COM, META_PAYLOAD_MASS
+    from mstack.data.dataset_schema import (
+        META_FR3_SYSTEM_BUILD,
+        META_FR3_SYSTEM_VERSION,
+        META_PAYLOAD_COM,
+        META_PAYLOAD_MASS,
+        META_PROVENANCE_SOURCE,
+        META_PYLIBFRANKA_VERSION,
+    )
 
     import json as _json
+    import time as _time
 
     with h5py.File(Path(path), "r+") as f:
         meta = f["metadata"]
@@ -372,6 +470,16 @@ def fill_and_raise(path: Path, *, payload=None, reset=None) -> str:
             meta.attrs[META_RESET_POSE] = str(reset[0])
             meta.attrs[META_RESET_QPOS] = _json.dumps(
                 [float(x) for x in reset[1]])
+        live = str(meta.attrs.get(META_PROVENANCE_SOURCE, "")).startswith("live")
+        if versions is not None and not live:
+            for key, attr in (("pylibfranka_version", META_PYLIBFRANKA_VERSION),
+                              ("fr3_system_version", META_FR3_SYSTEM_VERSION),
+                              ("fr3_system_build", META_FR3_SYSTEM_BUILD)):
+                if versions.get(key):
+                    meta.attrs[attr] = str(versions[key])
+            stamp = f"backfilled {_time.strftime('%Y-%m-%d')}"
+            meta.attrs[META_PROVENANCE_SOURCE] = (
+                f"{stamp} ({source})" if source else stamp)
     after = diagnose(Path(path))
     if after.satisfied and after.satisfied != after.stamped:
         restamp(Path(path), after.satisfied)

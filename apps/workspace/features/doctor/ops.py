@@ -36,6 +36,7 @@ from mstack.scene.props import props_by_id
 from mstack.scene.collection_progress import scan
 from mstack.data.dataset_schema import schema_version_key
 from mstack.scene.schema_doctor import (
+    known_versions,
     RESET_TOLERANCE_DEG,
     diagnose,
     fill_payload,
@@ -835,7 +836,7 @@ class DoctorOps:
         self._show_drift(d)
         # 채우면 어디까지 갈 수 있는지 먼저 센다 -- 아래 안내와 버튼 라벨이
         # 둘 다 이 값을 본다.
-        up_to, _p, _r, _ff = self._reachable(d)
+        up_to, _p, _r, _ff, _v = self._reachable(d)
         if d.error:
             miss.setText(d.error)
             plan.setText(tr("읽지 못해 판단할 수 없습니다."))
@@ -908,7 +909,11 @@ class DoctorOps:
         from_file = reset is not None
         if reset is None:
             reset = self._station_reset_pose()
-        return payload, reset, from_file
+        # 판번호도 같은 근거로 가져온다 (knu-1.x.2) -- 같은 리그·같은 시기에
+        # 찍힌 파일에 적힌 값이다. 커밋은 가져오지 않는다: 다른 scene 의
+        # 커밋은 그 scene 의 것이지 이 파일의 것이 아니다.
+        versions = known_versions(root)
+        return payload, reset, from_file, versions
 
     def _reachable(self, d):
         """채우면 닿는 가장 높은 버전. 지금 만족하는 것과 같으면 빈 문자열."""
@@ -917,17 +922,18 @@ class DoctorOps:
         # 하는 별도의 결정이다. 여기서 가로채면 "지금 거짓말을 하고 있다" 는
         # 사실이 "더 높이 갈 수 있다" 로 덮인다.
         if d.error or not d.scene_id or d.can_restamp:
-            return "", None, None, False
-        payload, reset, from_file = self._fill_sources()
+            return "", None, None, False, None
+        payload, reset, from_file, versions = self._fill_sources()
         try:
             v = reachable_version(self._path(d.scene_id),
-                                  payload=payload, reset=reset)
+                                  payload=payload, reset=reset,
+                                  versions=versions)
         except Exception:  # noqa: BLE001
-            return "", None, None, False
+            return "", None, None, False, None
         if not v or schema_version_key(v) <= schema_version_key(
                 d.satisfied or "knu-0.0.0"):
-            return "", None, None, False
-        return v, payload, reset, from_file
+            return "", None, None, False, None
+        return v, payload, reset, from_file, versions
 
     def _show_drift(self, d) -> None:
         """적힌 리셋 자세와 실제 첫 프레임의 어긋남.
@@ -969,9 +975,9 @@ class DoctorOps:
         d = self._diag
         if d is None:
             return
-        up_to, payload, reset, from_file = self._reachable(d)
+        up_to, payload, reset, from_file, versions = self._reachable(d)
         if up_to:
-            self._fill_and_raise(d, up_to, payload, reset, from_file)
+            self._fill_and_raise(d, up_to, payload, reset, from_file, versions)
             return
         if not d.can_restamp:
             return
@@ -1000,7 +1006,8 @@ class DoctorOps:
         win.log(f"[닥터] {d.scene_id} 데이터세트 버전 {d.stamped} → {d.satisfied}")
         self.refresh_schema()
 
-    def _fill_and_raise(self, d, up_to, payload, reset, from_file) -> None:
+    def _fill_and_raise(self, d, up_to, payload, reset, from_file,
+                        versions=None) -> None:
         """빠진 값을 채우고 닿는 가장 높은 버전으로 올린다."""
         win = self.win
         if win.worker is not None:
@@ -1015,6 +1022,12 @@ class DoctorOps:
             src.append(tr("리셋 자세 {n} ({where})").format(
                 n=reset[0], where=tr("데이터셋의 다른 scene") if from_file
                 else tr("지금 station 설정")))
+        if versions:
+            src.append(tr("판번호 {v} (데이터셋의 다른 scene) — "
+                          "**수집 당시 읽은 값이 아니라** 나중에 채운 것으로 "
+                          "표시됩니다 (backfilled)").format(
+                              v=" · ".join(f"{k.split('_')[0]}={x}"
+                                           for k, x in versions.items())))
         ok = QMessageBox.question(
             win, tr("데이터세트 버전 올리기"),
             tr("{sid} 를 {a} → {b} 로 올립니다.\n\n채워 넣을 값:\n{src}\n\n"
@@ -1029,7 +1042,9 @@ class DoctorOps:
             return
         try:
             got = fill_and_raise(self._path(d.scene_id),
-                                 payload=payload, reset=reset)
+                                 payload=payload, reset=reset,
+                                 versions=versions,
+                                 source=tr("같은 데이터셋의 다른 scene"))
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(win, tr("버전 변경 실패"), str(e))
             return
