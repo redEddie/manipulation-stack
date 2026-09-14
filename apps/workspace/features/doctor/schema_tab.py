@@ -15,6 +15,7 @@
 데이터를 안 읽는다. 그래서 이 화면은 분포를 보여주고 **어긋남만** 고친다.
 """
 from PyQt6.QtWidgets import (
+    QPushButton,
     QHeaderView,
     QLabel,
     QTreeWidget,
@@ -49,6 +50,17 @@ def build_schema_tab(win) -> QWidget:
     win.schema_tree.itemClicked.connect(
         lambda item, _c: win.doctor.on_schema_picked(item))
     col.addWidget(win.schema_tree, 1)
+
+    # 일괄 올리기는 **줄 선택과 무관**하다 -- 27개를 한 줄씩 눌러 올리는 것은
+    # 실제로 못 할 일이다 (조작자, 2026-09-14). 오른쪽 패널의 버튼은 고른
+    # 한 줄에 대한 것이고, 이것은 데이터셋 전체에 대한 것이라 여기 둔다.
+    win.schema_all_btn = QPushButton(tr("올릴 수 있는 것 한 번에 올리기"))
+    win.schema_all_btn.setToolTip(tr(
+        "채워서 버전을 올릴 수 있는 scene 을 전부 올립니다. 파일마다 닿는 곳을 "
+        "따로 계산하므로 버전이 섞여 있어도 됩니다. 확인창이 무엇이 어디로 "
+        "가는지 전부 보여줍니다."))
+    win.schema_all_btn.clicked.connect(lambda: win.doctor.align_all())
+    col.addWidget(win.schema_all_btn)
 
     win.schema_hint = QLabel("")
     win.schema_hint.setWordWrap(True)

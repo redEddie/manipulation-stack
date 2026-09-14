@@ -806,7 +806,103 @@ class DoctorOps:
             if not bad else tr(
             "'찍힘' 과 '내용' 이 다른 줄은 검증이 실패합니다. 줄을 눌러 "
             "무엇이 빠졌는지 보세요."))
+        # 올릴 수 있는 것이 몇 개인지 버튼이 직접 말한다 -- 눌러 보기 전에
+        # 알 수 있어야 한다.
+        btn = getattr(win, "schema_all_btn", None)
+        if btn is not None:
+            n = len(self.upgradable())
+            btn.setText(tr("올릴 수 있는 {n}개 한 번에 올리기").format(n=n)
+                        if n else tr("한 번에 올릴 것 없음"))
+            btn.setEnabled(bool(n))
         self._show_schema_detail()
+
+    def upgradable(self) -> list:
+        """지금 **채워서 올릴 수 있는** scene 전부. [(scene_id, 찍힘, 닿는 곳)].
+
+        한 줄씩 눌러 올리기에는 27개가 너무 많다 (조작자, 2026-09-14).
+        버전이 같은지 묻지 않고 **파일마다 닿는 곳을 따로 계산한다** -- 같은
+        데이터셋에 1.0.0 과 1.2.1 이 섞여 있고 둘의 목적지가 다르기 때문이다
+        (1.0.0 은 힘·토크 관측이 없어 1.2.x 로는 못 간다). 섞여 있다고 막으면
+        정작 올릴 수 있는 것들이 함께 막힌다.
+        """
+        out = []
+        try:
+            files = iter_scene_files(self._root())
+        except Exception:  # noqa: BLE001
+            return out
+        payload, reset, _from_file, versions = self._fill_sources()
+        for path in files:
+            try:
+                d = diagnose(path)
+                if d.error or d.can_restamp:
+                    continue        # 어긋난 파일은 먼저 사실에 맞춘다
+                v = reachable_version(path, payload=payload, reset=reset,
+                                      versions=versions)
+            except Exception:  # noqa: BLE001
+                continue
+            if v and schema_version_key(v) > schema_version_key(
+                    d.satisfied or "knu-0.0.0"):
+                out.append((d.scene_id, d.stamped or "?", v))
+        return out
+
+    def align_all(self) -> None:
+        """올릴 수 있는 것을 **한 번에** 올린다.
+
+        확인창이 파일별로 어디서 어디로 가는지 전부 보여준다 -- 일괄 조작은
+        무엇이 바뀌는지 안 보이는 것이 가장 위험하고, 여기는 되돌릴 수 없는
+        파일 수정이다.
+        """
+        win = self.win
+        if win.worker is not None:
+            QMessageBox.information(win, tr("수집 중"),
+                                    tr("세션을 끝낸 뒤 고치세요."))
+            return
+        todo = self.upgradable()
+        if not todo:
+            QMessageBox.information(
+                win, tr("올릴 것 없음"),
+                tr("지금 채워서 올릴 수 있는 scene 이 없습니다.\n\n"
+                   "판번호(knu-1.x.2)로 올리려면 **이 데이터셋에 판번호가 적힌 "
+                   "파일이 하나는 있어야 합니다** — 닥터는 같은 데이터셋의 다른 "
+                   "scene 에 적힌 값을 출처로 쓰기 때문입니다. 새 코드로 한 "
+                   "세션만 찍으면 그 파일이 생기고, 그때 나머지를 한 번에 "
+                   "올릴 수 있습니다."))
+            return
+        payload, reset, from_file, versions = self._fill_sources()
+        src = []
+        if payload:
+            src.append(tr("부하 모델 {m} kg").format(m=payload[0]))
+        if reset:
+            src.append(tr("리셋 자세 {n} ({w})").format(
+                n=reset[0], w=tr("다른 scene") if from_file else tr("station 설정")))
+        if versions:
+            src.append(tr("판번호 {v} — backfilled 로 표시").format(
+                v=" · ".join(str(x) for x in versions.values())))
+        lines = "\n".join(f"  · {sid}: {a} → {b}" for sid, a, b in todo[:30])
+        more = tr("\n  … 외 {n}개").format(n=len(todo) - 30) if len(todo) > 30 else ""
+        if QMessageBox.question(
+                win, tr("데이터세트 버전 일괄 올리기"),
+                tr("{n}개 scene 을 올립니다:\n{l}{more}\n\n채워 넣을 값:\n{src}\n\n"
+                   "되돌릴 수 없습니다. 진행할까요?").format(
+                       n=len(todo), l=lines, more=more,
+                       src="\n".join(f"  · {x}" for x in src) or tr("  (없음)")),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        done = failed = 0
+        for sid, a, _b in todo:
+            try:
+                got = fill_and_raise(self._path(sid), payload=payload,
+                                     reset=reset, versions=versions,
+                                     source=tr("같은 데이터셋의 다른 scene"))
+                win.log(f"[닥터] {sid} 데이터세트 버전 {a} → {got}")
+                done += 1
+            except Exception as e:  # noqa: BLE001
+                win.log(f"[닥터] {sid} 올리기 실패: {type(e).__name__}: {e}")
+                failed += 1
+        win.log(f"[닥터] 일괄 버전 올리기: {done}개 성공"
+                + (f" · {failed}개 실패" if failed else ""))
+        self.refresh_schema()
 
     def on_schema_picked(self, item) -> None:
         self._diag = item.data(0, Qt.ItemDataRole.UserRole) if item else None
