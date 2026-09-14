@@ -140,9 +140,12 @@ Two things that look like safety layers and are not:
   env var**, so a fresh dev state dir still defaults to the real
   `~/libero_datasets`; point it elsewhere on the dev GUI's first launch.
   The two cannot run at once: same ZMQ ports, and the FCI accepts one client.
-- `dev` exists now, so systemic work goes there first and reaches `main` by
-  `--ff-only` merge after the suite passes *and* the operator has run it on the
-  robot. `main` is what the icon pulls for real collection. (The leader-drop
+- `dev` exists now, so **all work stays on `dev`** and reaches `main` by
+  `--ff-only` merge only after the suite passes, the operator has run it on the
+  robot, *and* the operator has said this particular change is worth merging
+  (2026-09-14). One "let's merge" covers that change, not the ones after it —
+  pushing `dev:main` by default is how a red suite reached `main` on
+  2026-09-14. `main` is what the icon pulls for real collection. (The leader-drop
   safety layer is the exception on record: it landed on `main` on 2026-09-10
   before any hardware run, because the operator asked for it live rather than
   in shadow mode.)
