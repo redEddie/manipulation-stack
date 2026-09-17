@@ -1,26 +1,29 @@
-"""소품 위치 편향 검정 — 물체 종류가 격자 칸을 예측하는가 (논문용).
+"""Prop position bias test -- does an object's category predict its grid cell?
+(analysis for the paper)
 
-audit_scene_diversity.py 의 position 균등성은 **종류를 무시한** 칸 사용
-빈도라, "컵은 늘 왼쪽 열" 같은 종류–위치 결합을 못 잡는다. 여기서는 그
-결합을 상호정보량으로 재고 순열 검정으로 우연과 구별한다.
+The position uniformity in audit_scene_diversity.py counts cell usage while
+ignoring category, so it cannot see a category-position coupling such as
+"cups always sit in the left column". This script measures that coupling with
+mutual information and separates it from chance with a permutation test.
 
-    U = H(Z) / log|Z|                       칸 사용 균등성 (1 = 9칸 고르게)
-    I(K;Z) = H(K) + H(Z) - H(K,Z)           종류 K 와 칸 Z 의 결합 (0 = 독립)
-    p = (#{I_null >= I_obs} + 1) / (N + 1)  칸 라벨을 섞었을 때 이만큼 나올 확률
+    U = H(Z) / log|Z|                       cell-usage uniformity (1 = all 9 cells evenly)
+    I(K;Z) = H(K) + H(Z) - H(K,Z)           coupling of category K and cell Z (0 = independent)
+    p = (#{I_null >= I_obs} + 1) / (N + 1)  chance of an I this large once cell labels are shuffled
 
-역할 세 가지를 따로 잰다:
-    all  scene 에 놓인 모든 물체
-    obj  지시문이 조작하는 물체 (pick/drag/tidy 의 대상, drawer 동사는 서랍)
-    tgt  지시문의 목적지 물체
+Three roles are measured separately:
+    all  every object placed in a scene
+    obj  the object an instruction manipulates (pick/drag/tidy; the drawer for drawer verbs)
+    tgt  the destination object of an instruction
 
-**순열은 물리 배치 (scene, 물체) 단위로 섞는다.** 한 scene 에서 같은 지시문을
-10번 수집해도 배치는 한 번 정해진 것이다. 에피소드를 하나씩 섞으면(단순
-순열) 10개가 독립 관측인 척 되어 무작위 기준값이 비현실적으로 낮아지고,
-결합이 없어도 p < 0.001 이 나온다 (가짜 반복). 두 결과를 나란히 찍어
-그 차이 자체를 보여준다. 에피소드 가중치는 정책이 학습에서 보는 분포라
-유지한다.
+**Permutations shuffle physical placements, (scene, object), not episodes.**
+Collecting the same instruction ten times in one scene still decides the
+placement once. Shuffling episodes one by one (naive permutation) treats those
+ten as independent observations, drives the null unrealistically low, and gives
+p < 0.001 with no coupling at all (pseudo-replication). Both results are printed
+side by side so the gap itself is visible. Episode weights are kept because they
+are the distribution a policy sees in training.
 
-사용:
+Usage:
     python scripts/analyze/audit_position_bias.py --root ~/libero_datasets/fr3-tabletop
     python scripts/analyze/audit_position_bias.py --selftest
 """
@@ -54,10 +57,10 @@ ROLES = ("all", "obj", "tgt")
 
 
 def instruction_roles(sentence: str, md, props: dict) -> tuple:
-    """지시문 -> (조작 물체 oid, 목적지 oid). 못 정하면 그 자리가 None.
+    """Instruction -> (manipulated oid, destination oid); None where unresolved.
 
-    정규식 그룹에는 관사가 빠져 있다 ("small blue bowl") -- resolve_reference 는
-    "the ..." 로 시작하는 지칭 구를 받으므로 붙여서 넘긴다.
+    The regex groups carry no article ("small blue bowl"), while
+    resolve_reference expects a phrase starting with "the", so it is prepended.
     """
     s = sentence.strip().strip('"')
     if s in ("open the top drawer", "close the top drawer"):
@@ -75,22 +78,27 @@ def instruction_roles(sentence: str, md, props: dict) -> tuple:
 
 
 def collect(root: Path, props: dict) -> tuple:
-    """역할별 {(scene, oid): [종류, 칸, 에피소드 수]} 와 해석 실패 수."""
+    """Per role {(scene, oid): [category, cell, episode count]}, plus unresolved counts."""
     units = {r: {} for r in ROLES}
     unresolved = Counter()
     for p in iter_scene_files(root):
-        md = read_scene_metadata(p)
+        try:
+            md = read_scene_metadata(p)
+            episodes = list_scene_episodes(p)
+        except OSError as e:          # locked by a live collection -- skip, never wait
+            print(f"[경고] {p.name} 읽기 실패 ({type(e).__name__}) -- 제외")
+            continue
         for oid in md.objects:
             z = _zone(md, oid)
             if oid in props and z is not None:
                 units["all"][(md.scene_id, oid)] = [props[oid].category, tuple(z), 1]
-        for e in list_scene_episodes(p):
+        for e in episodes:
             text = str(e.get("instruction", ""))
             o, t = instruction_roles(text, md, props)
             wants_tgt = "drawer" not in text or "into the" in text
             for role, oid in (("obj", o), ("tgt", t)):
                 if role == "tgt" and not wants_tgt:
-                    continue                  # 서랍 열기/닫기엔 목적지가 없다
+                    continue                  # drawer open/close has no destination
                 z = _zone(md, oid) if oid else None
                 if z is None:
                     unresolved[role] += 1
@@ -107,7 +115,7 @@ def _entropy(c: Counter) -> float:
 
 
 def mutual_info(cats: list, cells: list, weights: list) -> float:
-    """가중 I(K;Z) [nats]."""
+    """Weighted I(K;Z) in nats."""
     joint, kc, zc = Counter(), Counter(), Counter()
     for k, z, w in zip(cats, cells, weights):
         joint[(k, z)] += w
@@ -137,16 +145,16 @@ def _perm(cats, cells, weights, iters, rng) -> tuple:
 
 
 def test_role(unit_list: list, iters: int, seed: int) -> dict:
-    """unit_list = [[종류, 칸, 에피소드 수], ...] 한 역할분."""
+    """unit_list = [[category, cell, episode count], ...] for one role."""
     cats = [u[0] for u in unit_list]
     cells = [u[1] for u in unit_list]
     w = [u[2] for u in unit_list]
     n_cells = GRID[0] * GRID[1]
-    # 단순 순열: 에피소드를 하나하나 독립 관측으로 펼친다 (가짜 반복)
+    # naive: expand episodes into independent observations (pseudo-replication)
     flat_k = [k for k, n in zip(cats, w) for _ in range(n)]
     flat_z = [z for z, n in zip(cells, w) for _ in range(n)]
     naive = _perm(flat_k, flat_z, [1] * len(flat_k), iters, random.Random(seed))
-    # 군집 순열: 물리 배치 단위로 섞고 에피소드 가중치는 유지
+    # cluster: shuffle per physical placement, keep episode weights
     cluster = _perm(cats, cells, w, iters, random.Random(seed))
     return {"units": len(unit_list), "episodes": sum(w),
             "U": uniformity(cells, w, n_cells), "I": cluster[0],
@@ -181,20 +189,21 @@ def _selftest() -> None:
     rng = random.Random(3)
     cats = ["cup", "bowl", "tray"]
 
-    # 1. 종류가 칸을 결정하면(컵=0행, 그릇=1행, 트레이=2행) 군집 p 가 작다
+    # 1. when category fixes the row (cup=0, bowl=1, tray=2) the cluster p is small
     dep = [[k, (i, rng.randrange(3)), 5] for _ in range(20)
            for i, k in enumerate(cats)]
     r = test_role(dep, 500, 0)
     assert r["cluster_p"] < 0.01, r
 
-    # 2. 독립 배치에 에피소드를 20번씩 복제하면 단순 순열은 거짓 양성,
-    #    군집 순열은 아니다 -- 이 스크립트가 존재하는 이유
+    # 2. independent placements replicated 20 episodes each: the naive test
+    #    reports a false positive, the cluster test does not -- the reason
+    #    this script exists
     ind = [[rng.choice(cats), rng.choice(cells), 20] for _ in range(24)]
     r = test_role(ind, 500, 0)
     assert r["naive_p"] < 0.01, r
     assert r["cluster_p"] > 0.05, r
 
-    # 3. 지시문 해석: 관사 없는 정규식 그룹도 물체로 이어진다
+    # 3. instruction parsing: article-less regex groups still resolve
     from mstack.scene.scene_format import SceneMetadata
     props = props_by_id()
     md = SceneMetadata(
@@ -209,6 +218,15 @@ def _selftest() -> None:
         md, props)
     assert (o, t) == ("OBJ-BOWLS-BLU-01", "OBJ-BOWLL-WHT-01"), (o, t)
     assert instruction_roles("open the top drawer", md, props) == ("OBJ-DRAWER-01", None)
+    # colorless references (tray, cutlery) resolve too -- otherwise every tidy
+    # and "... the wooden tray" episode silently drops out of the counts
+    md2 = SceneMetadata(
+        scene_id="S001", objects=["OBJ-CUTLERY-SET-01", "OBJ-TRAY-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-CUTLERY-SET-01": {"zone": [2, 0]},
+            "OBJ-TRAY-01": {"zone": [0, 2]}}})
+    assert instruction_roles("tidy the cutlery into the wooden tray", md2, props) \
+        == ("OBJ-CUTLERY-SET-01", "OBJ-TRAY-01")
     print("position bias selftest 통과")
 
 
