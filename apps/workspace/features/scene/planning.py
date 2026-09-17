@@ -121,6 +121,17 @@ class ScenePlanningOps:
         top = item.parent() or item
         return top.data(0, _SCENE_ROLE)
 
+    def select_plan_scene(self, sid: "str | None") -> None:
+        """Make that scene's header row current again (after a refill)."""
+        tree = getattr(self.win, "plan_progress_tree", None)
+        if tree is None or not sid:
+            return
+        for i in range(tree.topLevelItemCount()):
+            it = tree.topLevelItem(i)
+            if it.data(0, _SCENE_ROLE) == sid:
+                tree.setCurrentItem(it)
+                return
+
     def show_plan_layout(self, item) -> None:
         """Right panel Layout box: the placement of the picked row's scene."""
         card = getattr(self.win, "conf_layout_card", None)
@@ -293,13 +304,19 @@ class ScenePlanningOps:
                 return
             self.win.log(f"[지시문] 지시문 파일 생성: {path}")
             self.on_plan_changed()
-        dlg = PlanEditDialog(self.win, path, scene_id=self.selected_plan_scene())
+        picked = self.selected_plan_scene()
+        dlg = PlanEditDialog(self.win, path, scene_id=picked)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             for w in getattr(dlg, "warnings", []):
                 self.win.log(f"[지시문 경고] {w}")
             self.win.log(f"[지시문] {path.name} 저장됨")
             # 갱신된 목표/slot 이 화면에 반영되게
             self.on_plan_changed()
+            # The center table is the screen this button sits beside; without
+            # a refill it kept saying "지시문이 없습니다" after a save, which read
+            # as the save having failed (2026-09-17).
+            self.refresh_plan_progress()
+            self.select_plan_scene(picked)
 
     def on_plan_changed(self) -> None:
         """계획 파일이 생기/바뀌/사라지거나 데이터셋(저장 경로)이 바뀐 뒤

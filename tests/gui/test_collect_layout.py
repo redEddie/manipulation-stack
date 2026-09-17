@@ -415,9 +415,12 @@ opened: dict = {}
 class _FakePlanDialog:
     def __init__(self, _parent, _path, scene_id=None):
         opened["scene_id"] = scene_id
+        self.warnings = []
 
     def exec(self):
-        return 0
+        # A save refills the center table and keeps the picked scene current.
+        tree.clear()
+        return _planning.QDialog.DialogCode.Accepted
 
 
 _real_dialog = _planning.PlanEditDialog
@@ -427,6 +430,8 @@ try:
 finally:
     _planning.PlanEditDialog = _real_dialog
 assert opened.get("scene_id") == "S000", opened
+assert tree.topLevelItemCount() >= 1, "the plan table was not refilled after a save"
+assert win.scene_planning.selected_plan_scene() == "S000", "the picked scene was lost on refill"
 print("13. Instruction 탭 줄 클릭 = scene + 지시문 OK (세션 중엔 잠김) · 제목행 전체 펼치기/접기 OK · 고른 scene 배치/편집 OK")
 
 # ---------------------- 14. 새 Scene = 탭 + **누르는 즉시 파일** (여러 개)
