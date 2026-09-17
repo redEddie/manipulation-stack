@@ -406,9 +406,11 @@ def resolve_reference(phrase: str, md: SceneMetadata,
     if parsed is None:
         return None
     color, category = parsed
+    # Colorless categories (drawer, tray, cutlery) parse with color "" --
+    # filtering on color would make "the wooden tray" resolve to nothing.
     group = [o for o in md.objects
-             if o in props and props[o].color == color
-             and props[o].category == category]
+             if o in props and props[o].category == category
+             and (category in _NO_COLOR_CATS or props[o].color == color)]
     if len(group) == 1:
         return group[0]
     if not group or not qual:
