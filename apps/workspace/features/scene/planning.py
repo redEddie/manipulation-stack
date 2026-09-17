@@ -97,6 +97,7 @@ class ScenePlanningOps:
             total += s_total
             tree.addTopLevelItem(top)
         tree.expandAll()
+        tree.header().viewport().update()      # the header arrow reads the tree
         pct = (100 * done // total) if total else 0
         text = tr("전체 {d}/{t} ({p}%) — {n}").format(
             d=done, t=total, p=pct, n=plan.path.name)
