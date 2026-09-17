@@ -225,6 +225,50 @@ dlg8._on_compact_ids()
 assert warns and "이미 수집된" in warns[-1]
 print("8 통과: 번호 정리 -- 빈 scene 압축(I000..) / 수집된 scene 거부")
 
+# ---- 9. Suggested sentences fill a scene without typing ----
+# The grammar's sentences for the scene's own layout are offered as checkboxes;
+# ticked ones become rows, and sentences already in the table are not offered.
+from apps.workspace.features.scene.dialogs import plan_edit_dialog as ped  # noqa: E402
+from mstack.scene.props import props_by_id  # noqa: E402
+from mstack.scene.scene_format import SceneMetadata, SceneWriter  # noqa: E402
+from mstack.scene.skill_stats import rank_instructions  # noqa: E402
+
+md9 = SceneMetadata(
+    scene_id="S000", objects=["OBJ-CUP-BLU-01", "OBJ-CUP-WHT-01", "OBJ-BOWLL-WHT-01"],
+    layout={"grid": [3, 3], "placements": {
+        "OBJ-CUP-BLU-01": {"zone": [0, 0]}, "OBJ-CUP-WHT-01": {"zone": [0, 2]},
+        "OBJ-BOWLL-WHT-01": {"zone": [2, 1]}}})
+SceneWriter(TMP, metadata=md9, collector="t").close()   # beside the plan file
+cands = [r[0] for r in rank_instructions(md9, props_by_id(), {})]
+assert len(cands) >= 3, cands
+
+dlg9 = PlanEditDialog(None, plan_copy)
+for i in range(dlg9.tree.topLevelItemCount()):
+    dlg9.tree.topLevelItem(i).setSelected(True)
+dlg9._on_del_row()                              # start from an empty scene
+dlg9._add_row({"id": None, "instr": cands[0], "target": 10})
+seen: dict = {}
+
+
+def _fake_exec(self):
+    seen["offered"] = [cb.text() for cb in self._checks]
+    for cb in self._checks:
+        cb.setChecked(False)
+    self._checks[0].setChecked(True)
+    self._checks[1].setChecked(True)
+    self._accept()
+    return ped.QDialog.DialogCode.Accepted
+
+
+ped.SuggestSentencesDialog.exec = _fake_exec
+dlg9._on_suggest()
+assert cands[0] not in seen["offered"], "a sentence already in the table was offered again"
+assert set(seen["offered"]) == set(cands[1:]), seen["offered"]
+rows = dlg9._collect_rows()
+assert [r["instr"] for r in rows] == [cands[0]] + seen["offered"][:2], rows
+assert all(r["id"] is None and r["target"] == 10 for r in rows[1:])
+print("9 통과: 추천 문장에서 골라 행 추가 (이미 있는 문장은 후보에서 뺌)")
+
 print("\n계획 폼 + 드롭다운 검증 통과")
 import os  # noqa: E402
 
