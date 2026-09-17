@@ -75,9 +75,10 @@ def main() -> None:
             before = (sorted(f), sorted(f["episode_000"]["obs"]))
         restamp(root / "scene_000.hdf5", "knu-1.1.1")
         with h5py.File(root / "scene_000.hdf5", "r") as f:
-            # both version attrs move together (check_scene_file requires it)
-            assert f["metadata"].attrs["schema_version"] == "knu-1.1.1", \
-                dict(f["metadata"].attrs)
+            # the version lives in one attribute (schema_version removed 2026-09-17)
+            a = f["metadata"].attrs
+            assert a["dataset_version"] == "knu-1.1.1", dict(a)
+            assert "schema_version" not in a, dict(a)
         after_d = diagnose(root / "scene_000.hdf5")
         assert after_d.ok and after_d.stamped == "knu-1.1.1", after_d
         with h5py.File(root / "scene_000.hdf5", "r") as f:

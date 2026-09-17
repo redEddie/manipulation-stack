@@ -349,7 +349,7 @@ for _sid, _v in (("S000", "knu-1.0.0"), ("S001", "knu-1.0.0"),
     with h5py.File(_MIX / f"scene_{_sid[1:]}.hdf5", "w") as _f:
         _m = _f.create_group("metadata")
         _m.attrs["scene_id"] = _sid
-        _m.attrs["schema_version"] = _v
+        _m.attrs["dataset_version"] = _v
 assert schema_version_spans(_MIX) == [
     ("knu-1.0.0", "S000", "S001"), ("knu-1.1.0", "S002", "S002")], \
     schema_version_spans(_MIX)

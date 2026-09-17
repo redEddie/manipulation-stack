@@ -475,9 +475,6 @@ class SceneWriter:
             self._meta.attrs["description"] = metadata.description
             self._meta.attrs["station"] = metadata.station
             self._meta.attrs["dataset_version"] = metadata.dataset_version
-            # 같은 값을 표준 이름으로도 남긴다 (issue #41): LeRobot 변환본의
-            # info.json 과 키 이름을 맞춰, 두 포맷을 한 쿼리로 대조할 수 있게.
-            self._meta.attrs["schema_version"] = metadata.dataset_version
             self._meta.attrs["created"] = metadata.created
             # 부하 모델은 있을 때만 쓴다 -- 못 주는 로봇에서 0 을 적으면
             # "부하가 0 이었다"로 읽혀 없느니만 못하다.
@@ -568,7 +565,6 @@ class SceneWriter:
             return
         self.metadata.dataset_version = want
         self._meta.attrs["dataset_version"] = want
-        self._meta.attrs["schema_version"] = want
         self.version_note = f"버전 도장을 {cur} -> {want} 로 올렸습니다."
 
     def _fill_meta(self, need: list, payload: "dict | None",

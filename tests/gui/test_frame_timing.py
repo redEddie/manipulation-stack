@@ -142,6 +142,9 @@ with h5py.File(path, "r") as f:
     assert tg.attrs["agentview_domain"] == "global_time"
     assert "clock" in tg.attrs
     assert "timing" not in f[name]["obs"]
+    # knu-1.3.0 files carry the version once
+    assert f["metadata"].attrs["dataset_version"] == "knu-1.3.0"
+    assert "schema_version" not in f["metadata"].attrs
 print("4. timing/<name> written with dtypes, short column skipped, domain as attr OK")
 
 # 6a. old episodes without timing: no raise
@@ -174,6 +177,23 @@ w3 = SceneWriter(root=root, scene_id="S000", resume=True, session_version="knu-1
                  session_payload={"mass": 0.85, "com": [-0.01, 0.0, 0.03]})
 assert w3.metadata.dataset_version == "knu-1.3.0", w3.version_note
 w3.close()
+with h5py.File(root / "scene_000.hdf5", "r") as f:
+    a = f["metadata"].attrs
+    assert a["dataset_version"] == "knu-1.3.0" and "schema_version" not in a, dict(a)
+
+# the version lives in one attribute; the removed copy is flagged by the checker
+import subprocess  # noqa: E402
+
+from mstack.scene.dataset_meta import dataset_schema_version, scene_schema_versions  # noqa: E402
+
+assert scene_schema_versions(root) == {"S000": "knu-1.3.0"}
+assert dataset_schema_version(root) == "knu-1.3.0"
+with h5py.File(root / "scene_000.hdf5", "a") as f:        # an old copy comes back
+    f["metadata"].attrs["schema_version"] = "knu-1.3.0"
+chk = subprocess.run([sys.executable, str(Path(WT) / "scripts/check/check_scene_file.py"),
+                      str(root / "scene_000.hdf5")], capture_output=True, text=True)
+assert "schema_version" in chk.stdout and "폐기된 중복 속성" in chk.stdout, chk.stdout[-800:]
+print("7. one version attribute: readers use dataset_version, checker flags the removed copy OK")
 print("6. resume and doctor raise to 1.3.0 only when existing episodes carry timing OK")
 
 print("test_frame_timing 통과")

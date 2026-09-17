@@ -8,7 +8,9 @@ they are, which matters most for the copies that leave this machine (Hub,
 backups) where our alias table is not present.
 
 What it does per file: sets ``metadata.attrs["dataset_version"]`` and
-``metadata.attrs["schema_version"]`` to the target version. Nothing else --
+``metadata.attrs["schema_version"]`` to the target version. (Historical: since
+2026-09-17 only ``dataset_version`` exists -- see dataset_schema.REMOVED_VERSION_ATTR.)
+Nothing else --
 no episode is touched, no data is rewritten, and ``edit_count`` is left
 alone on purpose (bumping it would force a full LeRobot rebuild, and no
 episode changed).
@@ -87,8 +89,7 @@ def stamp(path: Path, target: str, dry_run: bool) -> str:
             return f"{path.name}: metadata 그룹이 없다 -- 건너뜀"
         current_raw = str(meta.attrs.get("dataset_version", ""))
         current = normalize_schema_version(current_raw)
-        already = (current_raw == target
-                   and str(meta.attrs.get("schema_version", "")) == target)
+        already = current_raw == target
         if already:
             return f"{path.name}: 이미 {target} -- 변경 없음"
         if current != target:
@@ -102,11 +103,9 @@ def stamp(path: Path, target: str, dry_run: bool) -> str:
         return f"{path.name}: {current_raw!r} -> {target} (예정)"
     with h5py.File(path, "a") as f:
         f["metadata"].attrs["dataset_version"] = target
-        f["metadata"].attrs["schema_version"] = target
     with h5py.File(path, "r") as f:   # 쓴 대로 들어갔는지 되읽어 확인
         a = f["metadata"].attrs
-        if str(a.get("dataset_version")) != target or \
-                str(a.get("schema_version")) != target:
+        if str(a.get("dataset_version")) != target:
             return f"{path.name}: 기록 후 확인 실패 -- 수동 확인 필요"
     return f"{path.name}: {current_raw!r} -> {target} 기록됨"
 

@@ -36,6 +36,7 @@ from mstack.data.dataset_schema import (  # noqa: E402
     OBS_EYE_IN_HAND_RGB,
     OBS_GRIPPER_STATES,
     OBS_JOINT_STATES,
+    REMOVED_VERSION_ATTR,
     SCHEMA_FIELDS,
     SCHEMA_VERSION,
     normalize_schema_version,
@@ -114,12 +115,12 @@ def verify_scene_file(path: Path) -> list[str]:
             problems.append(
                 f"이 코드가 읽을 수 없는 스키마 버전: {version} "
                 f"(리더 {SCHEMA_VERSION} -- MAJOR 가 다르다)")
-        if "schema_version" in meta.attrs:
-            # 두 표기가 함께 있으면 반드시 같은 버전을 가리켜야 한다.
-            if normalize_schema_version(meta.attrs["schema_version"]) != version:
-                problems.append(
-                    f"dataset_version({raw_ver!r})과 "
-                    f"schema_version({meta.attrs['schema_version']!r})이 다르다")
+        if REMOVED_VERSION_ATTR in meta.attrs:
+            # Removed duplicate of dataset_version (2026-09-17, knu-1.3.0).
+            # Seeing it means an old copy of the file came back.
+            problems.append(
+                "폐기된 중복 속성 schema_version 이 남아 있다 -- 버전은 "
+                "dataset_version 하나에만 적는다")
 
         try:
             md = _read_md_checked(meta)

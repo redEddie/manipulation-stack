@@ -149,11 +149,7 @@ def restamp(path: Path, version: str) -> None:
                 f"{version} 이 요구하는 것이 없다: "
                 + ", ".join(sorted(bad)[:4])
                 + (" ..." if len(bad) > 4 else ""))
-        # Both attrs, as SceneWriter and stamp_schema_version.py write them.
-        # This wrote dataset_version alone until 2026-09-17, so every file the
-        # doctor raised failed check_scene_file's "the two must agree" rule.
         f["metadata"].attrs["dataset_version"] = version
-        f["metadata"].attrs["schema_version"] = version
 
 
 def known_payload(root: Path) -> "tuple[float, list] | None":

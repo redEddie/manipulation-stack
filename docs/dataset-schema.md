@@ -32,13 +32,17 @@ So a reader must accept every MINOR within its own MAJOR
 
 | Format | Location |
 |---|---|
-| HDF5 (source of truth) | `metadata.attrs["dataset_version"]`, mirrored to `metadata.attrs["schema_version"]` |
+| HDF5 (source of truth) | `metadata.attrs["dataset_version"]` |
 | LeRobot conversion | `meta/info.json` → `schema_version`, plus `source_schema_versions` listing the versions of the HDF5 files that fed it |
 
-`dataset_version` is the original attribute name and stays for
-back-compatibility; `schema_version` is the name shared with the LeRobot side so
-both formats can be queried the same way. When both exist they must agree — the
-validator fails the file otherwise.
+**One attribute.** Until 2026-09-17 the same value was also written as
+`metadata.attrs["schema_version"]` (#41, to match the LeRobot key). Four writers
+had to keep the two equal; the schema doctor updated only `dataset_version`, 27
+files ended up disagreeing, and the launcher — which read the copy — took the
+dataset for older than it was. With `knu-1.3.0` the copy was removed from the
+code and deleted from every file in `fr3-tabletop`. `check_scene_file.py` now
+fails a file that still carries `schema_version`, so a pre-2026-09-17 copy
+(backup, earlier Hub upload) is noticed rather than read.
 
 ### Files recorded before versioning
 
@@ -46,8 +50,8 @@ Everything collected up to 2026-08-31 (`scene_000` … `scene_014`, 1100
 episodes) was written with the older label `dataset_version = "scene-v1"`.
 Those files were surveyed field by field and are **identical** to what is
 frozen below, so they were stamped in place with
-`scripts/convert/stamp_schema_version.py`: both version attributes now read
-`knu-1.0.0`. Only those two attributes changed — no episode was touched, no
+`scripts/convert/stamp_schema_version.py`: both version attributes (at the time
+`dataset_version` and `schema_version`) read `knu-1.0.0`. Only those two attributes changed — no episode was touched, no
 data was rewritten, and `edit_count` was deliberately left alone (bumping it
 would force a full LeRobot rebuild, and no episode changed).
 
@@ -325,6 +329,9 @@ neither. The rest is produced by the collection stack itself, with one caveat:
 `robot_state` needs a robot node started from this version — a node left running
 from before must be restarted. The launcher's version check lists `state_time`
 among the fields the robot must send for 1.3.0.
+
+With this version the duplicate `schema_version` attribute was removed; the
+version lives only in `dataset_version` (see "Where the version is written").
 
 Old files cannot be raised to this version: timing cannot be recovered after the
 fact. A resumed older file keeps its stamp (`SceneWriter` now checks

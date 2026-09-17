@@ -207,7 +207,7 @@ def scene_schema_versions(root: Path) -> "dict[str, str]":
             with h5py.File(p, "r") as f:
                 meta = f["metadata"].attrs
                 sid = meta.get("scene_id") or p.stem
-                v = meta.get("schema_version", "")
+                v = meta.get("dataset_version", "")
         except Exception:  # noqa: BLE001 -- 잠긴/깨진 파일은 건너뛴다
             continue
         sid = sid.decode() if isinstance(sid, bytes) else str(sid)
@@ -249,7 +249,7 @@ def dataset_schema_version(root: Path) -> str:
     for p in iter_scene_files(root):
         try:
             with h5py.File(p, "r") as f:
-                v = f["metadata"].attrs.get("schema_version")
+                v = f["metadata"].attrs.get("dataset_version")
         except Exception:  # noqa: BLE001 -- 잠긴/깨진 파일은 건너뛴다
             continue
         if v is None:

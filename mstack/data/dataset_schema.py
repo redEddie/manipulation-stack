@@ -335,6 +335,17 @@ SCHEMA_FIELDS["knu-1.3.0"] = {
 }
 
 
+#: A scene file's version lives in one attribute: ``metadata.attrs["dataset_version"]``.
+#:
+#: Until 2026-09-17 the same value was also written as ``schema_version`` (#41,
+#: to match the LeRobot info.json key). Four writers had to keep the copies
+#: equal, the doctor updated only one, and 27 files disagreed -- which also
+#: skewed the launcher, because it read the copy. The copy was removed from the
+#: code and from every file with knu-1.3.0; check_scene_file flags it if an old
+#: copy of a file brings it back.
+REMOVED_VERSION_ATTR = "schema_version"
+
+
 def schema_version_key(value) -> tuple:
     """비교용 (MAJOR, MINOR, PATCH). 별칭은 풀고, 못 읽으면 (-1,-1,-1).
 
