@@ -263,9 +263,12 @@ class ProxyBuildWorker(QThread):
     done = pyqtSignal(dict)
 
     def __init__(self, paths, scale: float, crf: int, proxy_dir=None,
-                 parent=None) -> None:
+                 parent=None, episodes=None) -> None:
         super().__init__(parent)
         self.paths = [str(p) for p in paths]
+        # {path: group names} -- only those episodes are baked; a path that is
+        # absent (or episodes=None) means the whole file.
+        self.episodes = {str(k): v for k, v in (episodes or {}).items()}
         self.proxy_dir = proxy_dir
         self.scale = float(scale)
         self.crf = int(crf)
@@ -285,7 +288,8 @@ class ProxyBuildWorker(QThread):
         total = 0
         for p in self.paths:
             try:
-                n = len(plan_file(p, self.proxy_dir) if self.proxy_dir else plan_file(p))
+                n = len(plan_file(p, self.proxy_dir or PROXY_DIR,
+                                  self.episodes.get(p)))
             except Exception:  # noqa: BLE001 -- 못 여는 파일은 0개로 두고 넘어간다
                 n = 0
             per_file[p] = n
@@ -306,7 +310,8 @@ class ProxyBuildWorker(QThread):
             try:
                 r = build_file(p, scale=self.scale, crf=self.crf,
                                proxy_dir=self.proxy_dir or PROXY_DIR,
-                               progress=_prog, should_stop=lambda: self._stop)
+                               progress=_prog, should_stop=lambda: self._stop,
+                               episodes=self.episodes.get(p))
             except Exception as e:  # noqa: BLE001 -- 한 파일이 전체를 멈추지 않는다
                 r = {"made": 0, "failed": per_file[p], "bytes": 0,
                      "total": per_file[p],

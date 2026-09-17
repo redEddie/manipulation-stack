@@ -347,7 +347,11 @@ def episode_uid_of(group) -> str:
 
 
 def scan_file(path, proxy_dir: Path = PROXY_DIR) -> dict:
-    """``{"episodes", "missing"}`` -- 이 파일의 에피소드 수와 만들어야 할 목록.
+    """``{"episodes", "missing", "slots"}`` -- 이 파일의 에피소드 수와 만들어야 할 목록.
+
+    ``slots`` maps each episode group name to ``(instruction_id, instruction)``
+    so the build dialog can offer one instruction at a time instead of a whole
+    scene file (2026-09-17: baking a 290-clip scene to review one instruction).
 
     ``missing`` 은 (에피소드, uid, 카메라) 이고 이미 있는 것은 빠진다 --
     진행바가 "남은 일" 을 세야 하고, 중단한 뒤 다시 돌리면 이어서 되어야 한다.
@@ -362,6 +366,7 @@ def scan_file(path, proxy_dir: Path = PROXY_DIR) -> dict:
 
     n_eps = 0
     todo = []
+    slots = {}
     with h5py.File(str(path), "r") as f:
         names = [k for k in f if k.startswith("episode_")]
         if not names and "data" in f:
@@ -369,6 +374,8 @@ def scan_file(path, proxy_dir: Path = PROXY_DIR) -> dict:
         for name in sorted(names):
             n_eps += 1
             grp = f[name]
+            slots[name] = (str(grp.attrs.get("instruction_id", "") or ""),
+                           str(grp.attrs.get("instruction", "") or ""))
             uid = episode_uid_of(grp)
             if not uid:
                 continue        # legacy 는 uid 가 없어 캐시 키를 만들 수 없다
@@ -378,17 +385,25 @@ def scan_file(path, proxy_dir: Path = PROXY_DIR) -> dict:
             for cam in camera_keys(obs):
                 if not proxy_path(uid, cam, proxy_dir).exists():
                     todo.append((name, uid, cam))
-    return {"episodes": n_eps, "missing": todo}
+    return {"episodes": n_eps, "missing": todo, "slots": slots}
 
 
-def plan_file(path, proxy_dir: Path = PROXY_DIR) -> list:
-    """만들어야 할 (에피소드, uid, 카메라) 목록만. :func:`scan_file` 의 축약."""
-    return scan_file(path, proxy_dir)["missing"]
+def plan_file(path, proxy_dir: Path = PROXY_DIR, episodes=None) -> list:
+    """만들어야 할 (에피소드, uid, 카메라) 목록만. :func:`scan_file` 의 축약.
+
+    ``episodes`` (a collection of group names) limits the plan to those
+    episodes; None means every episode in the file.
+    """
+    todo = scan_file(path, proxy_dir)["missing"]
+    if episodes is None:
+        return todo
+    keep = set(episodes)
+    return [t for t in todo if t[0] in keep]
 
 
 def build_file(path, scale: float = DEFAULT_SCALE, crf: int = DEFAULT_CRF,
                fps: "float | None" = None, proxy_dir: Path = PROXY_DIR,
-               progress=None, should_stop=None) -> dict:
+               progress=None, should_stop=None, episodes=None) -> dict:
     """한 파일의 빠진 프록시를 만든다. ``{"made", "skipped", "failed", "bytes"}``.
 
     ``progress(done, total, label)`` 는 매 클립마다, ``should_stop()`` 이 참이면
@@ -401,7 +416,7 @@ def build_file(path, scale: float = DEFAULT_SCALE, crf: int = DEFAULT_CRF,
     """
     import h5py
 
-    todo = plan_file(path, proxy_dir)
+    todo = plan_file(path, proxy_dir, episodes)
     by_ep: dict = {}
     for name, uid, cam in todo:
         by_ep.setdefault((name, uid), []).append(cam)
