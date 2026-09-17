@@ -365,7 +365,16 @@ win.worker = fw
 win.scene_planning.on_plan_row_picked(top.child(1))
 assert win.scene_iid_edit.text() == "I000", "세션 중에 시작 설정이 바뀌었다"
 win.worker = None
-print("13. Instruction 탭 줄 클릭 = scene + 지시문 OK (세션 중엔 잠김)")
+# The header's first section folds and unfolds every scene at once.
+head = tree.header()
+assert tree.headerItem().text(0).strip() == "Scene", tree.headerItem().text(0)
+assert head.all_expanded(), "refresh should leave every scene open"
+head.toggle()
+assert not any(tree.topLevelItem(i).isExpanded() for i in range(tree.topLevelItemCount()))
+assert not head.all_expanded()
+head.toggle()
+assert head.all_expanded()
+print("13. Instruction 탭 줄 클릭 = scene + 지시문 OK (세션 중엔 잠김) · 제목행 전체 펼치기/접기 OK")
 
 # ---------------------- 14. 새 Scene = 탭 + **누르는 즉시 파일** (여러 개)
 import importlib.util  # noqa: E402

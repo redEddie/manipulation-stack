@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from apps.workspace.shared.tree_header import ExpandAllHeader
 from mstack.gui.i18n import tr
 
 
@@ -42,8 +43,11 @@ def build_plan_tab(win) -> QWidget:
     col.addWidget(win.plan_progress_label)
 
     win.plan_progress_tree = QTreeWidget()
+    # The first header section folds or unfolds every scene at once.
+    header = ExpandAllHeader(win.plan_progress_tree)
+    win.plan_progress_tree.setHeader(header)
     win.plan_progress_tree.setHeaderLabels(
-        [tr("scene / 지시문"), tr("수집"), tr("목표"), tr("문장")])
+        [header.label_indent() + "Scene", tr("수집"), tr("목표"), tr("문장")])
     win.plan_progress_tree.setRootIsDecorated(True)
     win.plan_progress_tree.header().setSectionResizeMode(
         3, QHeaderView.ResizeMode.Stretch)
