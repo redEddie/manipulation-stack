@@ -374,6 +374,30 @@ assert not any(tree.topLevelItem(i).isExpanded() for i in range(tree.topLevelIte
 assert not head.all_expanded()
 head.toggle()
 assert head.all_expanded()
+# The arrow must actually be painted under the app style sheet the GUI runs
+# with -- a style-drawn branch indicator showed offscreen but not in the GUI.
+from apps.workspace.shared.sizing import GROUP_BOX_QSS  # noqa: E402
+
+_prev_qss = app.styleSheet()
+app.setStyleSheet(GROUP_BOX_QSS)
+try:
+    # The arrow turns with the state, so the arrow cell must differ between
+    # all-open and all-closed; an unpainted arrow leaves both identical.
+    ind = tree.indentation()
+
+    def _arrow_cell():
+        img = head.grab().toImage()
+        return [img.pixelColor(x, y).rgb() for x in range(ind) for y in range(img.height())]
+
+    if not head.all_expanded():
+        head.toggle()
+    opened = _arrow_cell()
+    head.toggle()
+    closed = _arrow_cell()
+    head.toggle()
+    assert opened != closed, "header arrow not painted under the app style sheet"
+finally:
+    app.setStyleSheet(_prev_qss)
 print("13. Instruction 탭 줄 클릭 = scene + 지시문 OK (세션 중엔 잠김) · 제목행 전체 펼치기/접기 OK")
 
 # ---------------------- 14. 새 Scene = 탭 + **누르는 즉시 파일** (여러 개)

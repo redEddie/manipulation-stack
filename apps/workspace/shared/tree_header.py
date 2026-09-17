@@ -11,8 +11,9 @@ The state is read from the tree at paint time rather than stored, so a refill
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtWidgets import QHeaderView, QStyle, QStyleOption, QTreeWidget
+from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtGui import QPainter, QPalette, QPolygonF
+from PyQt6.QtWidgets import QHeaderView, QTreeWidget
 
 
 class ExpandAllHeader(QHeaderView):
@@ -54,17 +55,26 @@ class ExpandAllHeader(QHeaderView):
         painter.restore()
         if index != 0 or not self._groups():
             return
-        # Drawn as the tree draws its rows' arrows -- the tree's palette, style
-        # and widget. With the header's own, Fusion painted nothing (2026-09-17).
-        opt = QStyleOption()
-        opt.initFrom(self._tree)
-        opt.rect = QRect(rect.x(), rect.y(), self._tree.indentation(), rect.height())
-        opt.state = (QStyle.StateFlag.State_Children | QStyle.StateFlag.State_Item
-                     | QStyle.StateFlag.State_Enabled)
-        if self.all_expanded():
-            opt.state |= QStyle.StateFlag.State_Open
-        self._tree.style().drawPrimitive(
-            QStyle.PrimitiveElement.PE_IndicatorBranch, opt, painter, self._tree)
+        # Painted by hand. The app sets a style sheet (GROUP_BOX_QSS), and under
+        # QStyleSheetStyle PE_IndicatorBranch draws nothing outside the tree's
+        # own row painting -- offscreen tests without the sheet showed the
+        # arrow while the running GUI did not (2026-09-17).
+        size = max(6, min(self._tree.indentation(), rect.height()) // 2 - 1)
+        cx = rect.x() + self._tree.indentation() / 2
+        cy = rect.y() + rect.height() / 2
+        half = size / 2
+        if self.all_expanded():                  # pointing down
+            pts = [QPointF(cx - half, cy - half / 2), QPointF(cx + half, cy - half / 2),
+                   QPointF(cx, cy + half / 2 + 1)]
+        else:                                    # pointing right
+            pts = [QPointF(cx - half / 2, cy - half), QPointF(cx - half / 2, cy + half),
+                   QPointF(cx + half / 2 + 1, cy)]
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._tree.palette().color(QPalette.ColorRole.WindowText))
+        painter.drawPolygon(QPolygonF(pts))
+        painter.restore()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
         if self.logicalIndexAt(event.position().toPoint()) == 0:
