@@ -66,6 +66,19 @@ with h5py.File(path, "r") as f:
     assert REPACK_MARKER_ATTR in f["metadata"].attrs
     print("3. contents, attrs and repack marker intact OK")
 
+import json  # noqa: E402
+
+log = [json.loads(line) for line in (d / "repack_log.jsonl").read_text().splitlines()]
+assert len(log) == 1 and log[0]["file"] == "scene_000.hdf5", log
+e = log[0]
+assert e["outcome"] in ("replaced", "not_smaller"), e
+assert e["episodes"] == 2 and e["size_before"] > 0 and e["size_after"] > 0
+# the gzip episode was copied raw, only the lzf one was encoded
+assert 0 < e["raw_copied_bytes"] < e["uncompressed_bytes"], e
+assert e["encoded_bytes"] == e["uncompressed_bytes"] - e["raw_copied_bytes"]
+assert e["seconds_total"] >= e["seconds_write"] >= 0
+print("3b. repack_log.jsonl records sizes, encoded bytes and timings OK")
+
 # ---- 4. parallel encode: several lzf episodes, edge chunks, a float image
 # Each worker gzips chunks itself and hands raw chunks to the parent, so the
 # result must read back through HDF5's own filter pipeline identically --
@@ -97,5 +110,9 @@ with h5py.File(p2, "r") as par, h5py.File(p1, "r") as ser:
         assert np.array_equal(got[()], a), f"parallel encode changed {name}"
         assert got.chunks == ser[name].chunks
 print("4. parallel encode reads back identically (edge chunks, float shuffle) OK")
+log = [json.loads(line) for line in (d / "repack_log.jsonl").read_text().splitlines()]
+assert [x["file"] for x in log] == ["scene_000.hdf5", "scene_001.hdf5", "scene_002.hdf5"], log
+assert [x["jobs"] for x in log[1:]] == [3, 1]
+print("4b. one log line per run, job count recorded OK")
 
 print("test_repack 통과")

@@ -20,6 +20,12 @@ The rewrite goes to a sibling temp file and is verified (every dataset's
 shape/dtype and a content checksum are compared against the source) before
 the original is replaced. A failure anywhere leaves the original untouched.
 
+Log
+---
+Every attempt appends one JSON line to ``repack_log.jsonl`` in the file's
+directory: sizes before/after, uncompressed and actually re-encoded bytes,
+write/verify seconds, compression, job count and outcome.
+
 Usage:
     python scripts/convert/repack_hdf5.py <file.hdf5> [more.hdf5 ...]
         [--compression gzip|lzf|none] [--level 4] [--dry-run] [--keep-original]
@@ -29,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import json
 import os
 import shutil
 import sys
@@ -200,9 +207,15 @@ def _total_bytes(path: Path) -> int:
 
 
 def _rewrite(src_path: Path, dst_path: Path, compression: str, level: int,
-             progress: "Optional[_Progress]" = None, jobs: int = 1) -> set:
+             progress: "Optional[_Progress]" = None, jobs: int = 1,
+             stats: "Optional[dict]" = None) -> set:
     """Writes the repacked file. Returns the dataset paths encoded (and checked)
-    by the worker pool, which :func:`_verify` need not decode again."""
+    by the worker pool, which :func:`_verify` need not decode again.
+
+    ``stats["raw_copied_bytes"]`` counts uncompressed bytes of datasets copied
+    chunk-for-chunk -- encoding time only depends on the rest."""
+    if stats is not None:
+        stats.setdefault("raw_copied_bytes", 0)
     pooled: dict = {}          # top-level group -> [(dataset path, chunks)]
     with h5py.File(src_path, "r") as src, h5py.File(dst_path, "w") as dst:
         _copy_attrs(src, dst)
@@ -217,6 +230,8 @@ def _rewrite(src_path: Path, dst_path: Path, compression: str, level: int,
                 nbytes = int(item.size) * item.dtype.itemsize
                 if _already_packed(item, compression, level):
                     sg.copy(item, dg, name=key)          # raw chunks, attrs included
+                    if stats is not None:
+                        stats["raw_copied_bytes"] += nbytes
                     if progress is not None:
                         progress.add(nbytes)
                     continue
@@ -289,6 +304,20 @@ def _verify(src_path: Path, dst_path: Path, checked: "set | None" = None) -> Non
             raise RuntimeError("root attrs differ")
 
 
+#: One JSON line per repack attempt, in the dataset directory next to the
+#: files. Size and time are what a storage-format comparison needs, and the
+#: console output that used to carry them is gone once the GUI job closes.
+REPACK_LOG_NAME = "repack_log.jsonl"
+
+
+def _log_run(path: Path, entry: dict) -> None:
+    try:
+        with (path.parent / REPACK_LOG_NAME).open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"  (경고) 재압축 기록 실패: {e}", flush=True)
+
+
 def process(path: Path, compression: str, level: int, dry_run: bool,
             keep_original: bool, jobs: int = 1) -> bool:
     if not path.exists():
@@ -297,13 +326,20 @@ def process(path: Path, compression: str, level: int, dry_run: bool,
     before = path.stat().st_size
     tmp = path.with_suffix(path.suffix + ".repack.tmp")
     t_start = time.monotonic()
+    entry = {"file": path.name, "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+             "compression": compression, "level": level if compression == "gzip" else None,
+             "jobs": jobs, "cpu_count": os.cpu_count(), "dry_run": dry_run,
+             "size_before": before, "episodes": _episode_count(path)}
+    stats: dict = {}
     print(f"\n=== {path.name}", flush=True)
     print(f"  현재 크기 : {before/1e6:>9.1f} MB", flush=True)
     try:
         total = _total_bytes(path)
+        entry["uncompressed_bytes"] = total
         print(f"  압축 해제 기준 {total/1e6:.0f} MB 처리 예정", flush=True)
         prog = _Progress(total)
-        checked = _rewrite(path, tmp, compression, level, progress=prog, jobs=jobs)
+        checked = _rewrite(path, tmp, compression, level, progress=prog, jobs=jobs,
+                           stats=stats)
         t_written = time.monotonic() - t_start
         print(f"  쓰기 완료 ({t_written:.1f}s) -- 내용 검증 중...", flush=True)
         _verify(path, tmp, checked)
@@ -311,19 +347,30 @@ def process(path: Path, compression: str, level: int, dry_run: bool,
         tmp.unlink(missing_ok=True)
         print(f"  [실패] {type(e).__name__}: {e}", flush=True)
         print("  원본은 그대로입니다.", flush=True)
+        _log_run(path, {**entry, "outcome": "failed",
+                        "error": f"{type(e).__name__}: {e}",
+                        "seconds_total": round(time.monotonic() - t_start, 3)})
         return False
     elapsed = time.monotonic() - t_start
     after = tmp.stat().st_size
+    entry.update({"size_after": after, "ratio": round(after / before, 4) if before else None,
+                  "raw_copied_bytes": stats.get("raw_copied_bytes", 0),
+                  "encoded_bytes": total - stats.get("raw_copied_bytes", 0),
+                  "seconds_write": round(t_written, 3),
+                  "seconds_verify": round(elapsed - t_written, 3),
+                  "seconds_total": round(elapsed, 3)})
     saved = before - after
     print(f"  재압축 후 : {after/1e6:>9.1f} MB  "
           f"({100*after/before:.1f}%, {saved/1e6:+.1f} MB)  소요 {elapsed:.1f}s", flush=True)
     if dry_run:
         tmp.unlink(missing_ok=True)
         print("  [dry-run] 원본 유지, 임시 파일 삭제", flush=True)
+        _log_run(path, {**entry, "outcome": "dry_run"})
         return True
     if saved <= 0:
         tmp.unlink(missing_ok=True)
         print("  줄어들지 않아 교체하지 않았습니다 (원본 유지)", flush=True)
+        _log_run(path, {**entry, "outcome": "not_smaller"})
         return True
     if keep_original:
         backup = path.with_suffix(path.suffix + ".orig")
@@ -355,8 +402,19 @@ def process(path: Path, compression: str, level: int, dry_run: bool,
             anchor.attrs[REPACK_COUNT_ATTR] = n_eps
     except Exception as e:  # noqa: BLE001
         print(f"  (경고) repacked 표시 기록 실패: {e}", flush=True)
+    _log_run(path, {**entry, "outcome": "replaced"})
     print("  교체 완료", flush=True)
     return True
+
+
+def _episode_count(path: Path) -> "int | None":
+    try:
+        with h5py.File(path, "r") as f:
+            if "data" in f:
+                return len(f["data"].keys())
+            return sum(1 for k in f.keys() if k.startswith("episode_"))
+    except OSError:
+        return None
 
 
 def main() -> int:
