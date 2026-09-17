@@ -142,10 +142,10 @@ def build_configure_right(win) -> QWidget:
     pv.addWidget(refresh)
     col.addWidget(pbox)
 
-    # --- Layout ---------------------------------------------------------
+    # --- Scene ----------------------------------------------------------
     # The placement of the scene picked in the center table. Deciding which
     # instructions a scene can take needs its layout in view (2026-09-17).
-    lbox = CollapsibleBox(tr("Layout"))
+    lbox = CollapsibleBox(tr("Scene"))
     win.conf_layout_card = InfoCard()
     win.conf_layout_card.setText(tr("가운데 표에서 scene 을 고르면 배치가 보입니다."))
     lbox.body.addWidget(win.conf_layout_card)

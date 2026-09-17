@@ -403,7 +403,7 @@ finally:
 from apps.workspace.shared.collapsible import CollapsibleBox  # noqa: E402
 
 titles = [b._title for b in right_conf.findChildren(CollapsibleBox)]
-assert titles == ["New Scene", "Scene Management", "Layout"], titles
+assert titles == ["New Scene", "Scene Management", "Scene"], titles
 tree.setCurrentItem(top.child(0))
 assert win.scene_planning.selected_plan_scene() == "S000"
 assert "S000" in win.conf_layout_card.text(), win.conf_layout_card.text()
