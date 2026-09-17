@@ -230,6 +230,7 @@ class StationEditor(QGroupBox):
                 # setParent(None) 먼저: deleteLater 는 DeferredDelete 이벤트가
                 # 돌 때까지 위젯을 부모에 붙여 둬, 새 줄 위에 옛 줄이 겹쳐
                 # 보인다. 부모에서 떼면 그 순간 화면에서 사라진다.
+                w.hide()        # before detaching -- see shared/info.py set_fields
                 w.setParent(None)
                 w.deleteLater()
         self.role_edits = {}

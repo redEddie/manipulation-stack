@@ -67,6 +67,7 @@ def _fill(row, store: dict, names: list, on_click) -> None:
     while row.count():
         w = row.takeAt(0).widget()
         if w is not None:
+            w.hide()            # before detaching -- see shared/info.py set_fields
             w.setParent(None)
     store.clear()
     for name in names:

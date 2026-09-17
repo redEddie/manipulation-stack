@@ -125,4 +125,26 @@ card4.set_scene(md)
 assert "S001" in card4.text() and "세션 없음" not in card4.text(), card4.text()
 print("6. setText/text() 로 SceneInfoView 를 대신할 수 있다 OK")
 
+# ------------------------- 7. refilling twice in one tick opens no windows
+# Removed rows must never become top-level windows. addWidget queues a deferred
+# show; if the row is detached (setParent(None)) before that fires, the show
+# lands on a parentless widget and flashes a window. Deleting an episode
+# refreshed the right card twice in one tick and flashed ~7 windows (2026-09-17).
+from PyQt6.QtWidgets import QWidget  # noqa: E402
+
+host = QWidget()
+card5 = InfoCard(host)
+host.show()
+app.processEvents()
+card5.set_fields([("에피소드", "미선택")])
+card5.set_scene(md)
+card5.set_fields([("에피소드", "미선택")])
+card5.set_scene(md)
+app.processEvents()
+stray = [w for w in QApplication.topLevelWidgets()
+         if w.isVisible() and w is not host]
+assert not stray, f"detached rows flashed as windows: {len(stray)}"
+host.close()
+print("7. refilling in one tick opens no stray windows OK")
+
 print("\n정보 표시 모듈 계약 통과")

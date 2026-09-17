@@ -211,8 +211,12 @@ class InfoCard(QWidget):
             # 틱에는 안 지워지고 부모가 남아 옛 줄이 그대로 그려진다 --
             # doctor/sentence_builder.py 의 뱃지 겹침과 같은 함정이다.
             # 실제로 우측 카드 맨 위에 지난 "미선택" 이 남아 있었다 (2026-09-11).
+            # hide() first: addWidget queued a deferred show, and if it fires
+            # after setParent(None) the row pops up as its own window. Two
+            # refreshes in one tick (episode delete) flashed ~7 (2026-09-17).
             w = self._rows_col.takeAt(0).widget()
             if w is not None:
+                w.hide()
                 w.setParent(None)
                 w.deleteLater()
         for label, value in fields:

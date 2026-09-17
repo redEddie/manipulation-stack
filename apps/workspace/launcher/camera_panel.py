@@ -65,6 +65,7 @@ class CameraPreviewColumn(QGroupBox):
             w = it.widget()
             if w is not None:
                 # setParent(None) 먼저 -- station_editor._set_cams 참조.
+                w.hide()        # before detaching -- see shared/info.py set_fields
                 w.setParent(None)
                 w.deleteLater()
         self.cells = {}

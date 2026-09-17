@@ -172,9 +172,11 @@ class CollectorPicker(QWidget):
                 while lay.count():
                     sub = lay.takeAt(0)
                     if sub.widget() is not None:
+                        sub.widget().hide()   # see shared/info.py set_fields
                         sub.widget().setParent(None)
                 lay.deleteLater()
             elif item.widget() is not None:
+                item.widget().hide()
                 item.widget().setParent(None)
 
     def _rebuild(self, typed: str) -> None:
