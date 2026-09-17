@@ -133,6 +133,17 @@ def describe_schema(cfg: DatasetSchemaConfig) -> str:
     else:
         lines.extend(f"  {name}: {shape}" for name, shape in obs_rows)
 
+    # Not schema-gated either (knu-1.3.0): per-frame timing, written whenever
+    # the recording supplies it. Under the episode, not obs.
+    lines += [
+        "",
+        "timing/  -- host time.time() seconds, one value per frame",
+        "  frame, action, robot_state: (T,) float64",
+        "  agentview_host, eye_in_hand_host: (T,) float64",
+        "  agentview_device, eye_in_hand_device: (T,) float64  -- 카메라가 줄 때만",
+        "  agentview_frame_no, eye_in_hand_frame_no: (T,) int64  -- 카메라가 줄 때만",
+    ]
+
     lines += [
         "",
         "rewards: (T,) float32   -- 항상 0 (실기에는 시뮬레이터 보상이 없음)",

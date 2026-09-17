@@ -34,6 +34,7 @@ from mstack.data.dataset_schema import (  # noqa: E402
     META_PYLIBFRANKA_VERSION,
     SCHEMA_FIELDS,
     SCHEMA_VERSION,
+    schema_version_key,
 )
 from mstack.data.provenance import collector_commit  # noqa: E402
 from mstack.scene.props import active_prop_ids  # noqa: E402
@@ -47,7 +48,9 @@ OBJ = ["OBJ-CUP-WHT-02"]
 LAYOUT = {"grid": [3, 3], "placements": {OBJ[0]: {"zone": [0, 0]}}}
 
 # ---- 1. 기본 기록 버전이 판번호를 요구한다 ----
-assert SCHEMA_VERSION == "knu-1.2.2", SCHEMA_VERSION
+# 1.3.0 (per-frame timing) is built on 1.2.2 -- what is pinned here is that the
+# current version still carries provenance, not that it is exactly 1.2.2.
+assert schema_version_key(SCHEMA_VERSION) >= schema_version_key("knu-1.2.2"), SCHEMA_VERSION
 need = SCHEMA_FIELDS[SCHEMA_VERSION]["metadata_attrs"]
 # 요구하는 것은 **하나**다: 이 값들이 어디서 왔는지.
 assert META_PROVENANCE_SOURCE in need, need
@@ -96,7 +99,7 @@ with tempfile.TemporaryDirectory() as d:
     # ---- 4. 판번호를 모르면 그 도장을 안 찍는다 ----
     md2 = SceneMetadata(
         scene_id="S001", objects=OBJ, layout=LAYOUT,
-        dataset_version=SCHEMA_VERSION,
+        dataset_version="knu-1.2.2",
         payload_mass=0.85, payload_com=[0.0, 0.0, 0.03],
         reset_pose="libero", reset_qpos=[0.0] * 7)      # provenance 없음
     w = SceneWriter(root, metadata=md2, known_prop_ids=active_prop_ids())
@@ -106,7 +109,15 @@ with tempfile.TemporaryDirectory() as d:
         assert META_COLLECTOR_COMMIT not in f["metadata"].attrs
     assert v == "knu-1.2.1", v      # 한 칸 내려서 찍힌다
     assert "knu-1.2.2" in (w.version_note or ""), w.version_note
+    # the note names what was missing (it used to read "... 를 몰라" with a blank)
+    assert "판번호" in w.version_note, w.version_note
     print(f"4. 판번호 없으면 {v} 로 내려 찍고 이유를 남긴다 OK")
+
+    # Sections 5-7 pin provenance behaviour among the 1.2.x versions. Their
+    # fixture files have no episodes, so per-frame timing (knu-1.3.0, an
+    # episode-level requirement) would be vacuously satisfied and every target
+    # would jump past 1.2.2. Timing reachability is test_frame_timing's job.
+    _timing_version = SCHEMA_FIELDS.pop("knu-1.3.0")
 
     # ---- 5. 닥터가 옛 파일의 칸을 채워 도장을 올린다 ----
     # 스크립트를 따로 두지 않는다 (조작자, 2026-09-13): 닥터가 이미 "같은
@@ -202,6 +213,7 @@ with tempfile.TemporaryDirectory() as d:
     assert called == [["S003", "S004"]], called
     assert not hasattr(ops, "align_selected"), "두 번째 문이 돌아왔다"
     print("7. 고른 것 전부에 적용 · 어긋난 것은 버전만 맞춤 · 오른쪽 버튼 하나로 OK")
+    SCHEMA_FIELDS["knu-1.3.0"] = _timing_version
 
     # ---- 8. 판번호는 **수집 세션 없이도** 읽힌다 ----
     # 처음에는 "다른 scene 에 적힌 값" 만 출처로 삼아서, 한 번 수집해야만 옛

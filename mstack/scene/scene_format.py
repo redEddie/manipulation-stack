@@ -463,6 +463,8 @@ class SceneWriter:
                     lack.append("부하 모델")
                 if not (metadata.reset_pose and metadata.reset_qpos):
                     lack.append("리셋 자세")
+                if not metadata.provenance_source:
+                    lack.append("판번호 출처")
                 self.version_note = (
                     f"{asked} 로 만들려 했는데 {' · '.join(lack)} 를 몰라 "
                     f"{metadata.dataset_version} 로 찍었습니다. 나중에 "
@@ -545,7 +547,8 @@ class SceneWriter:
                 f"내리지 않습니다. 낮은 버전으로 찍으려면 새 데이터셋으로 "
                 f"시작하세요.")
             return
-        missing = self._episodes_missing(req["obs_datasets"])
+        missing = self._episodes_missing(req["obs_datasets"],
+                                         req.get("episode_datasets", ()))
         if missing:
             self.version_note = (
                 f"{cur} -> {want} 로 올리지 못했습니다: 기존 에피소드 "
@@ -596,14 +599,21 @@ class SceneWriter:
             self.metadata.reset_qpos = json.loads(known[META_RESET_QPOS])
         return True
 
-    def _episodes_missing(self, need) -> list:
-        """필수 관측이 빠진 기존 에피소드 이름들 (데이터는 읽지 않는다)."""
+    def _episodes_missing(self, need, need_episode=()) -> list:
+        """필수 관측이 빠진 기존 에피소드 이름들 (데이터는 읽지 않는다).
+
+        ``need_episode`` are paths under the episode group itself
+        (``timing/frame`` for knu-1.3.0). Checking obs alone would raise an old
+        file's stamp to a version whose timing its episodes never had.
+        """
         out = []
         for name in self._file:
             if not EPISODE_GROUP_RE.match(name):
                 continue
-            obs = self._file[name].get("obs")
-            if obs is None or any(k not in obs for k in need):
+            grp = self._file[name]
+            obs = grp.get("obs")
+            if (obs is None or any(k not in obs for k in need)
+                    or any(k not in grp for k in need_episode)):
                 out.append(name)
         return out
 

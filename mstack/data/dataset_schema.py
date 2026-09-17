@@ -50,7 +50,7 @@ DEFAULT_CONFIG_PATH = state_dir() / "dataset_schema.json"
 # 정본이다 (문서와 어긋나면 검증기가 잡는다).
 #: 지금 쓰는(기록하는) 버전. 읽기는 같은 MAJOR 안에서 위아래 모두 된다
 #: (schema_is_readable 참조).
-SCHEMA_VERSION = "knu-1.2.2"
+SCHEMA_VERSION = "knu-1.3.0"
 
 # --------------------------------------------------------- observation/dataset keys
 # Robot observation keys (returned by Robot.get_observations / RobotEnv.get_obs).
@@ -58,6 +58,10 @@ ROBOT_JOINT_POSITIONS = "joint_positions"
 ROBOT_JOINT_VELOCITIES = "joint_velocities"
 ROBOT_EE_POS_QUAT = "ee_pos_quat"
 ROBOT_GRIPPER_POSITION = "gripper_position"
+#: Host wall time (``time.time()``) at which the 1 kHz loop read the state the
+#: other keys came from. Lets a recording measure how old the robot half of a
+#: frame is -- see TIMING_* below.
+ROBOT_STATE_TIME = "state_time"
 
 # Dataset observation keys (stored under episode/obs in HDF5).
 OBS_AGENTVIEW_RGB = "agentview_rgb"
@@ -108,6 +112,34 @@ FT_OBS_FIELDS = (
     (OBS_EE_WRENCH_EE, 6),
 )
 FT_OBS_KEYS = tuple(k for k, _ in FT_OBS_FIELDS)
+
+# --------------------------------------------------------- per-frame timing (knu-1.3.0)
+#: Group under each episode: ``episode_NNN/timing/<name>``, one value per frame.
+#: Not under ``obs`` -- these describe the recording, not what a policy observes.
+#:
+#: All times are host wall clock (``time.time()``, seconds) -- the clock the
+#: camera node, phase bus and raw robot logger already use, so they line up.
+#: What each says (the difference between two of them is the measurement):
+#:
+#: * ``frame``        the recording loop finished reading this frame's observation
+#: * ``action``       the command paired with this frame was accepted by the robot node
+#: * ``robot_state``  the 1 kHz loop read the joint state stored in this frame
+#: * ``<cam>_host``   the camera node received the image stored in this frame
+#: * ``<cam>_device`` the camera's own timestamp for it (clock: group attr ``<cam>_domain``)
+#: * ``<cam>_frame_no`` the camera's frame counter -- a gap is a dropped frame
+TIMING_GROUP = "timing"
+TIMING_FRAME = "frame"
+TIMING_ACTION = "action"
+TIMING_ROBOT_STATE = "robot_state"
+#: camera roles as they appear in dataset names (obs/agentview_rgb -> agentview)
+TIMING_CAMERAS = ("agentview", "eye_in_hand")
+#: written whenever the recording supplies them; required by knu-1.3.0
+TIMING_REQUIRED = (TIMING_FRAME, TIMING_ACTION, TIMING_ROBOT_STATE) + tuple(
+    f"{c}_host" for c in TIMING_CAMERAS)
+#: written when the camera driver gives them; never required (a simulated or
+#: older camera node has no device clock)
+TIMING_OPTIONAL = tuple(f"{c}_{k}" for c in TIMING_CAMERAS
+                        for k in ("device", "frame_no"))
 
 # HDF5 repack markers (used by libero_format.py, dataset_sync.py, repack_hdf5.py).
 REPACK_MARKER_ATTR = "repacked"
@@ -285,6 +317,19 @@ for _base, _new in (("knu-1.0.0", "knu-1.0.1"),
         **SCHEMA_FIELDS[_base],
         "metadata_attrs": SCHEMA_FIELDS[_base]["metadata_attrs"] + _PROVENANCE_REQUIRED,
     }
+
+
+#: knu-1.3.0 = knu-1.2.2 + per-frame timing (2026-09-17).
+#:
+#: MINOR: new per-frame datasets, nothing existing changes. Required are the
+#: stamps the collection stack always produces; the camera's device clock and
+#: frame counter are recorded when available but not required. Old files cannot
+#: be raised to this version -- timing cannot be recovered after the fact.
+SCHEMA_FIELDS["knu-1.3.0"] = {
+    **SCHEMA_FIELDS["knu-1.2.2"],
+    "episode_datasets": SCHEMA_FIELDS["knu-1.2.2"]["episode_datasets"] + tuple(
+        f"{TIMING_GROUP}/{k}" for k in TIMING_REQUIRED),
+}
 
 
 def schema_version_key(value) -> tuple:

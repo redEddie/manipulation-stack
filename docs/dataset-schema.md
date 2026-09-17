@@ -284,6 +284,46 @@ Each moves one PATCH step within its own branch. Adding metadata attributes is a
 PATCH here by the same reasoning as `knu-1.2.1`: nothing about the recorded
 observation changed.
 
+## `knu-1.3.0` — 2026-09-17
+
+**When each part of a frame happened.** A frame pairs two camera images, a joint
+state and a command, but nothing recorded how far apart in time those were. The
+recording loop already knew (the camera node stamps every frame on arrival, the
+loop checks frame age), and threw it away. Synchronisation error, loop jitter at
+the nominal 20 Hz and drift over a long session all need these instants, and
+they cannot be reconstructed afterwards.
+
+A new group under each episode — not under `obs`, because these describe the
+recording rather than anything a policy observes:
+
+| dataset | dtype | required | meaning |
+|---|---|---|---|
+| `timing/frame` | float64 | yes | the loop finished reading this frame's observation |
+| `timing/action` | float64 | yes | the robot node accepted the command paired with this frame |
+| `timing/robot_state` | float64 | yes | the 1 kHz loop read the joint state stored in this frame |
+| `timing/agentview_host`, `timing/eye_in_hand_host` | float64 | yes | the camera node received the stored image |
+| `timing/agentview_device`, `timing/eye_in_hand_device` | float64 | no | the camera's own timestamp for that image |
+| `timing/agentview_frame_no`, `timing/eye_in_hand_frame_no` | int64 | no | the camera's frame counter — a gap is a dropped frame |
+
+All times are host `time.time()` seconds (group attr `clock`), the clock the
+camera node, phase bus and raw robot logger already use. Device timestamps carry
+their clock in group attrs `agentview_domain` / `eye_in_hand_domain`; only
+`global_time` is directly comparable with the host times.
+
+What the columns measure is **software-pipeline** latency: `*_host` is when the
+frame reached the node, not when the sensor exposed it. The device timestamp is
+the closest the camera gives to exposure time.
+
+Device time and frame counter are optional because a simulated camera node has
+neither. The rest is produced by the collection stack itself, with one caveat:
+`robot_state` needs a robot node started from this version — a node left running
+from before must be restarted. The launcher's version check lists `state_time`
+among the fields the robot must send for 1.3.0.
+
+Old files cannot be raised to this version: timing cannot be recovered after the
+fact. A resumed older file keeps its stamp (`SceneWriter` now checks
+episode-level datasets as well as `obs`).
+
 ## How to bump a MINOR
 
 1. Add the fields to the writer.

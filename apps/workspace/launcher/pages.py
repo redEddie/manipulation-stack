@@ -52,6 +52,7 @@ import numpy as np
 from mstack.comm.zmq_core.robot_node import probe_observation
 from mstack.data.dataset_schema import (
     FT_OBS_KEYS,
+    ROBOT_STATE_TIME,
     SCHEMA_VERSION,
     schema_required_fields,
 )
@@ -87,7 +88,7 @@ _ROBOT_NODE_WAIT_S = 15.0
 #:
 #: knu-1.1.0 이 빠져 있다: 필드 셋이 모든 프레임에서 0 인 채로 정의됐고
 #: (dataset_schema.py 의 폐기 주석 참조), 그걸 고친 것이 knu-1.1.1 이다.
-SCHEMA_PICKABLE = ("knu-1.0.0", "knu-1.2.0", "knu-1.2.1", "knu-1.2.2")
+SCHEMA_PICKABLE = ("knu-1.0.0", "knu-1.2.0", "knu-1.2.1", "knu-1.2.2", "knu-1.3.0")
 
 #: 버전이 요구하는 **로봇 관측 키**. HDF5 필드명과 같지만 층이 다르다 --
 #: 이쪽은 "로봇이 줘야 하는 값" 이고, 확인 버튼이 이것으로 검사한다.
@@ -100,6 +101,9 @@ _ROBOT_OBS_FIELDS = {
     # 1.2.2 가 더한 것도 metadata attrs(판번호)다 -- 로봇이 줘야 하는 관측은
     # 그대로다. 커밋은 git 에서, 로봇 판번호는 노드가 따로 답한다.
     "knu-1.2.2": FT_OBS_KEYS,
+    # 1.3.0 records when the robot state of each frame was read -- a node
+    # started before this key existed must be restarted.
+    "knu-1.3.0": FT_OBS_KEYS + (ROBOT_STATE_TIME,),
 }
 
 # 카메라 역할은 더 이상 여기 고정돼 있지 않다 -- 스테이션이 정한다
@@ -819,6 +823,12 @@ class HardwarePage(QWizardPage):
             if extra:
                 lines.append(tr("{v} 추가 관측: {f}")
                              .format(v=picked, f=", ".join(extra)))
+            base_ep = (schema_required_fields("knu-1.0.0") or
+                       {"episode_datasets": ()})["episode_datasets"]
+            extra_ep = [f for f in req["episode_datasets"] if f not in base_ep]
+            if extra_ep:
+                lines.append(tr("{v} 추가 기록: {f}")
+                             .format(v=picked, f=", ".join(extra_ep)))
         self.schema_label.setText("\n".join(lines))
         self.schema_label.setStyleSheet("color:#888;")
         self.schema_test_label.setText("")

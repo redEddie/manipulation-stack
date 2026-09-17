@@ -97,6 +97,7 @@ from mstack.data.dataset_schema import (
     ROBOT_GRIPPER_POSITION,
     ROBOT_JOINT_POSITIONS,
     ROBOT_JOINT_VELOCITIES,
+    ROBOT_STATE_TIME,
 )
 
 #: 관측 키 -> libfranka ``RobotState`` 필드. 로봇이 1kHz 로 이미 계산해 두는
@@ -376,6 +377,8 @@ class FrankaFR3Robot(Robot):
         # Shared state (guarded by _lock).
         self._lock = threading.Lock()
         self._q = q0.copy()            # latest measured joint positions
+        # host wall time at which _q/_dq/_ee_pose were read (ROBOT_STATE_TIME)
+        self._state_time = time.time()
         self._dq = np.zeros(7)         # latest measured joint velocities
         self._desired_q = q0.copy()    # setpoint from command_joint_state
         self._q_cmd = q0.copy()        # filtered command sent to the robot
@@ -527,6 +530,7 @@ class FrankaFR3Robot(Robot):
             q = self._q.copy()
             dq = self._dq.copy()
             pose = self._ee_pose.copy()
+            state_time = self._state_time
             gripper_norm = 1.0 - self._gripper_state_width / MAX_GRIPPER_WIDTH
             ft = {k: v.copy() for k, v in self._ft.items()}
         if self._use_gripper:
@@ -539,6 +543,7 @@ class FrankaFR3Robot(Robot):
             ROBOT_JOINT_VELOCITIES: vel,
             ROBOT_EE_POS_QUAT: self._pose_to_pos_quat(pose),
             ROBOT_GRIPPER_POSITION: np.array(gripper_norm),
+            ROBOT_STATE_TIME: float(state_time),
         }
         # 포스·토크: 필드를 노출하는 pylibfranka 빌드에서만 키가 존재한다.
         # 소비자(mstack.collect.worker._get_obs)는 .get() 으로 읽으므로 키 부재는
@@ -674,7 +679,9 @@ class FrankaFR3Robot(Robot):
         while not self._stop.is_set():
             try:
                 st = self.robot.read_once()
+                t_wall = time.time()
                 with self._lock:
+                    self._state_time = t_wall
                     self._q = np.asarray(st.q, dtype=float)
                     self._dq = np.asarray(st.dq, dtype=float)
                     self._ee_pose = np.asarray(st.O_T_EE, dtype=float)
@@ -738,6 +745,7 @@ class FrankaFR3Robot(Robot):
             while not self._stop.is_set():
                 state, _ = ctrl.readOnce()
                 t_now = time.monotonic()
+                t_wall = time.time()
                 gap = t_now - t_prev
                 t_prev = t_now
                 if gap > self._max_tick_gap:
@@ -753,6 +761,7 @@ class FrankaFR3Robot(Robot):
                               flush=True)
                 with self._lock:
                     target = self._desired_q.copy()
+                    self._state_time = t_wall
                     self._q = np.asarray(state.q, dtype=float)
                     self._dq = np.asarray(state.dq, dtype=float)
                     self._ee_pose = np.asarray(state.O_T_EE, dtype=float)

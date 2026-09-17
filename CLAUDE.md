@@ -130,7 +130,8 @@ Two things that look like safety layers and are not:
   destroyed evidence on 2026-09-10). **Three stores are deliberately shared back**
   via env overrides in that same icon: `MSTACK_PROXY_DIR` (proxy clips),
   `MSTACK_HUB_STATE` (the Hub upload ledger) and `MSTACK_HISTORY` (the
-  collection-session history). None of them is a fact about a GUI session —
+  collection-session history; the phase log `collection_phases.jsonl` sits next
+  to it and follows the same variable). None of them is a fact about a GUI session —
   they describe the dataset, the Hub, and the people collecting. Split them and
   dev re-encodes clips main already baked (2026-09-11), reports already-uploaded
   files as "신규" and offers to re-upload 25 files of 8–18 GB (2026-09-13), and

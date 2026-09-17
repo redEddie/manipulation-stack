@@ -476,6 +476,7 @@ class CollectionOps:
             session_version=self.win.schema_version,
             instruction_id=(self.win.scene_iid_edit.text().strip() if scene_on else ""),
             collector=(self.win.collector_edit.text().strip() if scene_on else ""),
+            run_id=self.win.run_id,
             agent_camera_serial=agent,
             wrist_camera_serial=wrist,
             schema=self.win.schema,

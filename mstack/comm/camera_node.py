@@ -67,6 +67,26 @@ def _log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _device_stamp(frame) -> dict:
+    """The camera's own view of a frame: its frame counter and timestamp.
+
+    ``ts`` (host time at arrival) says when the node got the frame; these say
+    when the device produced it and whether any were skipped in between (a gap
+    in ``frame_no``). ``t_device`` is in seconds; ``t_domain`` tells which clock
+    it is on -- with GLOBAL_TIME it is device time mapped onto the host clock,
+    so it can be compared with ``ts``. Missing on a driver that does not give
+    them; never raises.
+    """
+    out: dict = {}
+    try:
+        out["frame_no"] = int(frame.get_frame_number())
+        out["t_device"] = float(frame.get_timestamp()) / 1000.0
+        out["t_domain"] = str(frame.get_frame_timestamp_domain()).rsplit(".", 1)[-1]
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 class _Publisher:
     """스레드 여럿이 쓰는 PUB 소켓. zmq 소켓은 스레드 안전이 아니므로 락으로
     직렬화한다 -- 프레임당 send 한 번이라 경합 비용은 무시할 수준."""
@@ -213,7 +233,8 @@ class CameraWorker(threading.Thread):
                 z16 = np.asanyarray(df.get_data())          # (H,W)   u16
                 self.pub.send(f"{self.serial}/color",
                               {"ts": ts, "shape": rgb.shape,
-                               "dtype": "uint8", "seq": seq},
+                               "dtype": "uint8", "seq": seq,
+                               **_device_stamp(cf)},
                               rgb.tobytes())
                 # depth 는 lerobot read_latest_depth 와 같은 (H,W,1) 의미론
                 self.pub.send(f"{self.serial}/depth",
@@ -280,7 +301,8 @@ class FakeCameraWorker(CameraWorker):
             z16 = np.full((self.h, self.w), 800 + seq % 50, dtype=np.uint16)
             self.pub.send(f"{self.serial}/color",
                           {"ts": ts, "shape": rgb.shape,
-                           "dtype": "uint8", "seq": seq}, rgb.tobytes())
+                           "dtype": "uint8", "seq": seq, "frame_no": seq},
+                          rgb.tobytes())
             self.pub.send(f"{self.serial}/depth",
                           {"ts": ts, "shape": (self.h, self.w, 1),
                            "dtype": "uint16", "seq": seq,

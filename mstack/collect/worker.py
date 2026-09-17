@@ -20,6 +20,7 @@ import queue
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -32,6 +33,10 @@ from mstack.data.dataset_schema import (
     ROBOT_EE_POS_QUAT,
     ROBOT_JOINT_POSITIONS,
     ROBOT_JOINT_VELOCITIES,
+    ROBOT_STATE_TIME,
+    TIMING_ACTION,
+    TIMING_FRAME,
+    TIMING_ROBOT_STATE,
     DatasetSchemaConfig,
 )
 from mstack.agents.lerobot_plugin import (
@@ -46,6 +51,7 @@ from mstack.config.constants import ROLL_ABORT_RAD
 from mstack.collect.leader_guard import LeaderDropGuard
 from mstack.robots.franka_fr3 import FR3_RESET_POSES, FR3_ROLL_JOINTS
 from mstack.comm.phase_bus import PhasePublisher
+from mstack.data.phase_log import append_phase
 from mstack.config.constants import MATCH_GATE_RAD
 from mstack.scene.scene_format import QUALITY_FAILED, QUALITY_SUCCESS, SceneMetadata, SceneWriter
 from mstack.config.station import load_station
@@ -153,6 +159,24 @@ CONTROL_DEAD_MARK = "control loop is dead"
 
 #: "RuntimeError: ..." 처럼 이미 타입 이름이 앞에 붙은 메시지.
 _TYPED_MSG_RE = re.compile(r"^[A-Za-z_]\w*(Error|Exception|Interrupt|Exit)\s*:")
+
+
+def _frame_timing(obs: dict, t_frame: float, t_action: float) -> dict:
+    """Per-frame timing columns (dataset_schema.TIMING_*) from one observation.
+
+    Keys a node did not supply are left out rather than filled -- a missing
+    column says "not measured", a filled one would claim a measurement.
+    """
+    out = {TIMING_FRAME: t_frame, TIMING_ACTION: t_action}
+    if obs.get("_state_time") is not None:
+        out[TIMING_ROBOT_STATE] = obs["_state_time"]
+    for cam_key, role in (("agent", "agentview"), ("wrist", "eye_in_hand")):
+        st = obs.get(f"_{cam_key}_stamps") or {}
+        for src, suffix in (("t_host", "host"), ("t_device", "device"),
+                            ("frame_no", "frame_no"), ("t_domain", "domain")):
+            if st.get(src) is not None:
+                out[f"{role}_{suffix}"] = st[src]
+    return out
 
 
 def _why(e: BaseException) -> str:
@@ -356,6 +380,9 @@ class WorkerConfig:
     session_version: str = ""
     instruction_id: str = ""      # scene 모드 시작 slot 의 ID (예: "I000")
     collector: str = ""           # scene 모드 필수 attr -- 수집자 식별자
+    #: GUI run id (collection_history.new_run_id). Tags phase-log lines so they
+    #: join the history lines of the same run.
+    run_id: str = ""
     agent_camera_serial: str = AGENT_CAMERA_SERIAL
     wrist_camera_serial: str = WRIST_CAMERA_SERIAL
     schema: DatasetSchemaConfig = field(default_factory=DatasetSchemaConfig)
@@ -409,6 +436,9 @@ class CollectionWorker(QThread):
         # (_set_state 참고). 소켓이 안 열려도 나머지는 그대로 동작한다.
         self._phase_pub = PhasePublisher()
         self._phase = ""
+        # Phase log identity (mstack/data/phase_log.py). The session tag is
+        # fixed when run() starts, so every line of one connect shares it.
+        self._phase_session = ""
         # scene 모드 slot 상태. cmd_set_slot 으로 바뀌고, 에피소드에는
         # "기록 시작 시점의 slot"(_episode_slot 캡처본)이 찍힌다 -- 저장이
         # 백그라운드라 저장 시점의 현재 slot 을 읽으면 안 된다.
@@ -529,11 +559,27 @@ class CollectionWorker(QThread):
         줄로 차는 것을 막는다. PUB 은 매번 보낸다 (구독자가 늦게 붙어도 현재
         단계를 알 수 있어야 한다).
         """
+        t = time.time()
         self.state_changed.emit(phase)
         if phase != self._phase:
             self._phase = phase
             self.log_message.emit(f"[단계] {phase}")
+            self._log_phase(t, phase=phase, **extra)
         self._phase_pub.publish(phase, **extra)
+
+    def _log_phase(self, t: float, **fields) -> None:
+        """One line in the phase log (cycle-time measurement). Never raises."""
+        if not self._phase_session:
+            self._phase_session = time.strftime("%Y%m%dT%H%M%S")
+        cfg = self.cfg
+        scene = cfg.scene_id or (cfg.scene_metadata.scene_id
+                                 if cfg.scene_metadata is not None else "")
+        append_phase({
+            "run": cfg.run_id, "session": self._phase_session,
+            "collector": cfg.collector,
+            "dataset": Path(cfg.data_root).name if cfg.data_root else "",
+            "scene": scene or "", "practice": bool(cfg.no_dataset),
+            "t": t, **fields})
 
     def _drain_interrupt(self, react_to_go_home: bool = True) -> Optional[str]:
         """Non-blocking: services ``delete_episode`` inline, reports whether
@@ -638,6 +684,10 @@ class CollectionWorker(QThread):
         # 만들지 않는다 -- 0 으로 채워 "무접촉 측정"처럼 보이게 하지 않는다.
         out["_ft"] = {k: np.asarray(raw[k], dtype=float)
                       for k in FT_OBS_KEYS if raw.get(k) is not None}
+        # When the 1 kHz loop read this state (host clock). Absent on a node
+        # that predates it -- the timing column is then simply not written.
+        if raw.get(ROBOT_STATE_TIME) is not None:
+            out["_state_time"] = float(raw[ROBOT_STATE_TIME])
         if not with_cameras:
             return out
         for cam_key, cam in self._robot.cameras.items():
@@ -647,7 +697,13 @@ class CollectionWorker(QThread):
             # 같은 조건 실측이 최대 35ms 라 500ms 는 정상 동작에서 절대 닿지
             # 않는 순수 카메라 건강 기준이고, 낡은 프레임이 기록에 섞이기
             # 전에 빡빡하게 끊는 쪽이 데이터에 안전하다 (사용자 결정).
-            frame = cam.read_latest(max_age_ms=500)
+            if hasattr(cam, "read_latest_stamped"):
+                # Same cache entry as the image: when the node got it, and the
+                # device's own frame number / timestamp (recorded as timing/*).
+                frame, out[f"_{cam_key}_stamps"] = cam.read_latest_stamped(
+                    max_age_ms=500)
+            else:
+                frame = cam.read_latest(max_age_ms=500)
             # read_latest() is non-blocking by design: it hands back whatever
             # is in the buffer and only raises once that is older than
             # max_age_ms. At 20 Hz a stalled camera silently repeats the SAME
@@ -1341,6 +1397,7 @@ class CollectionWorker(QThread):
                         stop = True
                         break
                     self._robot.send_action(action)
+                    t_action = time.time()
                     if k < TELEOP_SUBSTEPS - 1:
                         t_next += cmd_budget
                         time.sleep(max(0.0, t_next - time.monotonic()))
@@ -1348,6 +1405,7 @@ class CollectionWorker(QThread):
                     break
 
                 obs = self._get_obs()
+                t_frame = time.time()
 
                 # scene 기준 사진(§6 "사진 1장 필수"): 세션 첫 기록 프레임의
                 # agentview 를 자동 캡처 후보로 보낸다. 이미 있으면 saver 가 무시.
@@ -1367,12 +1425,13 @@ class CollectionWorker(QThread):
                     ee_pos_quat=obs["_ee_pos_quat"],
                     gripper_closed=action["gripper.pos"] > 0.5,
                     joint_velocities=obs["_joint_velocities"][:7],
-                    timestamp=time.time(),
+                    timestamp=t_frame,
                     commanded_joint_positions=q_cmd[:7],
                     commanded_gripper=float(action["gripper.pos"]),
                     agentview_depth=obs.get("_agent_depth"),
                     eye_in_hand_depth=obs.get("_wrist_depth"),
                     ft=obs.get("_ft"),
+                    timing=_frame_timing(obs, t_frame, t_action),
                 )
                 self._emit_frames(obs)
                 n = i + 1
@@ -1408,6 +1467,9 @@ class CollectionWorker(QThread):
                 self.log_message.emit(
                     f"[카메라] 정지 감지: {detail} / 전체 {n}프레임  ← 폐기 권장"
                 )
+            self._log_phase(
+                time.time(), event="episode_end", outcome=outcome, frames=n,
+                success=(self._pending_success if outcome == "save" else None))
             return outcome, n
         finally:
             self._teleop.set_teleop_mode(False)
@@ -1476,6 +1538,7 @@ class CollectionWorker(QThread):
 
     # ------------------------------------------------------------------- run
     def run(self) -> None:  # noqa: C901 - state machine, kept in one place on purpose
+        self._phase_session = time.strftime("%Y%m%dT%H%M%S")
         try:
             self._set_state("connecting")
             self._connect()

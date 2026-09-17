@@ -121,7 +121,10 @@ class NodeCamera:
         self.ctl_port = ctl_port
         self._ctx: zmq.Context | None = None
         self._sub: zmq.Socket | None = None
-        self._latest: dict[str, tuple[float, np.ndarray]] = {}  # kind -> (ts, arr)
+        # kind -> (ts, arr, header). The header carries the node's stamps
+        # (frame_no, t_device, ...) so a recording can store when the frame it
+        # used was produced -- see read_latest_stamped.
+        self._latest: dict[str, tuple[float, np.ndarray, dict]] = {}
         self.depth_scale: float | None = None  # depth meta 에서 채워진다 (m/단위)
         # 큐를 비우는 일을 전용 스레드가 맡는다 (2026-09-04). 예전에는 read_*
         # 안에서만 비웠는데, RCVHWM=12 는 0.2초치라 호출자가 그보다 오래 딴
@@ -225,11 +228,14 @@ class NodeCamera:
             arr = np.frombuffer(payload, dtype=m["dtype"]) \
                 .reshape(m["shape"])
             with self._lock:
-                self._latest[kind] = (m["ts"], arr)
+                self._latest[kind] = (m["ts"], arr, m)
             if kind == "depth" and "depth_scale" in m:
                 self.depth_scale = float(m["depth_scale"])
 
     def _read(self, kind: str, max_age_ms: int) -> np.ndarray:
+        return self._read_entry(kind, max_age_ms)[1]
+
+    def _read_entry(self, kind: str, max_age_ms: int) -> tuple:
         if self._sub is None:
             raise RuntimeError(f"{self} is not connected")
         # 소켓은 드레인 스레드만 만진다 -- 여기서는 캐시만 본다.
@@ -254,11 +260,26 @@ class NodeCamera:
             raise TimeoutError(
                 f"{self} latest {kind} frame is too old: {age_ms:.1f} ms "
                 f"(max allowed: {max_age_ms} ms)")
-        return ent[1]
+        return ent
 
     def read_latest(self, max_age_ms: int = 500) -> np.ndarray:
         """최신 RGB (H,W,3) u8. lerobot read_latest 와 같은 계약."""
         return self._read("color", max_age_ms)
+
+    def read_latest_stamped(self, max_age_ms: int = 500) -> "tuple[np.ndarray, dict]":
+        """Latest RGB plus its stamps, taken from the same cache entry.
+
+        Returns ``(rgb, {"t_host": ..., "frame_no": ..., "t_device": ...,
+        "t_domain": ...})``; keys the node did not send are absent. Reading the
+        image and its header in two calls could pair a frame with the next
+        frame's stamps.
+        """
+        ts, arr, m = self._read_entry("color", max_age_ms)
+        stamps = {"t_host": float(ts)}
+        for k in ("frame_no", "t_device", "t_domain"):
+            if k in m:
+                stamps[k] = m[k]
+        return arr, stamps
 
     def read_latest_depth(self, max_age_ms: int = 500) -> np.ndarray:
         """최신 raw depth z16 (H,W,1) u16 -- lerobot read_latest_depth 와

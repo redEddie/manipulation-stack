@@ -32,6 +32,7 @@ from mstack.data.dataset_schema import (
     FT_OBS_FIELDS,
     SCHEMA_FIELDS,
     SCHEMA_VERSION,
+    TIMING_REQUIRED,
     DatasetSchemaConfig,
 )
 from mstack.data.libero_format import (
@@ -59,6 +60,8 @@ def _make_frame(seed=0, gripper_closed=False):
         # 그 필드가 없는 장비에서는 기록되지 않는다 -- 그래서 아래 5번이
         # "안 주면 안 쓴다" 를 따로 본다.
         "ft": {k: rng.random(n).astype(np.float32) for k, n in FT_OBS_FIELDS},
+        # per-frame timing (knu-1.3.0): the worker always supplies these
+        "timing": {k: float(seed) + 0.01 * j for j, k in enumerate(TIMING_REQUIRED)},
     }
 
 

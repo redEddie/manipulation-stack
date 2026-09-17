@@ -371,15 +371,24 @@ print("11 통과: 스키마 버전 기본=최신 / 내려 찍기 가능 / 이력
 # 두 목록이 갈라지면 확인은 통과했는데 검증기는 떨어뜨리는 파일이 나온다.
 from apps.workspace.launcher.pages import _ROBOT_OBS_FIELDS  # noqa: E402
 
+# Robot keys that are stored outside obs (knu-1.3.0): the state read time
+# becomes the episode dataset timing/robot_state.
+from mstack.data.dataset_schema import ROBOT_STATE_TIME, TIMING_ROBOT_STATE  # noqa: E402
+
+_STORED_AS = {ROBOT_STATE_TIME: f"timing/{TIMING_ROBOT_STATE}"}
 for _v, _fields in _ROBOT_OBS_FIELDS.items():
     _req = SCHEMA_FIELDS[_v]["obs_datasets"]
-    _extra = [f for f in _fields if f not in _req]
+    _req_ep = SCHEMA_FIELDS[_v]["episode_datasets"]
+    _extra = [f for f in _fields
+              if f not in _req and _STORED_AS.get(f) not in _req_ep]
     assert not _extra, f"{_v}: 확인만 하고 스키마엔 없는 필드 {_extra}"
 _base = set(SCHEMA_FIELDS["knu-1.0.0"]["obs_datasets"])
 _added = [f for f in SCHEMA_FIELDS[SCHEMA_VERSION]["obs_datasets"] if f not in _base]
+_added += [k for k, ds in _STORED_AS.items()
+           if ds in SCHEMA_FIELDS[SCHEMA_VERSION]["episode_datasets"]]
 assert set(_ROBOT_OBS_FIELDS[SCHEMA_VERSION]) == set(_added), \
     f"{SCHEMA_VERSION} 이 더한 필드와 확인 대상이 다르다: {_added}"
-assert set(_added) == set(FT_OBS_KEYS)
+assert set(_added) >= set(FT_OBS_KEYS)
 print("12 통과: 버전 [확인] 대상 == 그 버전이 더한 관측 필드")
 
 # --- 13) 로봇 노드 인계 ------------------------------------------------------

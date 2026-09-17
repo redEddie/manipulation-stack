@@ -119,6 +119,7 @@ from mstack.data.dataset_schema import (
     OBS_JOINT_VELOCITIES,
     REPACK_COUNT_ATTR,
     REPACK_MARKER_ATTR,
+    TIMING_GROUP,
     DatasetSchemaConfig,
 )
 from mstack.config.station import load_station
@@ -205,6 +206,10 @@ class LiberoEpisodeBuffer:
         # 포스·토크·접촉. 키는 FT_OBS_KEYS -- 개별 속성으로 두면 필드가 늘 때마다
         # 버퍼/시그니처/기록 3곳을 같이 고쳐야 한다.
         self.ft: dict[str, list[np.ndarray]] = {k: [] for k in FT_OBS_KEYS}
+        # Per-frame timing (knu-1.3.0): name -> one value per frame. Keys come
+        # from the caller (dataset_schema.TIMING_*); string values such as a
+        # camera's clock domain are kept per frame and written as group attrs.
+        self.timing: dict[str, list] = {}
 
     def __len__(self) -> int:
         return len(self.joint_states)
@@ -224,6 +229,7 @@ class LiberoEpisodeBuffer:
         agentview_depth: Optional[np.ndarray] = None,
         eye_in_hand_depth: Optional[np.ndarray] = None,
         ft: Optional[dict] = None,
+        timing: Optional[dict] = None,
     ) -> None:
         self.joint_states.append(np.asarray(joint_positions, dtype=np.float32))
         self.gripper_states.append(np.array([gripper_position], dtype=np.float32))
@@ -250,6 +256,12 @@ class LiberoEpisodeBuffer:
             self.joint_velocities.append(np.asarray(joint_velocities, dtype=np.float32))
         if self.schema.save_timestamp and timestamp is not None:
             self.timestamps.append(float(timestamp))
+        # Timing follows the commanded_* rule: tiny, recorded whenever given.
+        # A key missing on some frames leaves that column short, and a short
+        # column is not written (same length check as commanded_*).
+        for key, value in (timing or {}).items():
+            if value is not None:
+                self.timing.setdefault(key, []).append(value)
         # depth 는 crop/resize 없이 원본 해상도 그대로 (#17: 원본 보관소 원칙,
         # D455 는 RGB-depth 픽셀 대응이 원래 안 맞아 RGB 크롭을 따라가면
         # 오히려 거짓 정렬이 된다). .copy() 는 RGB 와 같은 이유 -- 드라이버
@@ -486,6 +498,7 @@ def write_episode_payload(
     for key in FT_OBS_KEYS:
         if len(buf.ft[key]) == n:
             obs.create_dataset(key, data=np.stack(buf.ft[key]))
+    _write_timing(grp, buf.timing, n)
 
     grp.create_dataset("actions", data=actions)
     grp.create_dataset("rewards", data=np.zeros(n, dtype=np.float32))
@@ -493,6 +506,26 @@ def write_episode_payload(
     dones[-1] = 1.0
     grp.create_dataset("dones", data=dones)
     return n
+
+
+def _write_timing(grp: h5py.Group, timing: dict, n: int) -> None:
+    """``timing/<name>`` for every column with one value per frame.
+
+    Numbers become float64 (times) or int64 (frame counters); a string column
+    (a camera's clock domain) becomes a group attr holding its last value.
+    """
+    full = {k: v for k, v in timing.items() if len(v) == n}
+    if not full:
+        return
+    tg = grp.create_group(TIMING_GROUP)
+    tg.attrs["clock"] = "host time.time() seconds"
+    for key, values in full.items():
+        if isinstance(values[-1], str):
+            tg.attrs[key] = values[-1]
+        elif isinstance(values[-1], (int, np.integer)) and not isinstance(values[-1], bool):
+            tg.create_dataset(key, data=np.asarray(values, dtype=np.int64))
+        else:
+            tg.create_dataset(key, data=np.asarray(values, dtype=np.float64))
 
 
 class NullTaskWriter:
