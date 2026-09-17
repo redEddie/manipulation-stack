@@ -28,15 +28,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 import shutil
 import sys
 import time
+import zlib
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
 from pathlib import Path
 from typing import Optional
 
 import h5py
 import numpy as np
+from h5py._hl.filters import guess_chunk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -113,13 +118,92 @@ class _Progress:
               f"{rate:.0f} MB/s  경과 {el:.0f}s  남은시간 ~{eta:.0f}s", flush=True)
 
 
+def _target_filter(compression: str, level: int) -> tuple:
+    """(compression, opts, shuffle) a large dataset should end up with."""
+    if compression == "none":
+        return (None, None, False)
+    return (compression, level if compression == "gzip" else None, True)
+
+
+def _already_packed(ds: h5py.Dataset, compression: str, level: int) -> bool:
+    """True when the dataset is already stored exactly as a repack would write it.
+
+    Such a dataset is copied chunk-for-chunk (H5Ocopy) instead of being
+    decoded and re-encoded. After a repack, collecting more into the file adds
+    lzf episodes next to the gzip ones, and re-encoding the gzip majority was
+    nearly all of the time: scene_009 had 139 gzip episodes and 1 lzf, and a
+    full rewrite ran at ~30 MB/s over 34 GB (2026-09-17). A raw copy of one
+    episode takes 0.2 s.
+    """
+    if ds.chunks is None:
+        return False
+    return (ds.compression, ds.compression_opts, bool(ds.shuffle)) == \
+        _target_filter(compression, level)
+
+
+def _default_jobs() -> int:
+    """All cores but two -- the GUI and the rest of the station keep a margin."""
+    return max(1, (os.cpu_count() or 2) - 2)
+
+
+def _shuffle(buf: bytes, itemsize: int) -> bytes:
+    """HDF5 shuffle filter: byte k of every element, for k = 0..itemsize-1."""
+    if itemsize == 1:
+        return buf
+    return np.frombuffer(buf, np.uint8).reshape(-1, itemsize).T.tobytes()
+
+
+def _encode_group(job: tuple) -> list:
+    """Worker: gzip+shuffle every listed dataset of one group, chunk by chunk.
+
+    Returns ``[(dataset path, [(chunk offset, bytes), ...]), ...]``. Each chunk
+    is decompressed again and compared with its source before it is returned,
+    so what the parent writes is already checked in full -- not a sample.
+
+    The HDF5 filter pipeline runs in a single thread, which held a full rewrite
+    at ~35 MB/s (2026-09-17). zlib here runs in one process per group, so the
+    encode scales with cores.
+    """
+    src_path, items, level = job
+    out = []
+    with h5py.File(src_path, "r") as f:
+        for name, chunks in items:
+            a = np.ascontiguousarray(f[name][()])
+            itemsize = a.dtype.itemsize
+            parts = []
+            for off in itertools.product(*(range(0, n, c) for n, c in zip(a.shape, chunks))):
+                sl = tuple(slice(o, o + c) for o, c in zip(off, chunks))
+                blk = a[sl]
+                if blk.shape != tuple(chunks):
+                    # HDF5 stores edge chunks at full size, padded with the fill value.
+                    full = np.zeros(chunks, a.dtype)
+                    full[tuple(slice(0, n) for n in blk.shape)] = blk
+                    blk = full
+                raw = np.ascontiguousarray(blk).tobytes()
+                comp = zlib.compress(_shuffle(raw, itemsize), level)
+                if _shuffle_back(zlib.decompress(comp), itemsize) != raw:
+                    raise RuntimeError(f"encode round-trip mismatch at {name} {off}")
+                parts.append((off, comp))
+            out.append((name, parts))
+    return out
+
+
+def _shuffle_back(buf: bytes, itemsize: int) -> bytes:
+    if itemsize == 1:
+        return buf
+    return np.frombuffer(buf, np.uint8).reshape(itemsize, -1).T.tobytes()
+
+
 def _total_bytes(path: Path) -> int:
     with h5py.File(path, "r") as f:
         return sum(int(ds.size) * ds.dtype.itemsize for _, ds in _walk_datasets(f))
 
 
 def _rewrite(src_path: Path, dst_path: Path, compression: str, level: int,
-             progress: "Optional[_Progress]" = None) -> None:
+             progress: "Optional[_Progress]" = None, jobs: int = 1) -> set:
+    """Writes the repacked file. Returns the dataset paths encoded (and checked)
+    by the worker pool, which :func:`_verify` need not decode again."""
+    pooled: dict = {}          # top-level group -> [(dataset path, chunks)]
     with h5py.File(src_path, "r") as src, h5py.File(dst_path, "w") as dst:
         _copy_attrs(src, dst)
 
@@ -130,10 +214,26 @@ def _rewrite(src_path: Path, dst_path: Path, compression: str, level: int,
                 if isinstance(item, h5py.Group):
                     rec(item, dg.create_group(key))
                     continue
+                nbytes = int(item.size) * item.dtype.itemsize
+                if _already_packed(item, compression, level):
+                    sg.copy(item, dg, name=key)          # raw chunks, attrs included
+                    if progress is not None:
+                        progress.add(nbytes)
+                    continue
+                big = compression != "none" and nbytes >= _MIN_COMPRESS_BYTES
+                if big and compression == "gzip" and jobs > 1:
+                    # Create it empty with the final filters; the pool fills it.
+                    chunks = guess_chunk(item.shape, None, item.dtype.itemsize)
+                    out = dg.create_dataset(key, shape=item.shape, dtype=item.dtype,
+                                            chunks=chunks, compression="gzip",
+                                            compression_opts=level, shuffle=True)
+                    _copy_attrs(item, out)
+                    top = item.name.strip("/").split("/")[0]
+                    pooled.setdefault(top, []).append((item.name, chunks))
+                    continue
                 data = item[()]
-                nbytes = getattr(data, "nbytes", 0)
                 kw = {}
-                if compression != "none" and nbytes >= _MIN_COMPRESS_BYTES:
+                if big:
                     if compression == "gzip":
                         kw = {"compression": "gzip", "compression_opts": level}
                     else:
@@ -146,8 +246,22 @@ def _rewrite(src_path: Path, dst_path: Path, compression: str, level: int,
 
         rec(src, dst)
 
+        if pooled:
+            tasks = [(str(src_path), items, level) for items in pooled.values()]
+            with ProcessPoolExecutor(max_workers=min(jobs, len(tasks)),
+                                     mp_context=get_context("spawn"),
+                                     initializer=os.nice, initargs=(10,)) as ex:
+                for results in ex.map(_encode_group, tasks):
+                    for name, parts in results:
+                        ds = dst[name]
+                        for off, comp in parts:
+                            ds.id.write_direct_chunk(off, comp)
+                        if progress is not None:
+                            progress.add(int(ds.size) * ds.dtype.itemsize)
+    return {name for items in pooled.values() for name, _c in items}
 
-def _verify(src_path: Path, dst_path: Path) -> None:
+
+def _verify(src_path: Path, dst_path: Path, checked: "set | None" = None) -> None:
     with h5py.File(src_path, "r") as a, h5py.File(dst_path, "r") as b:
         sa = dict(_walk_datasets(a))
         sb = dict(_walk_datasets(b))
@@ -155,7 +269,20 @@ def _verify(src_path: Path, dst_path: Path) -> None:
             missing = (set(sa) ^ set(sb))
             raise RuntimeError(f"dataset set differs: {sorted(missing)[:5]}")
         for path, ds in sa.items():
-            ca, cb = _checksum(ds), _checksum(sb[path])
+            db = sb[path]
+            if (ds.shape, ds.dtype) != (db.shape, db.dtype):
+                raise RuntimeError(f"shape/dtype mismatch at {path}")
+            if (ds.chunks is not None and ds.chunks == db.chunks
+                    and ds.compression == db.compression
+                    and ds.compression_opts == db.compression_opts
+                    and ds.shuffle == db.shuffle
+                    and ds.id.get_storage_size() == db.id.get_storage_size()):
+                # Raw-copied: same filters and the same stored bytes count, so
+                # decoding both sides would only re-read what H5Ocopy moved.
+                continue
+            if checked and ds.name in checked:
+                continue            # every chunk round-tripped in the worker
+            ca, cb = _checksum(ds), _checksum(db)
             if ca != cb:
                 raise RuntimeError(f"content mismatch at {path}: {ca} vs {cb}")
         if dict(a.attrs) .keys() != dict(b.attrs).keys():
@@ -163,7 +290,7 @@ def _verify(src_path: Path, dst_path: Path) -> None:
 
 
 def process(path: Path, compression: str, level: int, dry_run: bool,
-            keep_original: bool) -> bool:
+            keep_original: bool, jobs: int = 1) -> bool:
     if not path.exists():
         print(f"  [skip] {path}: 파일 없음", flush=True)
         return False
@@ -176,10 +303,10 @@ def process(path: Path, compression: str, level: int, dry_run: bool,
         total = _total_bytes(path)
         print(f"  압축 해제 기준 {total/1e6:.0f} MB 처리 예정", flush=True)
         prog = _Progress(total)
-        _rewrite(path, tmp, compression, level, progress=prog)
+        checked = _rewrite(path, tmp, compression, level, progress=prog, jobs=jobs)
         t_written = time.monotonic() - t_start
         print(f"  쓰기 완료 ({t_written:.1f}s) -- 내용 검증 중...", flush=True)
-        _verify(path, tmp)
+        _verify(path, tmp, checked)
     except Exception as e:  # noqa: BLE001
         tmp.unlink(missing_ok=True)
         print(f"  [실패] {type(e).__name__}: {e}", flush=True)
@@ -243,6 +370,8 @@ def main() -> int:
                     help="줄어드는 크기만 확인하고 원본은 건드리지 않음")
     ap.add_argument("--keep-original", action="store_true",
                     help="교체 대신 원본을 .orig 로 남김")
+    ap.add_argument("--jobs", type=int, default=_default_jobs(),
+                    help="gzip 인코딩에 쓸 프로세스 수 (기본: 코어 수 - 2, 1 이면 병렬 끔)")
     ap.add_argument("--skip-repacked", action="store_true",
                     help="이미 재압축된 파일은 건너뜀 (repacked 표시 또는 이미지가 gzip)")
     args = ap.parse_args()
@@ -261,7 +390,8 @@ def main() -> int:
                       + (f", {st['marker']}" if st["marker"] else "") + ")", flush=True)
                 continue
         b = p.stat().st_size if p.exists() else 0
-        ok &= process(p, args.compression, args.level, args.dry_run, args.keep_original)
+        ok &= process(p, args.compression, args.level, args.dry_run, args.keep_original,
+                      jobs=args.jobs)
         a = p.stat().st_size if p.exists() else 0
         total_before += b
         total_after += a
