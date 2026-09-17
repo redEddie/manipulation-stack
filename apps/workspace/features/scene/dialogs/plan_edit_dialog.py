@@ -21,9 +21,12 @@ from PyQt6.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from apps.workspace.features.scene.dialogs.plan_json_dialog import PlanJsonDialog
+from apps.workspace.features.scene.dialogs.sentence_checks import build_sentence_checks
+from apps.workspace.shared.sizing import scrollable
 from mstack.gui.i18n import tr
 from mstack.scene.collection_plan import load_plan
 from mstack.scene.scene_format import INSTRUCTION_ID_RE
@@ -89,6 +92,12 @@ class PlanEditDialog(QDialog):
         add_btn.clicked.connect(lambda: self._add_row(
             {"id": None, "instr": "", "target": 10}))
         rrow.addWidget(add_btn)
+        suggest_btn = QPushButton(tr("추천 문장에서 추가..."))
+        suggest_btn.setToolTip(tr(
+            "이 scene 의 배치로 문법이 만들 수 있는 문장을 보여줍니다.\n"
+            "골라서 행으로 넣습니다 — 적게 수집된 동작이 위에 옵니다."))
+        suggest_btn.clicked.connect(self._on_suggest)
+        rrow.addWidget(suggest_btn)
         del_btn = QPushButton(tr("선택 행 삭제"))
         del_btn.clicked.connect(self._on_del_row)
         rrow.addWidget(del_btn)
@@ -196,6 +205,39 @@ class PlanEditDialog(QDialog):
         self._cur_sid = self.scene_combo.currentText() or None
         if self._cur_sid is not None:
             self._load_rows(self._cur_sid)
+
+    def _on_suggest(self) -> None:
+        """Adds rows picked from the grammar's sentences for this scene's layout.
+
+        Typing every sentence of a new scene by hand is the only other way in,
+        and the recommendation dialog offers this list only while a scene is
+        being created (2026-09-17: S025 had no instructions). Sentences already
+        in the table are left out of the list.
+        """
+        sid = self._cur_sid
+        if sid is None:
+            return
+        from mstack.scene.props import props_by_id
+        from mstack.scene.scene_format import read_scene_metadata, scene_filename
+        from mstack.scene.skill_stats import collected_skill_counts
+
+        path = self._path.parent / scene_filename(sid)
+        try:
+            md = read_scene_metadata(path)
+            props = props_by_id()
+        except Exception as e:  # noqa: BLE001 -- missing file, live session lock
+            QMessageBox.warning(self, tr("추천 문장 없음"), tr(
+                "{s} 의 scene 파일을 읽지 못했습니다 ({e}).").format(
+                    s=sid, e=type(e).__name__))
+            return
+        dlg = SuggestSentencesDialog(
+            self, sid, md, props, collected_skill_counts(self._path.parent),
+            exclude={r["instr"] for r in self._collect_rows()})
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        for text in dlg.chosen:
+            self._add_row({"id": None, "instr": text, "target": 10})
+        self._check_dups()
 
     def _on_del_row(self) -> None:
         for it in self.tree.selectedItems():
@@ -346,3 +388,29 @@ class PlanEditDialog(QDialog):
         super().accept()
 
 
+class SuggestSentencesDialog(QDialog):
+    """Pick sentences for one scene from the grammar's candidates."""
+
+    def __init__(self, parent, scene_id: str, md, props: dict, counts,
+                 exclude=()) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("추천 문장 — {s}").format(s=scene_id))
+        self.setMinimumSize(640, 420)
+        self.chosen: list = []
+        col = QVBoxLayout(self)
+        inner = QWidget()
+        body = QVBoxLayout(inner)
+        self._checks = build_sentence_checks(md, props, counts, body, exclude)
+        body.addStretch(1)
+        col.addWidget(scrollable(inner), 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("행으로 추가"))
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(bool(self._checks))
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        col.addWidget(buttons)
+
+    def _accept(self) -> None:
+        self.chosen = [cb.text() for cb in self._checks if cb.isChecked()]
+        self.accept()
