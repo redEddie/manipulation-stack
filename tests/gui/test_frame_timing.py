@@ -196,4 +196,50 @@ assert "schema_version" in chk.stdout and "폐기된 중복 속성" in chk.stdou
 print("7. one version attribute: readers use dataset_version, checker flags the removed copy OK")
 print("6. resume and doctor raise to 1.3.0 only when existing episodes carry timing OK")
 
+# ---- 8. stall counting only while recording
+# The 100 Hz ramps read cameras for the live view; a 30 fps camera sampled there
+# repeats frames as a matter of course and used to log false "stall" warnings.
+import os  # noqa: E402
+import types  # noqa: E402
+
+os.environ.setdefault("GELLO_NO_PHASE_BUS", "1")
+from PyQt6.QtCore import QCoreApplication  # noqa: E402
+
+_app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
+from mstack.collect.worker import CollectionWorker, WorkerConfig  # noqa: E402
+
+
+class _Client:
+    def get_observations(self):
+        return {"joint_positions": np.zeros(8), "ee_pos_quat": np.zeros(7),
+                "joint_velocities": np.zeros(8), "state_time": time.time()}
+
+
+class _Cam:
+    def __init__(self):
+        self.seq = 0
+
+    def read_latest_stamped(self, max_age_ms=500):
+        return np.zeros((4, 4, 3), np.uint8), {"t_host": time.time(), "seq": self.seq}
+
+
+w = CollectionWorker(WorkerConfig(task_name="t", language_instruction="t", data_root="/tmp"))
+cams = {"agent": _Cam(), "wrist": _Cam()}
+w._robot = types.SimpleNamespace(_client=_Client(), cameras=cams)
+w._depth_roles = set()
+logs = []
+w.log_message.connect(logs.append)
+w._cam_stale, w._cam_stale_run, w._cam_stale_max_run = {}, {}, {}
+for _ in range(10):                       # ramp: same frame over and over
+    obs = w._get_obs()
+assert obs["agent"].shape == (4, 4, 3) and not logs and not w._cam_stale, (logs, w._cam_stale)
+for i in range(6):                        # recording: agent advances, wrist frozen
+    cams["agent"].seq = i
+    w._get_obs(count_stale=True)
+assert "agent" not in w._cam_stale, w._cam_stale
+assert w._cam_stale["wrist"] == 5 and w._cam_stale_max_run["wrist"] == 5, w._cam_stale
+_app.processEvents()
+assert sum("wrist" in m and "연속 동일" in m for m in logs) == 1, logs
+print("8. stalls are counted from node seq while recording only, not in ramps OK")
+
 print("test_frame_timing 통과")

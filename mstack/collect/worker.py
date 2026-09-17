@@ -657,7 +657,7 @@ class CollectionWorker(QThread):
     def _joint_vec(self, d: dict) -> np.ndarray:
         return np.array([d[k] for k in JOINT_KEYS], dtype=float)
 
-    def _get_obs(self, with_cameras: bool = True) -> dict:
+    def _get_obs(self, with_cameras: bool = True, count_stale: bool = False) -> dict:
         """Like ``FR3ZMQRobot.get_observation()`` but also carries ``ee_pos_quat``
         and ``joint_velocities``.
 
@@ -691,6 +691,11 @@ class CollectionWorker(QThread):
             out["_state_time"] = float(raw[ROBOT_STATE_TIME])
         if not with_cameras:
             return out
+        # Stall counting belongs to the recording loop only (count_stale). The
+        # 100 Hz homing/alignment ramps also read cameras for the live view, and
+        # a 30 fps camera sampled at 100 Hz returns the same frame 3 ticks in a
+        # row as a matter of course -- counting there logged "stall" warnings
+        # after perfectly clean episodes (2026-09-17, S025: 0 repeats recorded).
         for cam_key, cam in self._robot.cameras.items():
             # max_age_ms=500 (2026-08-26 원복): 한때 2000 으로 늘렸던 것은
             # 리더 스레드가 GUI 와 GIL 을 공유하던 시절의 완화책이다 (그때
@@ -714,7 +719,13 @@ class CollectionWorker(QThread):
             # trained on. Nothing upstream reports it, so count it here:
             # identical consecutive frames are tallied per camera and
             # surfaced with the episode.
-            fp = hash(frame[::37, ::37].tobytes())
+            out[cam_key] = frame
+            if not count_stale:
+                continue
+            # The node's receive counter identifies a frame exactly; the image
+            # hash is the fallback for a camera without it.
+            seq = out.get(f"_{cam_key}_stamps", {}).get("seq")
+            fp = ("seq", seq) if seq is not None else hash(frame[::37, ::37].tobytes())
             if fp == self._cam_last_fp.get(cam_key):
                 self._cam_stale[cam_key] = self._cam_stale.get(cam_key, 0) + 1
                 run = self._cam_stale_run.get(cam_key, 0) + 1
@@ -731,7 +742,6 @@ class CollectionWorker(QThread):
             else:
                 self._cam_stale_run[cam_key] = 0
             self._cam_last_fp[cam_key] = fp
-            out[cam_key] = frame
         # (#17) depth 는 스키마가 켠 역할만 기록하지만, 카메라 드라이버가
         # read_latest_depth 를 지원하지 않으면 그 역할을 빼고 1회 경고 후
         # 진행한다. UI 게이트와 별개로, 구버전 설정 파일이나 코드 경로 우회를
@@ -1405,7 +1415,7 @@ class CollectionWorker(QThread):
                 if stop:
                     break
 
-                obs = self._get_obs()
+                obs = self._get_obs(count_stale=True)
                 t_frame = time.time()
 
                 # scene 기준 사진(§6 "사진 1장 필수"): 세션 첫 기록 프레임의
