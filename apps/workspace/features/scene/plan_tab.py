@@ -56,6 +56,9 @@ def build_plan_tab(win) -> QWidget:
         "(수집 중에는 바꿀 수 없습니다 — 세션을 끝낸 뒤 고르세요.)"))
     win.plan_progress_tree.itemClicked.connect(
         lambda item, _c: win.scene_planning.on_plan_row_picked(item))
+    # Any row -- scene or instruction -- shows that scene's layout on the right.
+    win.plan_progress_tree.currentItemChanged.connect(
+        lambda item, _prev: win.scene_planning.show_plan_layout(item))
     col.addWidget(win.plan_progress_tree, 1)
 
     return w

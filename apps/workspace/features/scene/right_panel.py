@@ -30,14 +30,14 @@
 """
 from PyQt6.QtWidgets import (
     QFrame,
-    QGroupBox,
     QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from apps.workspace.shared.info import WrapLabel
+from apps.workspace.shared.collapsible import CollapsibleBox
+from apps.workspace.shared.info import InfoCard, WrapLabel, ZoneMap
 from mstack.gui.i18n import tr
 
 #: 종착 동작 하나에만 색을 준다. 색이 둘 이상이면 그 순간 아무것도 안
@@ -61,10 +61,13 @@ def build_configure_right(win) -> QWidget:
     col = QVBoxLayout(w)
     col.setContentsMargins(0, 0, 0, 0)
 
-    # --- Scene ---------------------------------------------------------
-    box = QGroupBox(tr("Scene"))
-    bv = QVBoxLayout(box)
-    bv.setContentsMargins(6, 6, 6, 6)
+    # Three collapsible boxes, like the other activities' right panels
+    # (2026-09-17): making a new scene, managing the dataset's scenes and
+    # instructions, and the layout of the scene picked in the center table.
+
+    # --- New Scene -----------------------------------------------------
+    box = CollapsibleBox(tr("New Scene"))
+    bv = box.body
     # 스타일시트로 padding 을 준 버튼은 레이아웃이 잡아 준 자리보다 크게
     # 그려진다 -- 간격을 안 주면 바로 밑 라벨의 첫 줄이 덮인다 (실측).
     bv.setSpacing(6)
@@ -117,14 +120,14 @@ def build_configure_right(win) -> QWidget:
     bv.addWidget(win.scene_clear_btn)
     col.addWidget(box)
 
-    # --- 지시문 --------------------------------------------------------
-    pbox = QGroupBox(tr("지시문"))
-    pv = QVBoxLayout(pbox)
-    pv.setContentsMargins(6, 6, 6, 6)
+    # --- Scene Management ---------------------------------------------
+    pbox = CollapsibleBox(tr("Scene Management"))
+    pv = pbox.body
     pv.setSpacing(6)
     edit = QPushButton(tr("지시문 편집..."))
     edit.setToolTip(tr("이 데이터셋의 지시문과 목표 개수를 고칩니다 "
                        "(저장할 때 규칙을 검사합니다).\n"
+                       "가운데 표에서 고른 scene 으로 열립니다. "
                        "지시문이 없으면 만들고 엽니다."))
     edit.clicked.connect(win.scene_planning.on_edit_plan)
     pv.addWidget(edit)
@@ -138,6 +141,18 @@ def build_configure_right(win) -> QWidget:
     refresh.clicked.connect(win.scene_planning.refresh_plan_progress)
     pv.addWidget(refresh)
     col.addWidget(pbox)
+
+    # --- Layout ---------------------------------------------------------
+    # The placement of the scene picked in the center table. Deciding which
+    # instructions a scene can take needs its layout in view (2026-09-17).
+    lbox = CollapsibleBox(tr("Layout"))
+    win.conf_layout_card = InfoCard()
+    win.conf_layout_card.setText(tr("가운데 표에서 scene 을 고르면 배치가 보입니다."))
+    lbox.body.addWidget(win.conf_layout_card)
+    win.conf_layout_zones = ZoneMap()
+    win.conf_layout_zones.set_layout_spec(None)
+    lbox.body.addWidget(win.conf_layout_zones)
+    col.addWidget(lbox)
 
     col.addStretch(1)
 

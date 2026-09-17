@@ -43,7 +43,7 @@ class PlanEditDialog(QDialog):
     보존하며, 저장은 여전히 load_plan 검증을 통과해야 반영된다.
     """
 
-    def __init__(self, parent, path: Path) -> None:
+    def __init__(self, parent, path: Path, scene_id: "str | None" = None) -> None:
         super().__init__(parent)
         self._path = Path(path)
         self.warnings: list = []
@@ -130,6 +130,9 @@ class PlanEditDialog(QDialog):
         buttons.rejected.connect(self.reject)
         col.addWidget(buttons)
         self._load_file()
+        # Open on the scene picked in the Configure table, not always the first.
+        if scene_id in self._scene_order:
+            self.scene_combo.setCurrentIndex(self._scene_order.index(scene_id))
 
     def _load_file(self) -> None:
         """파일 -> 작업본 -> 표. raw 편집 뒤에도 이걸로 되돌아온다.

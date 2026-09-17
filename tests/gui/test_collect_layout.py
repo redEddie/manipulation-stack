@@ -398,7 +398,36 @@ try:
     assert opened != closed, "header arrow not painted under the app style sheet"
 finally:
     app.setStyleSheet(_prev_qss)
-print("13. Instruction 탭 줄 클릭 = scene + 지시문 OK (세션 중엔 잠김) · 제목행 전체 펼치기/접기 OK")
+# Picking a row shows that scene's layout in the right panel's Layout box, and
+# [지시문 편집] opens on the picked scene.
+from apps.workspace.shared.collapsible import CollapsibleBox  # noqa: E402
+
+titles = [b._title for b in right_conf.findChildren(CollapsibleBox)]
+assert titles == ["New Scene", "Scene Management", "Layout"], titles
+tree.setCurrentItem(top.child(0))
+assert win.scene_planning.selected_plan_scene() == "S000"
+assert "S000" in win.conf_layout_card.text(), win.conf_layout_card.text()
+from apps.workspace.features.scene import planning as _planning  # noqa: E402
+
+opened: dict = {}
+
+
+class _FakePlanDialog:
+    def __init__(self, _parent, _path, scene_id=None):
+        opened["scene_id"] = scene_id
+
+    def exec(self):
+        return 0
+
+
+_real_dialog = _planning.PlanEditDialog
+_planning.PlanEditDialog = _FakePlanDialog
+try:
+    win.scene_planning.on_edit_plan()
+finally:
+    _planning.PlanEditDialog = _real_dialog
+assert opened.get("scene_id") == "S000", opened
+print("13. Instruction 탭 줄 클릭 = scene + 지시문 OK (세션 중엔 잠김) · 제목행 전체 펼치기/접기 OK · 고른 scene 배치/편집 OK")
 
 # ---------------------- 14. 새 Scene = 탭 + **누르는 즉시 파일** (여러 개)
 import importlib.util  # noqa: E402

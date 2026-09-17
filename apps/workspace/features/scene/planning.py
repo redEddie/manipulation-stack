@@ -25,6 +25,10 @@ from mstack.scene.scene_format import (
     read_scene_metadata,
     scene_filename,
 )
+from apps.workspace.shared.info import scene_fields
+
+#: Item data role holding a plan table row's scene id (scene header rows).
+_SCENE_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class ScenePlanningOps:
@@ -72,11 +76,13 @@ class ScenePlanningOps:
                 top = QTreeWidgetItem([
                     f"{sp.scene_id}{note}", "", "",
                     tr("지시문이 없습니다 — [지시문 편집] 에서 적으세요")])
+                top.setData(0, _SCENE_ROLE, sp.scene_id)
                 for col_i in range(4):
                     top.setForeground(col_i, Qt.GlobalColor.darkYellow)
                 tree.addTopLevelItem(top)
                 continue
             top = QTreeWidgetItem([f"{sp.scene_id}{note}", "", "", ""])
+            top.setData(0, _SCENE_ROLE, sp.scene_id)
             for s in sp.slots:
                 c = counts.get(s.instruction_id, {}).get("usable", 0)
                 s_done += min(c, s.target)
@@ -105,6 +111,34 @@ class ScenePlanningOps:
             text += tr("  ·  파일 없는 scene {n}개 표시 안 함 ({s})").format(
                 n=len(skipped), s=", ".join(skipped[:4]))
         self.win.plan_progress_label.setText(text)
+
+    def selected_plan_scene(self) -> "str | None":
+        """Scene id of the center table's current row (scene or instruction)."""
+        tree = getattr(self.win, "plan_progress_tree", None)
+        item = tree.currentItem() if tree is not None else None
+        if item is None:
+            return None
+        top = item.parent() or item
+        return top.data(0, _SCENE_ROLE)
+
+    def show_plan_layout(self, item) -> None:
+        """Right panel Layout box: the placement of the picked row's scene."""
+        card = getattr(self.win, "conf_layout_card", None)
+        if card is None or item is None:
+            return
+        sid = (item.parent() or item).data(0, _SCENE_ROLE)
+        if not sid:
+            return
+        root = Path(self.win.root_edit.text().strip() or ".")
+        try:
+            md = read_scene_metadata(root / scene_filename(sid))
+        except Exception as e:  # noqa: BLE001 -- live session lock, missing file
+            card.setText(tr("{s} 배치를 읽지 못했습니다 ({e})").format(
+                s=sid, e=type(e).__name__))
+            self.win.conf_layout_zones.set_layout_spec(None)
+            return
+        card.set_fields(scene_fields(md))
+        self.win.conf_layout_zones.set_layout_spec(md.layout)
 
     def on_plan_row_picked(self, item) -> None:
         """Instruction 탭의 지시문 줄 = 시작 설정 (2026-09-06 사용자 요청).
@@ -259,7 +293,7 @@ class ScenePlanningOps:
                 return
             self.win.log(f"[지시문] 지시문 파일 생성: {path}")
             self.on_plan_changed()
-        dlg = PlanEditDialog(self.win, path)
+        dlg = PlanEditDialog(self.win, path, scene_id=self.selected_plan_scene())
         if dlg.exec() == QDialog.DialogCode.Accepted:
             for w in getattr(dlg, "warnings", []):
                 self.win.log(f"[지시문 경고] {w}")
