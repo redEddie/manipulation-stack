@@ -173,7 +173,8 @@ def _frame_timing(obs: dict, t_frame: float, t_action: float) -> dict:
     for cam_key, role in (("agent", "agentview"), ("wrist", "eye_in_hand")):
         st = obs.get(f"_{cam_key}_stamps") or {}
         for src, suffix in (("t_host", "host"), ("t_device", "device"),
-                            ("frame_no", "frame_no"), ("t_domain", "domain")):
+                            ("frame_no", "frame_no"), ("seq", "node_seq"),
+                            ("t_domain", "domain")):
             if st.get(src) is not None:
                 out[f"{role}_{suffix}"] = st[src]
     return out

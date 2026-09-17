@@ -126,7 +126,10 @@ FT_OBS_KEYS = tuple(k for k, _ in FT_OBS_FIELDS)
 #: * ``robot_state``  the 1 kHz loop read the joint state stored in this frame
 #: * ``<cam>_host``   the camera node received the image stored in this frame
 #: * ``<cam>_device`` the camera's own timestamp for it (clock: group attr ``<cam>_domain``)
-#: * ``<cam>_frame_no`` the camera's frame counter -- a gap is a dropped frame
+#: * ``<cam>_frame_no`` the camera's frame counter (frames the device produced)
+#: * ``<cam>_node_seq`` the node's counter (frames the node received); growth of
+#:   frame_no - node_seq is frames lost between device and node, and an unchanged
+#:   node_seq between two recorded frames is the same image recorded twice
 TIMING_GROUP = "timing"
 TIMING_FRAME = "frame"
 TIMING_ACTION = "action"
@@ -139,7 +142,7 @@ TIMING_REQUIRED = (TIMING_FRAME, TIMING_ACTION, TIMING_ROBOT_STATE) + tuple(
 #: written when the camera driver gives them; never required (a simulated or
 #: older camera node has no device clock)
 TIMING_OPTIONAL = tuple(f"{c}_{k}" for c in TIMING_CAMERAS
-                        for k in ("device", "frame_no"))
+                        for k in ("device", "frame_no", "node_seq"))
 
 # HDF5 repack markers (used by libero_format.py, dataset_sync.py, repack_hdf5.py).
 REPACK_MARKER_ATTR = "repacked"

@@ -269,14 +269,16 @@ class NodeCamera:
     def read_latest_stamped(self, max_age_ms: int = 500) -> "tuple[np.ndarray, dict]":
         """Latest RGB plus its stamps, taken from the same cache entry.
 
-        Returns ``(rgb, {"t_host": ..., "frame_no": ..., "t_device": ...,
-        "t_domain": ...})``; keys the node did not send are absent. Reading the
+        Returns ``(rgb, {"t_host": ..., "seq": ..., "frame_no": ...,
+        "t_device": ..., "t_domain": ...})``; keys the node did not send are
+        absent. ``seq`` counts frames the node received, ``frame_no`` frames the
+        device produced -- their growing difference is frames lost in between. Reading the
         image and its header in two calls could pair a frame with the next
         frame's stamps.
         """
         ts, arr, m = self._read_entry("color", max_age_ms)
         stamps = {"t_host": float(ts)}
-        for k in ("frame_no", "t_device", "t_domain"):
+        for k in ("seq", "frame_no", "t_device", "t_domain"):
             if k in m:
                 stamps[k] = m[k]
         return arr, stamps

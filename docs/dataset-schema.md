@@ -303,7 +303,13 @@ recording rather than anything a policy observes:
 | `timing/robot_state` | float64 | yes | the 1 kHz loop read the joint state stored in this frame |
 | `timing/agentview_host`, `timing/eye_in_hand_host` | float64 | yes | the camera node received the stored image |
 | `timing/agentview_device`, `timing/eye_in_hand_device` | float64 | no | the camera's own timestamp for that image |
-| `timing/agentview_frame_no`, `timing/eye_in_hand_frame_no` | int64 | no | the camera's frame counter — a gap is a dropped frame |
+| `timing/agentview_frame_no`, `timing/eye_in_hand_frame_no` | int64 | no | the camera's frame counter (frames the device produced) |
+| `timing/agentview_node_seq`, `timing/eye_in_hand_node_seq` | int64 | no | the camera node's counter (frames it received) |
+
+Only 20 of the camera's 30 frames per second are stored, so a jump in
+`frame_no` alone is not a drop. Frames lost between device and node are the
+growth of `frame_no − node_seq`; an unchanged `node_seq` between two recorded
+frames means the same image was recorded twice.
 
 All times are host `time.time()` seconds (group attr `clock`), the clock the
 camera node, phase bus and raw robot logger already use. Device timestamps carry

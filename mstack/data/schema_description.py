@@ -142,6 +142,7 @@ def describe_schema(cfg: DatasetSchemaConfig) -> str:
         "  agentview_host, eye_in_hand_host: (T,) float64",
         "  agentview_device, eye_in_hand_device: (T,) float64  -- 카메라가 줄 때만",
         "  agentview_frame_no, eye_in_hand_frame_no: (T,) int64  -- 카메라가 줄 때만",
+        "  agentview_node_seq, eye_in_hand_node_seq: (T,) int64  -- 노드가 받은 순번",
     ]
 
     lines += [

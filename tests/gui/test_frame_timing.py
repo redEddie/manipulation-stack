@@ -40,11 +40,12 @@ cam = NodeCamera("TEST")
 cam._sub = object()          # "connected" for the cache check; no socket is used
 img = np.zeros((4, 4, 3), np.uint8)
 now = time.time()
-cam._latest["color"] = (now, img, {"ts": now, "frame_no": 41, "t_device": now - 0.03,
+cam._latest["color"] = (now, img, {"ts": now, "seq": 40, "frame_no": 41,
+                                   "t_device": now - 0.03,
                                    "t_domain": "global_time", "shape": [4, 4, 3]})
 got, stamps = cam.read_latest_stamped(max_age_ms=500)
 assert got is img
-assert stamps == {"t_host": now, "frame_no": 41, "t_device": now - 0.03,
+assert stamps == {"t_host": now, "seq": 40, "frame_no": 41, "t_device": now - 0.03,
                   "t_domain": "global_time"}, stamps
 assert cam.read_latest(max_age_ms=500) is img
 cam._latest["color"] = (now, img, {"ts": now})
@@ -72,12 +73,12 @@ print("2. device frame number/time read; a driver without them yields no keys OK
 
 # ---- 3. observation -> timing columns
 obs = {"_state_time": 10.0,
-       "_agent_stamps": {"t_host": 9.99, "frame_no": 7, "t_device": 9.98,
+       "_agent_stamps": {"t_host": 9.99, "seq": 6, "frame_no": 7, "t_device": 9.98,
                          "t_domain": "global_time"},
        "_wrist_stamps": {"t_host": 9.97}}
 cols = _frame_timing(obs, t_frame=10.01, t_action=10.005)
 assert cols == {"frame": 10.01, "action": 10.005, "robot_state": 10.0,
-                "agentview_host": 9.99, "agentview_frame_no": 7,
+                "agentview_host": 9.99, "agentview_frame_no": 7, "agentview_node_seq": 6,
                 "agentview_device": 9.98, "agentview_domain": "global_time",
                 "eye_in_hand_host": 9.97}, cols
 assert "robot_state" not in _frame_timing({}, 1.0, 1.0)
