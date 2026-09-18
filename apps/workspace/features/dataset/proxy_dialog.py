@@ -152,7 +152,7 @@ class ProxyBuildDialog(QDialog):
         self.header = CheckHeader(self.tree)
         self.tree.setHeader(self.header)
         self.tree.setHeaderLabels(
-            [self.header.label_indent() + tr("파일 · 지시문"), tr("만들 클립"),
+            [self.header.label_indent() + tr("파일 · 지시문"), tr("만들 클립 (카메라별)"),
              tr("예상 용량"), tr("예상 시간")])
         self.tree.setColumnWidth(0, 360)
         self.header.toggled.connect(self.set_all_checked)
@@ -295,11 +295,16 @@ class ProxyBuildDialog(QDialog):
             head = Qt.CheckState.PartiallyChecked
         self.header.set_check_state(head)
         self.header.setEnabled(bool(states))
-        total = sum(n for _p, _names, n in self._checked())
+        checked = self._checked()
+        total = sum(n for _p, _names, n in checked)
+        # 클립은 **카메라마다** 하나다. 에피소드 수를 같이 적지 않으면 카메라가
+        # 둘인 이 정거장에서 개수가 두 배로 보인다 -- 조작자가 실제로 그렇게
+        # 읽었다 (2026-09-18).
+        episodes = sum(len(names or ()) for _p, names, _n in checked)
         self.bar.setRange(0, max(total, 1))
         self.status.setText(
-            tr("만들 클립 {n}개, 예상 {mb:.0f} MB · {min:.0f}분").format(
-                n=total, mb=total * _MB_PER_CLIP,
+            tr("에피소드 {e}개 → 만들 클립 {n}개, 예상 {mb:.0f} MB · {min:.0f}분").format(
+                e=episodes, n=total, mb=total * _MB_PER_CLIP,
                 min=total * _SEC_PER_CLIP / 60) if total
             else tr("고른 것이 없습니다.") if states
             else tr("만들 것이 없습니다."))

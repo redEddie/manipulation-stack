@@ -66,6 +66,18 @@ sel = dlg._checked_selection()
 assert set(sel) == {str(scene)} and sel[str(scene)] == set(first.data(0, Qt.ItemDataRole.UserRole + 1))
 assert str(first.data(0, Qt.ItemDataRole.UserRole + 2)) in dlg.status.text()
 
+# 클립은 카메라마다 하나다. 개수만 보이면 에피소드의 배수로 읽히므로 상태줄이
+# 에피소드 수도 말해야 한다 (2026-09-18, 조작자가 14 에피소드를 28 로 읽었다).
+dlg.set_all_checked(True)
+n_eps = len({name for name, _u, _c in sc["missing"]})
+n_cams = len({cam for _n, _u, cam in sc["missing"]})
+assert n_cams >= 2, f"이 검사에는 카메라가 둘 이상인 장면이 필요하다: {n_cams}"
+assert len(sc["missing"]) == n_eps * n_cams, (n_eps, n_cams, len(sc["missing"]))
+text = dlg.status.text()
+assert f"에피소드 {n_eps}개" in text, text
+assert f"클립 {n_eps * n_cams}개" in text, text
+print(f"2b. status names both units: {n_eps} episodes x {n_cams} cameras OK")
+
 dlg.set_all_checked(True)
 assert dlg.header.check_state() == Qt.CheckState.Checked
 assert file_row.checkState(0) == Qt.CheckState.Checked
