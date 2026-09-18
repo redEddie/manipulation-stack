@@ -27,9 +27,13 @@ Jitter is the standard deviation of ``loop_interval`` and its p99 - p1 spread.
 
 Long-run drift: every episode's mean loop interval and mean ages are placed
 on the time since its session started (sessions are split where the gap
-between episodes exceeds --session-gap minutes), and an ordinary least-squares
-slope per hour is reported with its 95% interval. A slope interval containing 0
-means no measurable drift.
+between episodes exceeds --session-gap minutes), and the slope per hour is
+fitted *inside* each session -- sessions are free to sit at different levels,
+because a difference between two days is not degradation within a run. A slope
+interval containing 0 means no measurable drift. ``--warmup-min`` drops the
+start of each session: on S023 the robot state age settles over the first
+~15 min, and a line through the whole session turns that warm-up into a
+"drift" that no longer shows once the first quarter hour is excluded.
 
 Cycle time (phase log): each episode end is attributed to the phases before
 it -- gate, approach, recording -- and the homing and reset_wait that follow,
@@ -98,6 +102,48 @@ def ols_slope(x, y) -> dict:
     se = math.sqrt((resid ** 2).sum() / (n - 2) / sxx)
     t = _t975(n - 2)
     return {"n": int(n), "slope": float(b), "intercept": float(a),
+            "ci95": [float(b - t * se), float(b + t * se)]}
+
+
+def within_session_slope(x, y, groups) -> dict:
+    """Slope against time *inside* each session, sessions free to sit at
+    different levels (a fixed-effects fit: both axes are centred per session).
+
+    One straight line through every session at once answers a different
+    question than "does a session degrade as it runs": it also absorbs the
+    differences *between* sessions, and those have nothing to do with time
+    since a session started. Simulated at the noise this dataset actually has
+    (sd 0.18 ms per episode) with sessions sitting 0.1 ms apart, the single
+    line calls a zero slope a drift 41% of the time at 3 sessions and 52% at
+    10 -- it gets worse as sessions accumulate, which is the opposite of what
+    more data should do. Centring per session holds at 2.5-3.2%.
+
+    The same pseudo-replication that audit_position_bias.py handles for scenes
+    (Hurlbert 1984): episodes inside one session are not independent evidence
+    about sessions.
+    """
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    g = np.asarray(groups)
+    n = x.size
+    keys = np.unique(g)
+    k = keys.size
+    if n < k + 3:
+        return {"n": int(n), "sessions": int(k)}
+    xc, yc = x.astype(float).copy(), y.astype(float).copy()
+    for key in keys:
+        m = g == key
+        xc[m] -= xc[m].mean()
+        yc[m] -= yc[m].mean()
+    sxx = (xc ** 2).sum()
+    if sxx == 0:
+        return {"n": int(n), "sessions": int(k)}
+    b = (xc * yc).sum() / sxx
+    df = n - k - 1
+    resid = yc - b * xc
+    se = math.sqrt((resid ** 2).sum() / df / sxx)
+    t = _t975(df)
+    return {"n": int(n), "sessions": int(k), "slope": float(b),
+            "level": float(y.mean()),
             "ci95": [float(b - t * se), float(b + t * se)]}
 
 
@@ -301,7 +347,7 @@ def describe_s(values) -> dict:
 
 # ------------------------------------------------------------------ report
 def build_report(episodes: list, cycles: list, fps: float, camera_fps: float,
-                 gap_min: float) -> tuple:
+                 gap_min: float, warmup_min: float = 0.0) -> tuple:
     # camera_fps is reported for reference; drops come from the counters
     pooled: dict = {}
     frames_rows, ep_rows = [], []
@@ -356,14 +402,17 @@ def build_report(episodes: list, cycles: list, fps: float, camera_fps: float,
     for key in ("loop_interval_mean_ms", "loop_interval_sd_ms", "action_to_frame_mean_ms",
                 "robot_state_age_mean_ms", "agentview_age_mean_ms",
                 "eye_in_hand_age_mean_ms", "camera_skew_mean_ms"):
-        pts = [(x, r[key]) for x, r in zip(xs, ep_rows) if r.get(key) is not None]
+        pts = [(x, r[key], r["session"]) for x, r in zip(xs, ep_rows)
+               if r.get(key) is not None and x * 60.0 >= warmup_min]
         if pts:
-            fit = ols_slope([p[0] for p in pts], [p[1] for p in pts])
+            fit = within_session_slope([p[0] for p in pts], [p[1] for p in pts],
+                                       [p[2] for p in pts])
             if "slope" in fit:
                 fit["unit"] = "ms per hour"
                 fit["hours_covered"] = max(p[0] for p in pts)
             drift[key] = fit
     summary["drift"] = drift
+    summary["drift_warmup_min"] = warmup_min
     summary["sessions"] = len({r["session"] for r in ep_rows})
     cyc = {name: describe_s([r.get(name) for r in cycles])
            for name in (*CYCLE_PHASES, "cycle")}
@@ -403,11 +452,14 @@ def print_summary(s: dict) -> None:
                 d = s[f"{cam}_{kind}"]
                 print(f"{cam} {label} (에피소드별) 평균 {d['mean']:.4f} · 최대 {d['max']:.4f}")
     if s["drift"]:
-        print("\n장시간 열화 (세션 시작 후 시간에 대한 기울기, ms/시간, 95% 구간)")
+        warm = s.get("drift_warmup_min") or 0
+        extra = f", 앞 {warm:g}분 제외" if warm else ""
+        print(f"\n장시간 열화 (세션 안에서의 기울기, ms/시간, 95% 구간{extra})")
         for k, d in s["drift"].items():
             if "slope" in d:
                 print(f"  {k:28s} {d['slope']:+8.3f}  [{d['ci95'][0]:+.3f}, "
-                      f"{d['ci95'][1]:+.3f}]  n={d['n']} · {d['hours_covered']:.2f} h")
+                      f"{d['ci95'][1]:+.3f}]  n={d['n']} · 세션 {d['sessions']} · "
+                      f"{d['hours_covered']:.2f} h")
     c = s["cycle_seconds"]
     if c["episodes"]:
         print(f"\n사이클 타임 (초) · 에피소드 {c['episodes']} · {c['outcomes']}")
@@ -419,6 +471,35 @@ def print_summary(s: dict) -> None:
 
 
 # ------------------------------------------------------------------ selftest
+def _selftest_drift() -> None:
+    """Two flat sessions of different lengths sitting at different levels.
+
+    Neither degrades, but only the long one reaches the late minutes, so a
+    single line through both has to climb to meet it and reports a drift.
+    Sessions do differ in length in practice -- a short evening run and a full
+    morning one -- which is what makes this the realistic failure rather than a
+    contrived one. (Equal-length sessions do not trip it: the levels then sit
+    at the same x and cancel.)
+    """
+    rng = np.random.default_rng(0)
+    xs, ys, gs = [], [], []
+    for i, (level, hours) in enumerate(((0.60, 0.25), (0.95, 0.80))):
+        t = np.linspace(0.0, hours, 120)        # no trend inside either
+        xs += list(t)
+        ys += list(level + rng.normal(0, 0.02, t.size))
+        gs += [f"S{i}"] * t.size
+    within = within_session_slope(xs, ys, gs)
+    assert within["sessions"] == 2, within
+    assert within["ci95"][0] < 0 < within["ci95"][1], within
+    pooled = ols_slope(xs, ys)
+    assert pooled["ci95"][0] > 0, pooled        # the single line invents one
+    assert pooled["slope"] > 0.3, pooled        # and a large one: +0.4 ms/h
+    # one session: the two agree, so older numbers stay comparable
+    one = within_session_slope(xs[:120], ys[:120], gs[:120])
+    alone = ols_slope(xs[:120], ys[:120])
+    assert abs(one["slope"] - alone["slope"]) < 1e-9, (one, alone)
+
+
 def _selftest() -> None:
     from mstack.data.dataset_schema import TIMING_REQUIRED
 
@@ -492,6 +573,7 @@ def _selftest() -> None:
     assert abs(fit["slope"] - 60.0) < 1e-2, fit             # 1 ms per minute
     li = s["drift"]["loop_interval_mean_ms"]
     assert li["ci95"][0] < 0 < li["ci95"][1], li            # no drift in the loop
+    _selftest_drift()
     rates = [r["agentview_drop_rate"] for r in ep_rows]
     assert abs(rates[2] - 3 / (148 + 3)) < 1e-9, rates
     assert all(r == 0.0 for i, r in enumerate(rates) if i != 2), rates
@@ -513,6 +595,9 @@ def main() -> None:
     ap.add_argument("--phase-log", type=Path, default=None)
     ap.add_argument("--session-gap", type=float, default=10.0,
                     help="minutes between episodes that start a new session")
+    ap.add_argument("--warmup-min", type=float, default=0.0,
+                    help="drop the first N minutes of each session from the drift fit "
+                         "(S023 settles within ~15 min; see the report)")
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
@@ -535,7 +620,7 @@ def main() -> None:
               f"(root={args.root}, phase_log={args.phase_log or phase_log_path()})")
         return
     s, frames, ep_rows, hists = build_report(episodes, cycles, fps, camera_fps,
-                                             args.session_gap)
+                                             args.session_gap, args.warmup_min)
     print_summary(s)
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
