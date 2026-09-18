@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QDialog,
@@ -153,9 +154,14 @@ class RecommendDialog(QDialog):
             self.setWindowTitle(
                 tr("scene 추천 — 기존 {n}개 기준 (거리 버킷 + 커버리지)")
                 .format(n=len(existing)))
-        # 가로 3열 카드 배치로 바뀌었다 -- 넓고 낮아야 기본 크기에서 1단계가
-        # 스크롤 없이 다 보인다.
-        self.setMinimumSize(900, 560)
+        # 가로 3열 카드 배치라 넓어야 하고, 1단계 카드가 스크롤 없이 다
+        # 보이려면 세로도 그만큼 필요하다 (2026-09-18: 560 에서는 카드 아래가
+        # 잘려 스크롤이 생겼다). 화면보다 커지지는 않게 가둔다 -- 런처에서
+        # 창틀이 화면 밖으로 나갔던 것과 같은 실수를 반복하지 않는다.
+        avail = QApplication.primaryScreen().availableGeometry() \
+            if QApplication.primaryScreen() else None
+        self.setMinimumSize(min(900, avail.width()) if avail else 900,
+                            min(720, avail.height() - 40) if avail else 720)
         self._existing = existing
         self._props = props
         self._scene_id = scene_id
@@ -179,7 +185,13 @@ class RecommendDialog(QDialog):
         # seed 가 1 달라도 완전히 다른 후보 집합이 된다. 굴린 seed 는 화면에
         # 그대로 보이고(재현용), 되돌리기로 방금 본 seed 로 돌아간다.
         self._seed = 0
-        self._seed_history: list[int] = []
+        self._seed_back: list[int] = []     # 이전 seed (되돌리기)
+        self._seed_fwd: list[int] = []      # 되돌린 뒤의 seed (다시 앞으로)
+        # seed -> (추천, 스킬 카운터). 같은 seed 를 다시 보는 데 몇 초씩 걸릴
+        # 이유가 없다 -- 되돌리기/앞으로가 즉시 뜬다. **창을 닫으면 버린다**
+        # (done 에서 비운다): 추천은 그 창의 기존 scene 목록에 종속이라
+        # 다음에 열 때 맞는다는 보장이 없고, 들고 있을 이유도 없다.
+        self._cache: dict[int, tuple] = {}
 
         col = QVBoxLayout(self)
         self._stack = QStackedWidget()
@@ -208,6 +220,11 @@ class RecommendDialog(QDialog):
         self.undo_btn.setEnabled(False)
         self.undo_btn.clicked.connect(self._undo_seed)
         top.addWidget(self.undo_btn)
+        self.redo_btn = QPushButton(tr("↪ 최근 seed"))
+        self.redo_btn.setToolTip(tr("되돌리기 전에 보던 seed 로 다시 갑니다."))
+        self.redo_btn.setEnabled(False)
+        self.redo_btn.clicked.connect(self._redo_seed)
+        top.addWidget(self.redo_btn)
         self.status_label = QLabel("")
         top.addWidget(self.status_label, 1)
         top.addStretch(1)
@@ -344,6 +361,11 @@ class RecommendDialog(QDialog):
         self._show_page(0)
         self.next_btn.setEnabled(False)
         self._clear_cards()
+        cached = self._cache.get(self._seed)
+        if cached is not None:
+            # 이미 계산해 본 seed -- 다시 몇 초를 쓸 이유가 없다.
+            self._apply_recs(*cached)
+            return
         self.again_btn.setEnabled(False)
         self.status_label.setText(tr("추천 계산 중..."))
         w = RecommendWorker(
@@ -359,14 +381,23 @@ class RecommendDialog(QDialog):
 
     # ------------------------------------------------------------- seed
     def set_seed(self, value: int, remember: bool = True) -> None:
-        """seed 를 바꾸고 다시 추천한다. ``remember`` 면 지금 seed 를 이력에 남긴다."""
+        """seed 를 바꾸고 다시 추천한다. ``remember`` 면 지금 seed 를 뒤로 쌓는다.
+
+        새로 굴리거나 직접 친 seed 는 **앞으로 이력을 지운다** -- 브라우저의
+        뒤로/앞으로와 같은 규칙이다.
+        """
         value = int(value)
         if remember and value != self._seed:
-            self._seed_history.append(self._seed)
+            self._seed_back.append(self._seed)
+            self._seed_fwd.clear()
         self._seed = value
         self.seed_edit.setText(str(value))
-        self.undo_btn.setEnabled(bool(self._seed_history))
+        self._refresh_seed_buttons()
         self._fill()
+
+    def _refresh_seed_buttons(self) -> None:
+        self.undo_btn.setEnabled(bool(self._seed_back))
+        self.redo_btn.setEnabled(bool(self._seed_fwd))
 
     def _roll_seed(self) -> None:
         """주사위. 지금 seed 와 다른 값이 나올 때까지 굴린다."""
@@ -376,10 +407,16 @@ class RecommendDialog(QDialog):
         self.set_seed(new)
 
     def _undo_seed(self) -> None:
-        if not self._seed_history:
+        if not self._seed_back:
             return
-        self.set_seed(self._seed_history.pop(), remember=False)
-        self.undo_btn.setEnabled(bool(self._seed_history))
+        self._seed_fwd.append(self._seed)
+        self.set_seed(self._seed_back.pop(), remember=False)
+
+    def _redo_seed(self) -> None:
+        if not self._seed_fwd:
+            return
+        self._seed_back.append(self._seed)
+        self.set_seed(self._seed_fwd.pop(), remember=False)
 
     def _seed_typed(self) -> None:
         text = self.seed_edit.text().strip()
@@ -402,6 +439,7 @@ class RecommendDialog(QDialog):
 
     def done(self, r: int) -> None:  # accept/reject/close 공통 경유지
         self._wait_workers()
+        self._cache.clear()              # 창이 닫히면 들고 있을 이유가 없다
         super().done(r)
 
     def _on_recs_error(self, w: RecommendWorker, msg: str) -> None:
@@ -416,6 +454,16 @@ class RecommendDialog(QDialog):
         if w is not self._worker:
             return                       # 낡은 워커의 결과 -- 무시
         self._worker = None
+        # **워커가 계산한 seed** 로 넣는다 -- 결과가 오는 사이에 조작자가 다른
+        # seed 로 옮겨 갔으면 self._seed 는 이미 다른 값이고, 그 키에 넣으면
+        # 캐시가 거짓말을 한다 (2026-09-18 실측: undo 직후 redo 하면 0 의
+        # 결과가 3659 자리에 들어갔다).
+        self._cache[w._seed] = (recs, counts)
+        self._apply_recs(recs, counts)
+
+    def _apply_recs(self, recs: list, counts) -> None:
+        """추천 결과를 화면에 붙인다 (워커에서 온 것이든 캐시에서 온 것이든)."""
+        self._clear_cards()
         self.again_btn.setEnabled(True)
         self.status_label.setText("")
         self._recs = recs

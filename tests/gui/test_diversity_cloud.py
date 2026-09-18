@@ -125,6 +125,29 @@ assert rdlg2._seed == 0 and not rdlg2.undo_btn.isEnabled()   # 이력이 비면 
 rdlg2.seed_edit.setText("abc")
 rdlg2._seed_typed()
 assert rdlg2._seed == 0 and rdlg2.seed_edit.text() == "0"
+
+# 최근 seed(앞으로)와 seed 캐시: 한 번 계산한 seed 는 워커 없이 바로 뜬다
+rdlg2.set_seed(11)
+_wait_recs(rdlg2)
+assert 11 in rdlg2._cache
+shown = [r["md"].objects for r in rdlg2._recs]
+rdlg2._undo_seed()          # -> 0 (캐시)
+_wait_recs(rdlg2)
+assert rdlg2.redo_btn.isEnabled()
+assert rdlg2._worker is None, "캐시된 seed 인데 워커를 새로 돌렸다"
+rdlg2._redo_seed()          # -> 11 (캐시)
+_wait_recs(rdlg2)
+assert rdlg2._seed == 11 and [r["md"].objects for r in rdlg2._recs] == shown
+assert rdlg2._worker is None and len(rdlg2._radios) == 3
+# 새로 굴리면 앞으로 이력은 지워진다 (브라우저와 같은 규칙)
+rdlg2._undo_seed()
+_wait_recs(rdlg2)
+rdlg2.set_seed(12)
+_wait_recs(rdlg2)
+assert not rdlg2.redo_btn.isEnabled()
+# 창을 닫으면 캐시를 버린다
+rdlg2.done(0)
+assert rdlg2._cache == {}
 print("4 통과: 추천 다이얼로그(선택/재추천/주사위·되돌리기) + NewScene 자동 채움")
 
 # ---- 5. Point Cloud 카메라 선택 ----
