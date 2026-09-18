@@ -64,6 +64,7 @@ import numpy as np  # noqa: E402
 from mstack.config.station import load_station  # noqa: E402
 from mstack.data.dataset_schema import TIMING_CAMERAS, TIMING_GROUP  # noqa: E402
 from mstack.data.phase_log import load_phases, phase_log_path  # noqa: E402
+from mstack.scene.dataset_meta import discover_datasets  # noqa: E402
 from mstack.scene.scene_format import EPISODE_GROUP_RE, iter_scene_files  # noqa: E402
 
 CYCLE_PHASES = ("gate", "approach", "recording", "homing", "reset_wait")
@@ -117,6 +118,28 @@ def histogram_ms(values, bin_ms: float = 1.0) -> list:
     hi = math.ceil(ms.max() / bin_ms) * bin_ms + bin_ms
     counts, edges = np.histogram(ms, bins=np.arange(lo, hi + 1e-9, bin_ms))
     return [(float(edges[i]), float(edges[i + 1]), int(c)) for i, c in enumerate(counts)]
+
+
+def resolve_root(root: Path) -> Path:
+    """Accept either a dataset folder or the parent that holds several.
+
+    ``--root ~/libero_datasets`` reads as "the datasets", but the scene files
+    live one level down in ``~/libero_datasets/fr3-tabletop``. Passed the
+    parent, this script used to find nothing and print "에피소드 0" -- a wrong
+    number that looks like a measurement (2026-09-18). Resolve it, or refuse
+    with the candidates named; never quietly report an empty dataset.
+    """
+    root = Path(root).expanduser()
+    if iter_scene_files(root):
+        return root
+    found = [e.path for e in discover_datasets([root])]
+    if len(found) == 1:
+        print(f"[알림] {root} 에는 scene 파일이 없어 {found[0]} 를 읽습니다.")
+        return found[0]
+    if not found:
+        raise SystemExit(f"scene_*.hdf5 가 없습니다: {root}")
+    names = ", ".join(str(p) for p in found)
+    raise SystemExit(f"{root} 아래 데이터셋이 여럿입니다 -- --root 로 하나를 고르세요: {names}")
 
 
 # ------------------------------------------------------------------ frame timing
@@ -501,7 +524,7 @@ def main() -> None:
     cams = [c.fps for c in (getattr(st, "cameras", None) or {}).values()
             if getattr(c, "fps", None)]
     camera_fps = float(cams[0]) if cams else 30.0
-    episodes = read_episodes(args.root, args.scene)
+    episodes = read_episodes(resolve_root(args.root), args.scene)
     if args.collector:
         episodes = [e for e in episodes if e["collector"] == args.collector]
     lines = load_phases(args.phase_log or phase_log_path())
