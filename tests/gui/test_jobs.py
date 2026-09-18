@@ -46,6 +46,18 @@ for line, want in cases.items():
         assert got is not None and abs(got - want) < 1e-6, (line, got, want)
 print("1. 진행률 읽기 OK (%, i/N, 못 읽으면 None)")
 
+# ------- 1b. 작업 자신의 카운터가 자식 라이브러리의 tqdm 막대를 이긴다
+# LeRobot 변환은 에피소드마다 lerobot 이 짧은 막대를 띄우고, 그 막대는 끝날
+# 때마다 100% 다. 상태바가 계속 100% 였던 이유 (2026-09-18).
+state: dict = {}
+assert parse_progress_fraction("  45%|##   | 3/7", state) == 0.45   # 아직 카운터 없음
+own = parse_progress_fraction("  [412/2224] scene_004.hdf5 ep 17  18.5%", state)
+assert own is not None and abs(own - 0.185) < 1e-9, own
+assert parse_progress_fraction("100%|#####| 145/145", state) is None   # 이제 막대는 무시
+assert abs(parse_progress_fraction("  [413/2224] ep 18  18.6%", state) - 0.186) < 1e-9
+assert parse_progress_fraction("100%|#####| 145/145") == 1.0   # state 없으면 예전 그대로
+print("1b. 카운터를 본 뒤에는 tqdm 막대를 무시한다 OK")
+
 
 class _NoOp:
     def __getattr__(self, name):

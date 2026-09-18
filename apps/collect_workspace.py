@@ -835,7 +835,7 @@ class WorkspaceWindow(QMainWindow):
         for line in clean_stream_lines(data, state, every_s=1.0):
             # 남은 시간은 자식이 말해 준 만큼만 안다 -- 진행률이 읽히면 쓰고,
             # 안 읽히면 상태바는 경과 시간만 적는다.
-            jobs.job_progress(self, parse_progress_fraction(line))
+            jobs.job_progress(self, parse_progress_fraction(line, state))
             if is_progress_line(line):
                 log_progress(self, f"{prefix} {line}", view)
             else:

@@ -50,14 +50,24 @@ _FRAC_RES = (
 )
 
 
-def parse_progress_fraction(line: str) -> "float | None":
+def parse_progress_fraction(line: str, state: "dict | None" = None) -> "float | None":
     """진행률 줄에서 0~1 을 뽑는다. 못 읽으면 None.
 
     남은 시간을 말하려면 "얼마나 왔나" 가 필요한데, 그것을 아는 것은 자식
     프로세스뿐이고 그 앎은 stdout 한 줄로만 나온다 (2026-09-13). 꼴이 여럿이라
     한 곳에서 다 받는다 -- 못 읽으면 None 이고, 그러면 화면은 경과 시간만
     말한다. **거짓 추정은 하지 않는다.**
+
+    ``state`` (프로세스별 dict) 를 주면 **작업 자신의 카운터를 우선**한다.
+    LeRobot 변환은 에피소드마다 lerobot 이 짧은 tqdm 막대를 띄우는데, 그
+    막대는 끝날 때마다 100% 라 상태바가 계속 100% 에 붙어 있었다 (2026-09-18).
+    한 번이라도 ``[n/total]`` 꼴을 본 작업에서는 그 뒤로 tqdm 막대를 무시한다.
     """
+    if state is not None and _FRAC_RES[1].search(line):
+        state["saw_counter"] = True
+    if (state is not None and state.get("saw_counter")
+            and _PROGRESS_RE.search(line) and not _FRAC_RES[1].search(line)):
+        return None
     m = _FRAC_RES[0].search(line)
     if m:
         try:

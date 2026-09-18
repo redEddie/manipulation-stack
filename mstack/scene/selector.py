@@ -72,19 +72,28 @@ def refine_placement(md, props: dict, hist: dict, weights: dict,
     오히려 더 정확하다.
     """
     objects = list(md.objects)
+    rng = random.Random(seed)
     zs = enumerate_placements(objects, props)
     if not zs:
         return md, signature(md, props)
     if len(zs) > limit:
-        zs = random.Random(seed).sample(zs, limit)
-    best_sig = None
-    best_zones = None
+        zs = rng.sample(zs, limit)
+    # **동점은 무작위로 푼다** (2026-09-18). coverage_gain 은 칸만 보고 종류를
+    # 보지 않으므로, 같은 칸 집합을 쓰는 배치들은 점수가 정확히 같다. 예전에는
+    # `g > best` 로 비교해 **열거 순서상 첫 배치**가 늘 이겼고, 열거 순서는
+    # 결정적이라 같은 물체 구성이면 매번 같은 칸 배정이 나왔다 -- 100세트를
+    # 모으면 "작은 그릇은 가운데" 같은 종류-위치 결합이 쌓였다 (Cramer's V
+    # 0.118, 순서를 섞으면 0.060 -- paper/scene_generation §7.1).
+    scored = []
     best_gain = None
     for zones in zs:
         sig = _sig_for(objects, zones, props)
         g = coverage_gain(sig, hist, weights)
         if best_gain is None or g > best_gain:
-            best_gain, best_sig, best_zones = g, sig, zones
+            best_gain = g
+        scored.append((g, sig, zones))
+    ties = [(sig, zones) for g, sig, zones in scored if g >= best_gain - 1e-12]
+    best_sig, best_zones = rng.choice(ties)
     new_md = SceneMetadata(
         scene_id=md.scene_id, objects=objects,
         layout={"grid": list(md.layout["grid"]),
@@ -95,7 +104,7 @@ def refine_placement(md, props: dict, hist: dict, weights: dict,
 
 
 def _select(cands: list, ex_sigs: list, props: dict, k: int,
-            refine: bool = False) -> list:
+            refine: bool = False, seed: int = 0) -> list:
     """후보 [(md, sig, 기존최소거리), ...] 에서 k 개를 고른다.
 
     절차: 거리 3분위로 버킷을 만들고(분위 기반이라 버킷이 비지 않는다),
@@ -152,8 +161,10 @@ def _select(cands: list, ex_sigs: list, props: dict, k: int,
         cands.remove(best)
         if refine:
             # 배치는 여기서 정해진다 -- 직전 픽까지 반영된 hist/weights 로.
+            # 정련 seed 는 호출 seed 와 픽 순서를 함께 섞는다 -- 예전에는
+            # len(picked) 뿐이라 k=1 로 부르면 언제나 0 이었다.
             r_md, r_sig = refine_placement(md, props, hist, weights,
-                                           seed=len(picked))
+                                           seed=seed * 1009 + len(picked))
             if all(scene_distance(r_sig, s) > 0.0 for s in picked_sigs):
                 md, sig = r_md, r_sig
                 dmin = min((scene_distance(sig, e) for e in ex_sigs),
@@ -218,7 +229,7 @@ def recommend_detailed(existing: list, props: dict, k: int = 3,
         (generate_candidate(props, rng, scene_id=scene_id)
          for _ in range(n_candidates)),
         props, ex_sigs, keep=lambda md: len(md.objects) >= min_objects)
-    return _select(cands, ex_sigs, props, k, refine=True)
+    return _select(cands, ex_sigs, props, k, refine=True, seed=seed)
 
 
 def recommend_placement(objects: list, existing: list, props: dict,
@@ -245,7 +256,7 @@ def recommend_placement(objects: list, existing: list, props: dict,
     mds = all_placements(objects, props, scene_id=scene_id)
     if len(mds) > n_candidates:
         mds = rng.sample(mds, n_candidates)
-    return _select(_collect(mds, props, ex_sigs), ex_sigs, props, k)
+    return _select(_collect(mds, props, ex_sigs), ex_sigs, props, k, seed=seed)
 
 
 def recommend(existing: list, props: dict, k: int = 3,

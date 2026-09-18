@@ -423,6 +423,27 @@ def _is_scene_file(f: h5py.File) -> bool:
     return "metadata" in f and "scene_id" in f["metadata"].attrs
 
 
+def _count_convertible(args) -> int:
+    """변환될 에피소드 수. **속성만** 읽는다 (이미지·궤적 접근 없음).
+
+    진행률 한 줄을 위해 존재한다 -- 전체를 모르면 남은 시간을 말할 수 없고,
+    그것을 아는 것은 이 프로세스뿐이다.
+    """
+    total = 0
+    for path in args.hdf5_paths:
+        try:
+            with h5py.File(path, "r") as f:
+                if "data" in f:
+                    total += sum(
+                        1 for name in f["data"]
+                        if not args.only_success or _is_success(f["data"][name]))
+                else:
+                    total += sum(1 for _ in _scene_convertible(f, args.include_failed))
+        except OSError:
+            continue          # 못 읽는 파일은 아래 본 루프가 제대로 보고한다
+    return total
+
+
 def _scene_convertible(f: h5py.File, include_failed: bool):
     """변환 대상 scene 에피소드를 번호순으로 (name, grp, instruction) yield.
 
@@ -997,6 +1018,17 @@ def main() -> None:
     n_episodes = 0
     n_skipped = 0
     n_already = 0
+    # 전체 진행률 -- 자식이 말하지 않으면 GUI 는 알 방법이 없다 (2026-09-18).
+    # 예전에는 lerobot 이 에피소드마다 띄우는 짧은 tqdm 막대만 흘러나와,
+    # 상태바가 "마지막으로 본 퍼센트"인 100% 에 붙어 있었다. 여기서 세는 것은
+    # 속성만 읽으므로(이미지 없음) 비용이 거의 없다.
+    n_total = _count_convertible(args)
+    print(f"변환 대상 에피소드 {n_total}개", flush=True)
+
+    def _progress(label: str) -> None:
+        pct = 100.0 * n_episodes / n_total if n_total else 0.0
+        print(f"  [{n_episodes}/{n_total}] {label}  {pct:.1f}%", flush=True)
+
     # LeRobot episode_index -> 출처 매핑 (episode_uid 사이드카). resume 이면
     # 기존 매핑에 이어 쓴다 -- scene 파일의 스킵은 개수 산술이 아니라 이
     # uid 집합과의 대조로 정확하게 한다.
@@ -1055,7 +1087,7 @@ def main() -> None:
                     }
                     next_index += 1
                     n_episodes += 1
-                    print(f"  {name} ({n} frames, {uid}) converted")
+                    _progress(f"{path.name} {name} ({n} frames, {uid})")
                 continue
 
             task = _language_instruction(f)
@@ -1101,7 +1133,7 @@ def main() -> None:
                 }
                 next_index += 1
                 n_episodes += 1
-                print(f"  {name} ({n} frames, success={success}) converted")
+                _progress(f"{path.name} {name} ({n} frames, success={success})")
 
     ds.finalize()
     broken = check_integrity(Path(args.root))
