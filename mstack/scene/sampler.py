@@ -54,7 +54,8 @@ def generate_candidate(props: dict, rng: random.Random,
                        scene_id: str = "S999",
                        max_attempts: int = 200) -> SceneMetadata:
     """인벤토리 제약 안의 무작위 scene: 등장 category 는 색 다른 2개 이상
-    (pair_if_present), pickable 최소 한 종류, 물체 2~5개, 존 비충돌.
+    (pair_if_present), pickable 최소 한 종류, 물체 수는 object_count 규칙
+    범위에서 균등하게 뽑은 뒤 그 예산 안에서 채운다, 존 비충돌.
     configs/scenes/scene_rules.yaml 규칙을 만족하지 않으면 재시도한다.
 
     2026-08-27 일반화: category 목록을 하드코딩(cup/small_bowl/large_bowl/
@@ -77,29 +78,59 @@ def generate_candidate(props: dict, rng: random.Random,
     if not any(c in PICKABLE_CATS for c in paired_cats):
         raise ValueError("인벤토리에 2색 이상인 pickable category 가 없다")
     for _ in range(max_attempts):
-        n_pair = rng.randint(1, min(2, len(paired_cats)))
-        cats = rng.sample(paired_cats, n_pair)
+        # 크기를 **먼저** 뽑는다 (2026-09-18). 예전에는 종류를 1~2개 뽑고 색을
+        # 2~3개씩 붙인 결과가 크기가 됐는데, 그러면 상한이 5일 때 3종(최소 6개)이
+        # 구조적으로 불가능했고 크기 분포도 5에 몰렸다 (후보 200개 중 121개).
+        # 크기를 균등하게 뽑고 그 예산 안에서 채우면 count 커버리지 축이 원하는
+        # 분포와 생성 분포가 같아지고, 2-2-1-1 (짝 2종 + 서랍·트레이) 같은
+        # 조합도 나온다.
+        target = rng.randint(MIN_OBJECTS, MAX_OBJECTS)
+        max_pairs = min(len(paired_cats), target // 2)
+        if max_pairs < 1:
+            continue
+        cats = rng.sample(paired_cats, rng.randint(1, max_pairs))
         if not any(c in PICKABLE_CATS for c in cats):
             continue
+        # 짝 종류는 **색 2개**로 시작한다 -- pair_if_present 의 최소값이고,
+        # 나머지 예산은 아래에서 무엇에 쓸지 무작위로 정한다.
         picked = []
+        used_colors: dict = {}
         for c in cats:
             colors = list(by_cat[c])
             rng.shuffle(colors)
-            take = rng.randint(2, min(3, len(colors)))
-            picked += [rng.choice(by_cat[c][col]) for col in colors[:take]]
-        # 동일 외형 쌍 (2026-08-31): 포갤 수 있는 category 는 같은 색 2개를
-        # 넣어 "stack all the {색} {복수}" 과제를 만든다 -- 규칙의 stack
-        # 예외가 허용하는 범위(씬당 1쌍)와 같은 목록을 쓴다.
-        if len(picked) <= 4 and rng.random() < 0.25:
-            twins = [
-                (p, q) for p in picked if p.category in stack_cats
-                for q in by_cat[p.category][p.color] if q.id != p.id
-            ]
-            if twins:
-                picked.append(rng.choice(twins)[1])
-        for c in single_cats:
-            if len(picked) <= 4 and rng.random() < 0.4:
-                picked.append(rng.choice(by_cat[c][next(iter(by_cat[c]))]))
+            used_colors[c] = colors[:2]
+            picked += [rng.choice(by_cat[c][col]) for col in colors[:2]]
+        # 남은 예산 채우기: 짝 종류에 색 하나 더 / 단일 종류(서랍·트레이·
+        # 커트러리) / 동일 외형 쌍(포갤 수 있는 그릇, 씬당 1쌍).
+        singles_left = list(single_cats)
+        rng.shuffle(singles_left)
+        twin_used = False
+        while len(picked) < target:
+            fillers = []
+            for c in cats:
+                rest = [col for col in by_cat[c] if col not in used_colors[c]]
+                if rest:
+                    fillers.append(("color", c, rest))
+            if singles_left:
+                fillers.append(("single", singles_left[0], None))
+            if not twin_used:
+                twins = [(p_, q) for p_ in picked if p_.category in stack_cats
+                         for q in by_cat[p_.category][p_.color] if q.id != p_.id]
+                if twins:
+                    fillers.append(("twin", None, twins))
+            if not fillers:
+                break
+            kind, cat, extra = rng.choice(fillers)
+            if kind == "color":
+                col = rng.choice(extra)
+                used_colors[cat].append(col)
+                picked.append(rng.choice(by_cat[cat][col]))
+            elif kind == "single":
+                singles_left.pop(0)
+                picked.append(rng.choice(by_cat[cat][next(iter(by_cat[cat]))]))
+            else:
+                twin_used = True
+                picked.append(rng.choice(extra)[1])
         if not MIN_OBJECTS <= len(picked) <= MAX_OBJECTS:
             continue
         ids = [p.id for p in picked]

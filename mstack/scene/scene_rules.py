@@ -488,7 +488,8 @@ def selftest() -> None:
 
     # object_count: 범위 밖이면 위반, 범위는 규칙이 정본
     lo, hi = object_count_range(rules)
-    assert (lo, hi) == (2, 5), (lo, hi)
+    # 값 자체는 yaml 이 정본이다 -- 여기서는 '읽히고 말이 되는가' 만 본다
+    assert 1 <= lo <= hi <= 9, (lo, hi)   # 3x3 격자라 9 칸이 상한
     few = SceneMetadata(
         scene_id="S007", objects=["OBJ-TRAY-01"],
         layout={"grid": [3, 3],

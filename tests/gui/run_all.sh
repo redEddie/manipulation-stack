@@ -49,7 +49,7 @@ for t in test_phase4a test_grid_replay test_plan_form test_right_scene \
          test_state_isolation test_resume_version test_workflow_gui test_quick_resume test_node_diag \
          test_collect_layout test_script_bootstrap test_relation_shape \
          test_scene_repair test_doctor_tab test_info_card \
-         test_doctor_contrast test_doctor_progress test_doctor_schema test_dataset_right test_phase_log test_frame_timing \
+         test_doctor_contrast test_doctor_progress test_doctor_schema test_dataset_right test_phase_log test_frame_timing test_scene_sampler \
          test_leader_guard test_proxy_clip test_clip_grid test_curation_basket \
          test_trim_controls test_plot_widgets test_jobs test_upload_dialogs test_provenance test_proxy_dialog test_repack; do
   if QT_QPA_PLATFORM=offscreen MSTACK_NO_RIG_QUERY=1 timeout 240 "$PY" -u "$t.py" >"/tmp/$t.out" 2>&1; then

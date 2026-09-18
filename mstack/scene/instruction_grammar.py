@@ -445,7 +445,7 @@ def enumerate_instructions(md: SceneMetadata, props: dict[str, Prop]) -> list[st
             continue
         by_cat.setdefault(p.category, []).append((p.color, oid))
 
-    def refs(cats: set[str]) -> list[tuple[str, str]]:
+    def refs(cats: set[str], qualified: bool = True) -> list[tuple[str, str]]:
         """지칭 가능한 **(지칭 구, oid)** 목록.
 
         유일하면 한 개("the white cup"), 동일 외형이 여럿이면 한정어로 하나씩
@@ -459,11 +459,23 @@ def enumerate_instructions(md: SceneMetadata, props: dict[str, Prop]) -> list[st
                 phrase = _reference(color, cat, md, props)
                 if phrase is not None:
                     out.append((phrase, oid))
-                else:
+                elif qualified:
                     q = _qualified_reference(color, cat, oid, md, props)
                     if q is not None:
                         out.append((q, oid))
         return out
+
+    def targets(cats: set[str]) -> list[tuple[str, str]]:
+        """**목적지** 지칭. 한정어는 붙이지 않는다 (2026-09-18).
+
+        한정어는 문법에서 OBJECT 뒤에만 정의돼 있고(2026-08-24 확정), lint 의
+        정규식도 그 자리에서만 받는다. 그런데 생성기는 목적지에도 한정어를
+        붙이고 있어서, **자기가 만든 문장을 자기 lint 가 거부**했다 -- 지금
+        데이터셋 23개 scene 에서 493 문장 중 14개가 그랬다 (동일 외형이 둘인
+        scene 들). 만드는 쪽을 문법에 맞춘다: 목적지가 한정어 없이는 유일하게
+        지칭되지 않으면 그 문장을 만들지 않는다.
+        """
+        return refs(cats, qualified=False)
 
     sentences: set[str] = set()
 
@@ -471,7 +483,7 @@ def enumerate_instructions(md: SceneMetadata, props: dict[str, Prop]) -> list[st
     # 목적지가 그릇이면 언제나 inside 다 (2026-09-07 사용자 확정 -- 그릇은
     # 오목해서 물체가 안으로 들어간다). on 문장은 만들지 않는다.
     for o, ooid in refs(_PICKABLE):
-        for b, boid in refs(_BOWL_CATS):
+        for b, boid in targets(_BOWL_CATS):
             if ooid == boid or o == b:
                 continue
             sentences.add(f"pick up {o} and place it inside {b}")
@@ -494,12 +506,12 @@ def enumerate_instructions(md: SceneMetadata, props: dict[str, Prop]) -> list[st
     # 2d) tidy the cutlery into {container} -- 커트러리 전용 동사. 더미를
     # 반복 운반하는 동작이라 pick/drag 와 스킬(tidy-into)부터 분리된다.
     if "cutlery" in by_cat:
-        for t, _oid in refs(_TIDY_TARGETS):
+        for t, _oid in targets(_TIDY_TARGETS):
             sentences.add(f"tidy the cutlery into {t}")
 
     # 3) pick up {obj} and place it next to {obj2}
     objs = refs(_PICKABLE)
-    besides = refs(_BESIDE_CATS)
+    besides = targets(_BESIDE_CATS)
     for o1, oid1 in objs:
         for o2, oid2 in besides:
             # 색 없는 지칭(cutlery 더미)은 낱개 소품이 여럿이어도 같은 구가
@@ -990,6 +1002,23 @@ def selftest() -> None:
     assert skill_of('"close the top drawer"') == "drawer-close"   # legacy 따옴표
     assert skill_of("put the cup somewhere") is None
     assert all(skill_of(s) in SKILLS for s in s1)   # 생성 문장은 전부 분류 가능
+    # 불변식: **만든 문장은 전부 자기 lint 를 통과한다.** 이것이 깨져 있었다
+    # (목적지에 한정어를 붙였다, 2026-09-18) -- 동일 외형이 둘인 scene 을
+    # 넣어 고정한다.
+    twin = SceneMetadata(
+        scene_id="S900",
+        objects=["OBJ-CUP-BLU-01", "OBJ-CUP-BLU-02", "OBJ-BOWLL-YEL-01",
+                 "OBJ-BOWLS-PNK-01"],
+        layout={"grid": [3, 3], "placements": {
+            "OBJ-CUP-BLU-01": {"zone": [0, 0]}, "OBJ-CUP-BLU-02": {"zone": [2, 2]},
+            "OBJ-BOWLL-YEL-01": {"zone": [1, 1]}, "OBJ-BOWLS-PNK-01": {"zone": [0, 2]}}})
+    made = enumerate_instructions(twin, props_by_id())
+    assert made, "동일 외형 scene 에서 문장이 하나도 안 나온다"
+    for sentence in made:
+        err = lint(sentence, twin, props_by_id())
+        assert err is None, (sentence, err)
+    print(f"만든 문장 {len(made)}개가 모두 lint 통과 (동일 외형 2개 scene)")
+
     print("instruction_grammar selftest 통과")
 
 

@@ -22,6 +22,8 @@ from mstack.scene.instruction_grammar import enumerate_instructions  # noqa: E40
 from mstack.scene.scene_rules import check  # noqa: E402
 from mstack.scene.scene_diversity import (  # noqa: E402
     AXES,
+    MAX_OBJECTS,
+    MIN_OBJECTS,
     axis_distances,
     recommend,
     recommend_detailed,
@@ -84,7 +86,9 @@ def _selftest() -> None:
         # drawer/tray/cutlery(색 없는 단일 번들)는 짝 규칙에서 제외
         assert all(v >= 2 for k, v in cnt.items()
                    if k not in ("drawer", "tray", "cutlery")), cnt
-        assert 2 <= len(c.objects) <= 5
+        # 범위는 규칙(scene_rules.yaml 의 object_count)이 정본이다 --
+        # 여기 숫자를 박으면 규칙을 고칠 때 한쪽만 바뀐다 (2026-09-18).
+        assert MIN_OBJECTS <= len(c.objects) <= MAX_OBJECTS
     print("2 통과: 후보 50개 제약+validate 통과")
 
     # 3. 같은 seed 는 같은 추천, 기존과 동일 조합·배치는 안 나온다
@@ -170,12 +174,12 @@ def _selftest() -> None:
     assert "count" in uni2
     sizes = {len(r["md"].objects) for r in det_a}
     assert sizes != {2}, sizes
-    # min_objects: 5물체만 강제
+    # min_objects: 그 수 미만은 후보에서 빠진다 (상한이 아니라 하한이다)
     det5 = recommend_detailed(ex3, props, k=3, seed=42, min_objects=5)
-    assert det5 and all(len(r["md"].objects) == 5 for r in det5), \
+    assert det5 and all(len(r["md"].objects) >= 5 for r in det5), \
         [len(r["md"].objects) for r in det5]
     print(f"7 통과: 버킷 쿼터 {buckets} + count 축 {sorted(sizes)} + "
-          f"min_objects=5 강제 OK")
+          f"min_objects=5 하한 OK")
 
     # 8. 지시문 단계: 부족 스킬 우선 랭킹 + 전 문장 lint 통과 (유일 지칭)
     from collections import Counter as _C
