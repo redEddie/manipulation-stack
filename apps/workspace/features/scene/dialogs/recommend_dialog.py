@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import tempfile
 from pathlib import Path
 
@@ -18,8 +19,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QLineEdit,
     QSizePolicy,
-    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -173,6 +174,12 @@ class RecommendDialog(QDialog):
         # 프로세스가 abort 한다 -- 결과는 워커 정체성 비교로 무시하고,
         # 참조는 스레드가 끝날 때(finished) 거둔다.
         self._stale_workers: list[RecommendWorker] = []
+        # seed 는 **주사위**로 굴린다 (2026-09-18 조작자 요청). 위아래 화살표는
+        # 1씩 옮기는 조작이라 "다른 배치를 보고 싶다" 와 맞지 않았다 -- 추천은
+        # seed 가 1 달라도 완전히 다른 후보 집합이 된다. 굴린 seed 는 화면에
+        # 그대로 보이고(재현용), 되돌리기로 방금 본 seed 로 돌아간다.
+        self._seed = 0
+        self._seed_history: list[int] = []
 
         col = QVBoxLayout(self)
         self._stack = QStackedWidget()
@@ -183,12 +190,24 @@ class RecommendDialog(QDialog):
         p0 = QVBoxLayout(page0)
         top = QHBoxLayout()
         top.addWidget(QLabel(tr("seed")))
-        self.seed_spin = QSpinBox()
-        self.seed_spin.setRange(0, 9999)
-        top.addWidget(self.seed_spin)
-        self.again_btn = QPushButton(tr("다시 추천"))
-        self.again_btn.clicked.connect(self._fill)
+        # 읽기 전용이 아니다 -- 적어 두었던 seed 를 다시 쳐 넣어 같은 추천을
+        # 불러올 수 있어야 한다 (재현).
+        self.seed_edit = QLineEdit("0")
+        self.seed_edit.setFixedWidth(70)
+        self.seed_edit.setToolTip(tr(
+            "이 추천을 만든 난수 seed. 숫자를 쳐 넣고 Enter 를 누르면 그 seed 로 "
+            "다시 추천합니다 -- 같은 seed 는 같은 추천입니다."))
+        self.seed_edit.returnPressed.connect(self._seed_typed)
+        top.addWidget(self.seed_edit)
+        self.again_btn = QPushButton(tr("🎲 다시 추천"))
+        self.again_btn.setToolTip(tr("새 seed 를 굴려 다른 후보를 봅니다."))
+        self.again_btn.clicked.connect(self._roll_seed)
         top.addWidget(self.again_btn)
+        self.undo_btn = QPushButton(tr("↩ 이전 seed"))
+        self.undo_btn.setToolTip(tr("방금 전에 보던 seed 로 돌아갑니다."))
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self._undo_seed)
+        top.addWidget(self.undo_btn)
         self.status_label = QLabel("")
         top.addWidget(self.status_label, 1)
         top.addStretch(1)
@@ -329,7 +348,7 @@ class RecommendDialog(QDialog):
         self.status_label.setText(tr("추천 계산 중..."))
         w = RecommendWorker(
             self._existing, self._props, k=3,
-            seed=self.seed_spin.value(), scene_id=self._scene_id,
+            seed=self._seed, scene_id=self._scene_id,
             data_root=self._data_root, objects=self._objects)
         self._worker = w
         w.recs_ready.connect(
@@ -337,6 +356,37 @@ class RecommendDialog(QDialog):
         w.error.connect(lambda msg, w=w: self._on_recs_error(w, msg))
         w.finished.connect(lambda w=w: self._reap(w))
         w.start()
+
+    # ------------------------------------------------------------- seed
+    def set_seed(self, value: int, remember: bool = True) -> None:
+        """seed 를 바꾸고 다시 추천한다. ``remember`` 면 지금 seed 를 이력에 남긴다."""
+        value = int(value)
+        if remember and value != self._seed:
+            self._seed_history.append(self._seed)
+        self._seed = value
+        self.seed_edit.setText(str(value))
+        self.undo_btn.setEnabled(bool(self._seed_history))
+        self._fill()
+
+    def _roll_seed(self) -> None:
+        """주사위. 지금 seed 와 다른 값이 나올 때까지 굴린다."""
+        new = self._seed
+        while new == self._seed:
+            new = random.randrange(10000)
+        self.set_seed(new)
+
+    def _undo_seed(self) -> None:
+        if not self._seed_history:
+            return
+        self.set_seed(self._seed_history.pop(), remember=False)
+        self.undo_btn.setEnabled(bool(self._seed_history))
+
+    def _seed_typed(self) -> None:
+        text = self.seed_edit.text().strip()
+        if text.isdigit():
+            self.set_seed(int(text))
+        else:                       # 숫자가 아니면 되돌려 놓는다 (조용히 굴리지 않는다)
+            self.seed_edit.setText(str(self._seed))
 
     def _reap(self, w: RecommendWorker) -> None:
         """끝난 옛 워커의 참조 회수 (QThread 기본 finished 시그널 경유)."""

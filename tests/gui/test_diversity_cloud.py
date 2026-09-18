@@ -103,11 +103,29 @@ assert nd.preview.text()                     # 격자 미리보기 갱신됨
 rdlg2 = RecommendDialog(None, [base], props, "S001")
 _wait_recs(rdlg2)
 first = [r["md"].objects for r in rdlg2._recs]
-rdlg2.seed_spin.setValue(7)
-rdlg2._fill()
+rdlg2.set_seed(7)
 _wait_recs(rdlg2)
 assert len(rdlg2._radios) == 3
-print("4 통과: 추천 다이얼로그(선택/재추천) + NewScene 자동 채움")
+assert rdlg2.seed_edit.text() == "7" and rdlg2.undo_btn.isEnabled()
+
+# 주사위: seed 가 바뀌고 이력이 쌓인다. 되돌리기는 방금 seed 로 돌아간다
+# (2026-09-18: 위아래 화살표 대신 주사위 + 되돌리기).
+rdlg2._roll_seed()
+_wait_recs(rdlg2)
+rolled = rdlg2._seed
+assert rolled != 7 and rdlg2.seed_edit.text() == str(rolled)
+rdlg2._undo_seed()
+_wait_recs(rdlg2)
+assert rdlg2._seed == 7 and rdlg2.seed_edit.text() == "7"
+assert rdlg2.undo_btn.isEnabled()            # 처음 seed(0) 가 아직 이력에 있다
+rdlg2._undo_seed()                           # 한 번 더 -> 처음 seed
+_wait_recs(rdlg2)
+assert rdlg2._seed == 0 and not rdlg2.undo_btn.isEnabled()   # 이력이 비면 꺼진다
+# 숫자가 아닌 입력은 조용히 굴리지 않고 되돌린다
+rdlg2.seed_edit.setText("abc")
+rdlg2._seed_typed()
+assert rdlg2._seed == 0 and rdlg2.seed_edit.text() == "0"
+print("4 통과: 추천 다이얼로그(선택/재추천/주사위·되돌리기) + NewScene 자동 채움")
 
 # ---- 5. Point Cloud 카메라 선택 ----
 assert win.cloud_cam_combo.currentData() == "agent"
