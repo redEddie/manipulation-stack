@@ -415,6 +415,62 @@ def selftest(keep: Path | None) -> None:
     _shutil.rmtree(probe_dir)
     print("  ✓ 편집 마커: 삭제마다 edit_count 증가, 삭제 후 불변식 유지")
 
+    # -- 이어찍기가 판번호를 채워 도장을 올린다 (2026-09-20).
+    #    knu-1.2.2 가 판번호를 요구사항에 넣을 때 _fill_meta 에 그 갈래를
+    #    더하지 않아서, 값을 아는 세션도 도장을 못 올렸다. 모두-아니면-전무
+    #    규칙 때문에 알고 있던 부하까지 버려졌고, timing/* 을 담은 S023 이
+    #    knu-1.1.1 로 남았다. 세 갈래를 다 주면 올라가는지 여기서 고정한다.
+    raise_dir = root / "raiseprobe"
+    raise_dir.mkdir(exist_ok=True)
+    low = raise_dir / "scene_000.hdf5"
+    _shutil.copyfile(path, low)
+    with h5py.File(low, "r+") as f:
+        m = f["metadata"]
+        m.attrs["dataset_version"] = "knu-1.1.1"
+        for a in ("payload_mass", "payload_com", "reset_pose", "reset_qpos",
+                  "provenance_source", "collector_commit",
+                  "pylibfranka_version", "fr3_system_version"):
+            if a in m.attrs:
+                del m.attrs[a]
+    w = SceneWriter(
+        raise_dir, scene_id="S000", resume=True, session_version="knu-1.2.2",
+        session_payload={"mass": 0.85, "com": [-0.01, 0.0, 0.03]},
+        session_reset={"name": "libero", "qpos": [0.0] * 7},
+        session_provenance={"collector_commit": "deadbeef",
+                            "pylibfranka": "0.21.2", "fr3_system": "5.10.0"})
+    w.close()
+    with h5py.File(low, "r") as f:
+        m = f["metadata"].attrs
+        assert str(m["dataset_version"]) == "knu-1.2.2", dict(m)
+        assert str(m["provenance_source"]) == "live", dict(m)
+        assert float(m["payload_mass"]) == 0.85, dict(m)
+        assert str(m["reset_pose"]) == "libero", dict(m)
+        # 선택 항목도 아는 값이면 함께 적힌다
+        assert str(m["collector_commit"]) == "deadbeef", dict(m)
+        assert str(m["fr3_system_version"]) == "5.10.0", dict(m)
+    # 판번호를 모르면 예전처럼 올리지 않는다 (도장이 내용을 넘어서면 안 된다)
+    noprov = raise_dir / "scene_001.hdf5"
+    _shutil.copyfile(low, noprov)
+    with h5py.File(noprov, "r+") as f:
+        m = f["metadata"]
+        m.attrs["dataset_version"] = "knu-1.1.1"
+        m.attrs["scene_id"] = "S001"
+        for a in ("payload_mass", "payload_com", "reset_pose", "reset_qpos",
+                  "provenance_source"):
+            if a in m.attrs:
+                del m.attrs[a]
+    w2 = SceneWriter(
+        raise_dir, scene_id="S001", resume=True, session_version="knu-1.2.2",
+        session_payload={"mass": 0.85, "com": [-0.01, 0.0, 0.03]},
+        session_reset={"name": "libero", "qpos": [0.0] * 7},
+        session_provenance=None)
+    w2.close()
+    with h5py.File(noprov, "r") as f:
+        assert str(f["metadata"].attrs["dataset_version"]) == "knu-1.1.1"
+        assert "payload_mass" not in f["metadata"].attrs, "절반만 채우면 안 된다"
+    _shutil.rmtree(raise_dir)
+    print("  ✓ 이어찍기: 판번호까지 알면 도장을 올리고, 모르면 그대로 둔다")
+
     # -- 리팩터링 회귀: legacy writer 가 공용 페이로드로 여전히 demo_N 을 쓴다
     from mstack.data.libero_format import LiberoTaskWriter
     lw = LiberoTaskWriter(root, task_name="selftest task", language_instruction="selftest task")

@@ -1599,6 +1599,7 @@ class CollectionWorker(QThread):
                     session_version=self.cfg.session_version,
                     session_payload=payload,
                     session_reset=reset,
+                    session_provenance=prov,
                 )
                 if getattr(self._writer, "version_note", ""):
                     self.log_message.emit(f"[스키마] {self._writer.version_note}")

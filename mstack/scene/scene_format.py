@@ -391,6 +391,7 @@ class SceneWriter:
         session_version: Optional[str] = None,
         session_payload: Optional[dict] = None,
         session_reset: Optional[dict] = None,
+        session_provenance: Optional[dict] = None,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -421,7 +422,7 @@ class SceneWriter:
                     f"(요청: {scene_id!r}) -- 파일명이 아니라 metadata 를 믿는다"
                 )
             self._resume_version(session_version, session_payload,
-                                 session_reset)
+                                 session_reset, session_provenance)
         else:
             if metadata is None:
                 raise ValueError("새 scene 에는 metadata 가 필요하다")
@@ -512,7 +513,8 @@ class SceneWriter:
 
     def _resume_version(self, session_version: "str | None",
                         session_payload: "dict | None" = None,
-                        session_reset: "dict | None" = None) -> None:
+                        session_reset: "dict | None" = None,
+                        session_provenance: "dict | None" = None) -> None:
         """이어찍기: 파일의 버전 도장을 이번 세션 버전에 맞춘다.
 
         이어 찍으면 **이번 세션이 쓰는 필드**가 그 파일에 들어간다. 그런데
@@ -557,7 +559,7 @@ class SceneWriter:
         # -- 고치려던 것과 똑같은 모양의 결함이다.
         need_meta = [k for k in req["metadata_attrs"] if k not in self._meta.attrs]
         if need_meta and not self._fill_meta(need_meta, session_payload,
-                                             session_reset):
+                                             session_reset, session_provenance):
             self.version_note = (
                 f"{cur} -> {want} 로 올리지 못했습니다: {want} 가 요구하는 "
                 f"{', '.join(need_meta)} 를 이번 세션이 알지 못합니다. "
@@ -568,12 +570,21 @@ class SceneWriter:
         self.version_note = f"버전 도장을 {cur} -> {want} 로 올렸습니다."
 
     def _fill_meta(self, need: list, payload: "dict | None",
-                   reset: "dict | None" = None) -> bool:
+                   reset: "dict | None" = None,
+                   provenance: "dict | None" = None) -> bool:
         """올리는 데 필요한 metadata attrs 를 이번 세션 값으로 채운다.
 
         채울 수 있는 것만 채우고, 하나라도 모르면 **아무것도 쓰지 않고** False.
         절반만 채워 두면 그 다음 검사에서 통과해 버려, 모르는 값이 빈 채로
         도장만 올라간 파일이 남는다.
+
+        **세 갈래를 모두 안다.** 판번호(knu-1.2.2)가 요구사항에 들어온
+        2026-09-13 에 여기에는 그 갈래를 더하지 않았고, 그래서 값을 아는
+        세션도 도장을 올리지 못했다 -- S023 이 그렇게 되었다: 로그에
+        ``[부하] 850 g`` 와 ``[판번호] collector_commit=...`` 를 찍은 바로 그
+        초에 "이번 세션이 알지 못합니다" 가 나왔고, 모두-아니면-전무 규칙
+        때문에 알고 있던 부하까지 버려졌다. 1.3.0 내용(timing/*)을 담은 파일이
+        knu-1.1.1 도장으로 남았다 (2026-09-18, Doctor 로 사후 복구).
         """
         known = {}
         if payload and payload.get("mass") is not None:
@@ -583,6 +594,10 @@ class SceneWriter:
             known[META_RESET_POSE] = str(reset["name"])
             known[META_RESET_QPOS] = json.dumps(
                 [float(x) for x in reset["qpos"]])
+        if provenance:
+            # 이 세션이 그 자리에서 읽은 값이므로 ``live`` 다 -- Doctor 가
+            # 나중에 채울 때 쓰는 ``backfilled <날짜>`` 와 구분된다.
+            known[META_PROVENANCE_SOURCE] = "live"
         if any(k not in known for k in need):
             return False
         for k in need:
@@ -593,6 +608,17 @@ class SceneWriter:
         if META_RESET_POSE in need:
             self.metadata.reset_pose = known[META_RESET_POSE]
             self.metadata.reset_qpos = json.loads(known[META_RESET_QPOS])
+        if META_PROVENANCE_SOURCE in need:
+            self.metadata.provenance_source = known[META_PROVENANCE_SOURCE]
+            # 선택 항목은 요구사항이 아니라서 need 에 없다. 아는 값이면
+            # 함께 적는다 -- 나중에 "어느 코드에서 나왔나" 를 묻는 쪽은
+            # 필수/선택을 구분하지 않는다.
+            for attr, key in ((META_COLLECTOR_COMMIT, "collector_commit"),
+                              (META_PYLIBFRANKA_VERSION, "pylibfranka"),
+                              (META_FR3_SYSTEM_VERSION, "fr3_system")):
+                val = (provenance or {}).get(key)
+                if val and attr not in self._meta.attrs:
+                    self._meta.attrs[attr] = str(val)
         return True
 
     def _episodes_missing(self, need, need_episode=()) -> list:
