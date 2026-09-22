@@ -139,13 +139,16 @@ print("6. slot 번호를 숫자로 센다 OK (I009 < I010)")
 
 
 # ------------------------------------------------------- 4. homing 속도 상한
-from mstack.collect.worker import CollectionWorker, HOME_TICK_DQ  # noqa: E402
+from mstack.collect.worker import CollectionWorker, WorkerConfig  # noqa: E402
 from mstack.robots import fr3_kinematics as K  # noqa: E402
 from mstack.robots.franka_fr3 import FR3_RESET_POSES  # noqa: E402
 
 reset_q = np.array(FR3_RESET_POSES["libero"][:7], dtype=float)
 w = CollectionWorker.__new__(CollectionWorker)
 w._reset_q = reset_q
+# 제어 주기는 이제 세션 설정이다 (issue #1). 상수가 아니므로 워커에 붙여 준다.
+w.cfg = WorkerConfig(task_name="t", language_instruction="l", data_root="/tmp")
+HOME_TICK_DQ = w.cfg.home_tick_dq
 
 # _densify 자체: 모양은 지키고 시간만 늘린다.
 start = np.zeros(7)

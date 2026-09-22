@@ -35,3 +35,33 @@ info:
     control_serial: ""
     arm_serial: ""
     registered_to: ""
+
+control:
+  # 이 리그가 팔에게 명령을 내보내는 주기와 램프 속도. **기록 주파수가 아니다**
+  # (그건 recording.fps 이고 데이터세트에 속한다).
+  #
+  # 각 값의 근거는 mstack/collect/worker.py 의 해당 메커니즘 옆에 있다.
+  # 바꾸기 전에 그 주석을 읽어라 -- 특히 approach_speed 는 드라이버 상한보다
+  # 일부러 높게 두었고(조작자 결정 2026-09-13), 여기서 처음 보면 버그로 보인다.
+  #
+  # GUI Settings > 제어 주기 에서 바꾸면 <이름>.local.yaml 에 쓰인다.
+  # **바꾼 값은 다시 시작 후 적용된다** -- 도는 세션의 주기는 바뀌지 않는다.
+
+  # 램프(homing·접근) 명령 주기(Hz). 20~500.
+  ramp_hz: 100
+
+  # 명령 주기 = recording.fps * 이 값. **1 이상의 정수여야 한다** --
+  # 정수가 아니면 기록 프레임이 명령 틱에서 미끄러져 학습 라벨이 조용히 어긋난다.
+  # 20 Hz 기록 x 5 = 100 Hz 명령. (6 으로 두면 120 Hz)
+  teleop_substeps: 5
+
+  # 접근 램프 목표 속도 (rad/s). tick 당 이동은 approach_speed / ramp_hz 로
+  # 파생되므로, 주기를 바꿔도 속도는 보존된다.
+  approach_speed: 2.0
+
+  # 접근 완료 판정 (rad). 주기와 분리되어 있다 -- 묶으면 주기를 올리는 순간
+  # 판정이 그 배수만큼 엄격해진다.
+  approach_done_rad: 0.10
+
+  # homing 관절 속도 (rad/s). 드라이버 max_joint_velocity(1.5)의 80%.
+  home_speed: 1.2
