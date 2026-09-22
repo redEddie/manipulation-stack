@@ -46,6 +46,7 @@ from mstack.data.dataset_schema import (
     OBS_GRIPPER_STATES,
     OBS_JOINT_STATES,
 )
+from mstack.data.frame_table import frame_table
 
 # scene-v1 파일의 에피소드 그룹 이름 (scene_format.EPISODE_GROUP_RE 와 동일
 # 패턴 -- 무거운 모듈을 끌어오지 않으려고 여기서 다시 정의한다)
@@ -259,18 +260,26 @@ def load_series(path: str, demo: str) -> dict:
         # legacy 는 data/demo_N, scene(scene-v1)은 루트의 episode_NNN --
         # 에피소드 안쪽 페이로드는 동일하다.
         grp = f[demo] if demo in f else f["data"][demo]
-        obs = grp["obs"]
-        action = grp["actions"][:]
+        # 이 함수는 이미지를 쓰지 않으므로 네 계열만 물질화한다 -- 기본값이면
+        # 이미지까지 올라간다 (에피소드당 229 MB).
+        #
+        # rate 는 주지 않는다. 주면 그 주파수로 기록된 파일만 읽히고 나머지는
+        # 거부된다 -- 30 Hz 로 기록한 파일에서 ValueError 가 난다. 이 함수는
+        # 행 시각을 쓰지 않고 계열 값만 쓰므로, 기록된 그대로 받으면 된다.
+        ft = frame_table(grp, keys=[
+            OBS_JOINT_STATES, OBS_GRIPPER_STATES,
+            OBS_COMMANDED_JOINT_STATES, OBS_COMMANDED_GRIPPER_STATES])
+        action = ft.actions
         state = np.concatenate(
-            [obs[OBS_JOINT_STATES][:], obs[OBS_GRIPPER_STATES][:]], axis=1)
+            [ft.obs[OBS_JOINT_STATES], ft.obs[OBS_GRIPPER_STATES]], axis=1)
         commanded = None
-        if OBS_COMMANDED_JOINT_STATES in obs:
-            cg = (obs[OBS_COMMANDED_GRIPPER_STATES][:]
-                  if OBS_COMMANDED_GRIPPER_STATES in obs
-                  else np.zeros((len(state), 1), dtype=np.float32))
-            commanded = np.concatenate([obs[OBS_COMMANDED_JOINT_STATES][:], cg], axis=1)
+        if OBS_COMMANDED_JOINT_STATES in ft.obs:
+            cg = (ft.obs[OBS_COMMANDED_GRIPPER_STATES]
+                  if OBS_COMMANDED_GRIPPER_STATES in ft.obs
+                  else np.zeros((len(ft), 1), dtype=np.float32))
+            commanded = np.concatenate([ft.obs[OBS_COMMANDED_JOINT_STATES], cg], axis=1)
     out = {"state": state, "commanded": commanded, "action": action,
-           "n": int(len(action))}
+           "n": int(len(ft))}
     if key is not None:
         _SERIES_CACHE.clear()
         _SERIES_CACHE[key] = out

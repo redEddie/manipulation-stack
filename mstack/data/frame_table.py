@@ -156,19 +156,23 @@ def _table_v1(ep: Any, rate: Optional[float], align: str,
     if timing is not None and "frame" in timing:
         t_abs = timing["frame"][:]
         t = t_abs - t_abs[0]
-    else:
-        # 옛 파일 (knu-1.0.x): 프레임 시각이 없다. 기록 주파수를 모르므로
-        # 균등 간격을 **지어내지 않고** 인덱스를 초로 쓰지도 않는다 -- rate 를
-        # 준 경우에만 그 주기로 채운다.
-        if rate is None:
-            raise ValueError(
-                "이 에피소드에는 timing/frame 이 없어 행 시각을 모른다 "
-                "(knu-1.3.0 이전). rate 를 넘기면 그 주기로 채운다.")
+    elif rate is not None:
+        # 옛 파일 (knu-1.0.x) 인데 호출자가 주기를 안다고 했다.
         t = np.arange(n_rows, dtype=np.float64) / float(rate)
+        t_abs = None
+    else:
+        # 옛 파일이고 주기도 모른다. **행은 진짜이므로 돌려준다** -- 시간축을
+        # 모르는 것과 데이터를 못 주는 것은 다른 일이다. 행 시각만 NaN 으로
+        # 둔다: 균등 간격을 지어내면 그 거짓이 조용히 퍼지지만, NaN 은 쓰는
+        # 순간 드러난다. `rate` 도 None 으로 남아 "모른다"가 보인다.
+        #
+        # 이 경로가 실재한다 -- 지금 데이터셋의 앞 scene 들은 timing/frame 이
+        # 아예 없다. 여기서 막으면 옛 에피소드를 읽는 모든 소비자가 죽는다.
+        t = np.full(n_rows, np.nan, dtype=np.float64)
         t_abs = None
 
     measured = None
-    if n_rows > 1 and t[-1] > t[0]:
+    if n_rows > 1 and np.isfinite(t[-1]) and t[-1] > t[0]:
         measured = (n_rows - 1) / (t[-1] - t[0])
     if rate is not None and measured is not None and abs(measured - rate) > 0.5:
         raise ValueError(
