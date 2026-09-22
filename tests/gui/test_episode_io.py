@@ -336,6 +336,29 @@ def test_repack_status():
         assert not st["mixed"], st
         assert st["compression"] == "gzip", st
         assert st["marker"] == "2026-09-01T00:00:00", st
+
+        # 수집기가 지금 쓰는 형태: gzip-4 + 프레임 청크, 마커 없음. repack 을
+        # 거치지 않았어도 "repack 필요" 로 보이면 안 된다 -- 수집부터 gzip 이므로
+        # 이미 최종 형태다 (2026-09-22 전환).
+        path_fresh = Path(d) / "fresh.hdf5"
+        with h5py.File(path_fresh, "w") as f:
+            data = f.create_group("data")
+            grp = data.create_group("demo_0")
+            obs = grp.create_group("obs")
+            for key in ("agentview_rgb", "eye_in_hand_rgb"):
+                obs.create_dataset(key, data=img,
+                                   compression="gzip", compression_opts=4,
+                                   chunks=(1,) + img.shape[1:])
+            grp.create_dataset("actions", data=np.zeros((10, 7), dtype=np.float32))
+            grp.create_dataset("rewards", data=np.zeros(10, dtype=np.float32))
+            grp.create_dataset("dones", data=np.zeros(10, dtype=np.float32))
+
+        st = hdf5_repack_status(path_fresh)
+        assert st["error"] is None, st
+        assert st["repacked"], st
+        assert not st["mixed"], st
+        assert st["compression"] == "gzip", st
+        assert st["marker"] is None, st
     finally:
         shutil.rmtree(d, ignore_errors=True)
     print("4. repack status OK")

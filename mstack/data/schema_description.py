@@ -117,9 +117,9 @@ def describe_schema(cfg: DatasetSchemaConfig) -> str:
     if schema.save_joint_velocities:
         obs_rows.append((OBS_JOINT_VELOCITIES, "(T, 7) float32"))
     if schema.save_agentview_depth:
-        obs_rows.append(("agentview_depth", "(T, H, W) uint16 mm · 원본 해상도 · lzf"))
+        obs_rows.append(("agentview_depth", "(T, H, W) uint16 mm · 원본 해상도 · gzip"))
     if schema.save_eye_in_hand_depth:
-        obs_rows.append(("eye_in_hand_depth", "(T, H, W) uint16 mm · 원본 해상도 · lzf"))
+        obs_rows.append(("eye_in_hand_depth", "(T, H, W) uint16 mm · 원본 해상도 · gzip"))
     if schema.save_timestamp:
         obs_rows.append(("timestamp", "(T,) float64  -- wall-clock seconds"))
 

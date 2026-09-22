@@ -429,17 +429,26 @@ def write_episode_payload(
     grp.attrs["station"] = load_station().name
 
     obs = grp.create_group("obs")
+    # 이미지는 gzip-4 + 프레임 청크(1, H, W, C) 로 통째로 쓴다. 수집 루프는
+    # 디스크를 건드리지 않고 에피소드 끝에 한 번에 쓰이므로 쓰기 속도 제약이
+    # 없고, 프레임 청크가 h5py guess_chunk() 보다 읽기 빠르고 작다
+    # (2026-09-22 실측 120프레임: 2.25s/47.2MB vs 2.91s/57.6MB). uint8 라
+    # shuffle 는 바이트까지 동일해 생략한다.
     if schema.save_agentview_rgb:
+        data = np.stack(buf.agentview_rgb)
         obs.create_dataset(
             OBS_AGENTVIEW_RGB,
-            data=np.stack(buf.agentview_rgb),
-            compression="lzf",
+            data=data,
+            compression="gzip", compression_opts=4,
+            chunks=(1,) + data.shape[1:],
         )
     if schema.save_eye_in_hand_rgb:
+        data = np.stack(buf.eye_in_hand_rgb)
         obs.create_dataset(
             OBS_EYE_IN_HAND_RGB,
-            data=np.stack(buf.eye_in_hand_rgb),
-            compression="lzf",
+            data=data,
+            compression="gzip", compression_opts=4,
+            chunks=(1,) + data.shape[1:],
         )
     if schema.save_joint_states:
         obs.create_dataset(OBS_JOINT_STATES, data=np.stack(buf.joint_states))
@@ -467,14 +476,19 @@ def write_episode_payload(
             "timestamp", data=np.array(buf.timestamps, dtype=np.float64)
         )
     # 무손실 필수 (#17) -- JPEG 류 손실 압축은 depth 값을 파괴한다.
+    # (gzip 도 무손실이라 그대로 유효하다.)
     if schema.save_agentview_depth and buf.agentview_depth:
+        data = np.stack(buf.agentview_depth)
         obs.create_dataset("agentview_depth",
-                           data=np.stack(buf.agentview_depth),
-                           compression="lzf")
+                           data=data,
+                           compression="gzip", compression_opts=4,
+                           chunks=(1,) + data.shape[1:])
     if schema.save_eye_in_hand_depth and buf.eye_in_hand_depth:
+        data = np.stack(buf.eye_in_hand_depth)
         obs.create_dataset("eye_in_hand_depth",
-                           data=np.stack(buf.eye_in_hand_depth),
-                           compression="lzf")
+                           data=data,
+                           compression="gzip", compression_opts=4,
+                           chunks=(1,) + data.shape[1:])
     # Raw teleop command stream -- written whenever the caller supplied it,
     # independent of the schema and of which action space `actions` used:
     # realized-trajectory actions zero out wherever the follower is blocked
@@ -815,22 +829,32 @@ def _stored_bytes(group) -> int:
 
 
 def hdf5_repack_status(path) -> dict:
-    """Has this file been through scripts/convert/repack_hdf5.py?
+    """Does this file still need scripts/convert/repack_hdf5.py?
+
+    Since 2026-09-22 the collector writes images as ``gzip`` level 4 with
+    per-frame chunks, so a gzip episode no longer proves a repack ran -- a
+    file collected wholly after the switch is all-gzip from birth and already
+    in its final form. ``repacked`` therefore answers "is there anything left
+    for repack to do": ``lzf`` images mark a pre-switch file that was never
+    repacked (repack's remaining job), and anything already gzip needs
+    nothing, fresh or repacked. A file written by the current collector must
+    come back ``repacked`` -- reporting it as to-do would send every new
+    dataset through an old-dataset tool.
 
     Two signals, because the marker only exists on files repacked after it was
     introduced. The image compressor is the retroactive one and is decisive on
-    its own: the collector always writes images with ``lzf`` (fast, so the
-    background save never stalls the operator), and repack rewrites them with
-    ``gzip``. Anything already gzip has been repacked.
+    its own.
 
     **Every episode is checked, not just the first.** A file that was repacked
-    and then collected into again is the common case -- the operator adds a few
-    demos to an existing task file -- and it ends up *mixed*: the old episodes
-    are gzip, the new ones lzf, and the stale marker still names the earlier
-    run. Sampling one episode (or trusting the marker) reports such a file as
-    finished and silently drops it from the repack selection, which is exactly
-    the file that still has uncompressed episodes in it. So a mixed file counts
-    as not repacked, and the marker cannot override that.
+    and then collected into again is the common case -- the operator adds a
+    few demos to an existing task file. Before the switch that left it
+    *mixed* (old gzip, new lzf); now the mixed case is the reverse -- an old
+    un-repacked ``lzf`` file with new gzip episodes next to the ``lzf`` ones --
+    and the stale marker still names the earlier run either way. Sampling one
+    episode (or trusting the marker) reports such a file as finished and
+    silently drops it from the repack selection, which is exactly the file
+    that still has ``lzf`` episodes in it. So a mixed file counts as not
+    repacked, and the marker cannot override that.
 
     Returns ``{"repacked", "compression", "mixed", "marker", "new_since",
     "size", "episodes", "error"}``; never raises -- an unreadable file comes
