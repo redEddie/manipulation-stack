@@ -119,6 +119,53 @@ class PolicySpec:
 
 
 @dataclass(frozen=True)
+class ControlSpec:
+    """How often this rig commands the arm, and how fast its ramps move.
+
+    These are hardware-bound: they change when the leader, the follower or the
+    mount changes, not when a dataset changes. They are NOT the recording rate
+    -- ``StationConfig.fps`` is that, and it belongs to the dataset.
+
+    The evidence for each value lives beside the code that uses it
+    (``mstack/collect/worker.py``); this dataclass only carries them. Read
+    those comments before changing a value -- ``approach_speed`` in particular
+    is deliberately above the driver's own limit (operator decision,
+    2026-09-13) and looks like a bug if you meet it here first.
+
+    ``teleop_substeps`` must stay an integer: the command period is
+    ``fps * teleop_substeps``, and a non-integer ratio slides the recorded
+    frame off the command tick, which silently misaligns training labels.
+    """
+
+    #: 램프(homing·접근) 명령 주기(Hz).
+    ramp_hz: float = 100.0
+    #: 텔레옵 명령 : 기록 프레임 비율. 명령 주기 = fps * 이 값. **정수.**
+    teleop_substeps: int = 5
+    #: 접근 램프 목표 속도 (rad/s).
+    approach_speed: float = 2.0
+    #: 접근 완료 판정 (rad). 주기와 분리되어 있다 -- 같이 묶으면 주기를
+    #: 올리는 순간 판정이 그 배수만큼 엄격해진다.
+    approach_done_rad: float = 0.10
+    #: homing 관절 속도 (rad/s). 드라이버 v_max(1.5)의 80%.
+    home_speed: float = 1.2
+
+    @property
+    def ramp_period_s(self) -> float:
+        return 1.0 / self.ramp_hz
+
+    @property
+    def ramp_step(self) -> float:
+        """접근 램프의 tick 당 관절 이동 (rad). 주기를 바꿔도 속도가 보존되게
+        파생값으로 둔다 -- 설정 화면도 속도만 노출한다."""
+        return self.approach_speed / self.ramp_hz
+
+    @property
+    def home_tick_dq(self) -> float:
+        """homing 의 tick 당 관절 이동 (rad). 위와 같은 이유로 파생값이다."""
+        return self.home_speed / self.ramp_hz
+
+
+@dataclass(frozen=True)
 class StationConfig:
     name: str = DEFAULT_STATION
     description: str = ""
@@ -141,6 +188,8 @@ class StationConfig:
     # 텔레옵/기록 루프 주파수(Hz). 카메라 fps 와 다르다 -- 카메라는 30fps 로
     # 돌고 루프가 20Hz 로 최신 프레임만 집어간다.
     fps: int = 20
+    # 명령 주기와 램프 속도. fps 와 달리 하드웨어에 딸린 값이다 (ControlSpec 참조).
+    control: ControlSpec = field(default_factory=ControlSpec)
     # 설정 파일을 실제로 읽었는지. False 면 위 기본값으로 돌아간 것.
     loaded_from: Optional[str] = None
 
@@ -227,7 +276,62 @@ def _parse(raw: dict, path: Path) -> StationConfig:
             for role, vals in base.crop.items()
         },
         fps=int((raw.get("recording") or {}).get("fps", base.fps)),
+        control=_control_from(raw.get("control") or {}, base.control),
         loaded_from=str(path),
+    )
+
+
+def _warn_once(msg: str) -> None:
+    """같은 경고를 한 번만 찍는다. load_station() 은 캐시되지만 여러 프로세스가
+    각자 읽으므로, 한 프로세스 안에서만 눌러도 충분하다."""
+    if msg not in _warned:
+        _warned.add(msg)
+        print(msg, flush=True)
+
+
+def _control_from(raw: dict, base: ControlSpec) -> ControlSpec:
+    """``control:`` 블록을 읽는다. 값 하나가 틀려도 로봇을 못 띄우는 쪽이 더
+    나쁘므로, 이 모듈의 다른 곳과 같이 **읽기는 절대 실패하지 않는다** --
+    범위를 벗어난 값은 경고 한 줄과 함께 기본값으로 돌린다.
+
+    범위를 여기서 한 번 더 보는 이유: 설정 화면(UI)이 막아 주지만, 이 파일은
+    손으로도 고칠 수 있다. UI 만 믿으면 손으로 넣은 0 이 그대로 0 나누기가 된다.
+    """
+    if not isinstance(raw, dict):
+        return base
+
+    def num(key, default, lo, hi, cast=float):
+        v = raw.get(key, default)
+        try:
+            v = cast(v)
+        except (TypeError, ValueError):
+            _warn_once(f"[station] control.{key}={raw.get(key)!r} 을 읽지 못해 "
+                       f"{default} 을 씁니다.")
+            return default
+        if not (lo <= v <= hi):
+            _warn_once(f"[station] control.{key}={v} 가 범위({lo}~{hi})를 벗어나 "
+                       f"{default} 을 씁니다.")
+            return default
+        return v
+
+    # teleop_substeps 는 정수여야 한다 -- 아니면 기록 프레임이 명령 틱에서
+    # 미끄러지고, "어느 명령을 기록했나"가 프레임마다 달라진다.
+    subs = raw.get("teleop_substeps", base.teleop_substeps)
+    try:
+        subs_i = int(subs)
+        if subs_i != float(subs) or subs_i < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        _warn_once(f"[station] control.teleop_substeps={subs!r} 는 1 이상의 정수여야 "
+                   f"합니다. {base.teleop_substeps} 을 씁니다.")
+        subs_i = base.teleop_substeps
+
+    return ControlSpec(
+        ramp_hz=num("ramp_hz", base.ramp_hz, 20.0, 500.0),
+        teleop_substeps=subs_i,
+        approach_speed=num("approach_speed", base.approach_speed, 0.05, 10.0),
+        approach_done_rad=num("approach_done_rad", base.approach_done_rad, 0.001, 1.0),
+        home_speed=num("home_speed", base.home_speed, 0.05, 10.0),
     )
 
 

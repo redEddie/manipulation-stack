@@ -74,8 +74,10 @@ _GATE_EMIT_PERIOD_S = 1.0 / 15
 #:
 #: 예산은 충분하다: ZMQ 왕복 2회가 270 µs 실측이고 리더 읽기·카메라는 캐시
 #: 반환이라, 10 ms 주기에서 작업이 3% 를 넘지 않는다.
-RAMP_HZ = 100.0
-RAMP_PERIOD_S = 1.0 / RAMP_HZ
+#: 값 자체는 ``WorkerConfig.ramp_hz`` (기본값은 스테이션의 ``control.ramp_hz``).
+#: 상수가 아닌 이유: 모듈 수준 상수는 **import 시점**에 굳어서, 설정 화면에서
+#: 바꿔도 이미 뜬 워커에는 닿지 않는다. 세션이 자기 값을 들고 다녀야
+#: "저장했다고 도는 세션의 주기가 바뀌지 않는다"는 계약이 성립한다 (issue #1).
 
 #: 텔레옵 명령 : 기록 프레임 비율. 명령 주기 = cfg.fps * TELEOP_SUBSTEPS.
 #: 기본 5 이므로 20 Hz 기록에서 명령은 100 Hz 다.
@@ -90,10 +92,10 @@ RAMP_PERIOD_S = 1.0 / RAMP_HZ
 #: 아예 사라졌다" 고 보고했다. 텔레옵 구간도 같은 20 Hz 계단을 갖고 있다
 #: (정지 대비 107배).
 #:
-#: 지금은 상수다. 설정으로 빼는 것은 GUI 설계와 함께 다룬다 -- 명령 주기는
-#: scene/데이터세트 설정과 직교하는 축이라 별도 설정 화면이 맞고, 바꾸면
-#: 재시작이 필요하다.
-TELEOP_SUBSTEPS = 5
+#: 값은 ``WorkerConfig.teleop_substeps`` (스테이션 ``control.teleop_substeps``).
+#: 설정으로 뺐다 (issue #1, 2026-09-22) -- 명령 주기는 scene/데이터세트 설정과
+#: 직교하는 축이라 별도 설정 화면에 있고, 바꾸면 재시작이 필요하다.
+#: **정수 강제는 ``mstack/config/station.py`` 의 ``_control_from`` 이 한다.**
 
 #: 접근 램프 속도 (rad/s). 조작자가 리더를 목표 자세로 잡고 있고 거리가 짧다.
 #:
@@ -103,13 +105,14 @@ TELEOP_SUBSTEPS = 5
 #: 거르는 안전 상한이다. 필터가 깎으면 접근이 그만큼 느려질 뿐, 접근 구간은
 #: 짧고 실제로 잘 동작한다. 낮추자는 제안이 두 번 나왔으므로 여기 적어 둔다
 #: -- 되살리려면 새 근거(격차가 쌓여 실제로 문제가 된 기록)가 있어야 한다.
-APPROACH_SPEED = 2.0
-RAMP_STEP = APPROACH_SPEED / RAMP_HZ          # rad/tick
+#: 값은 ``WorkerConfig.approach_speed``. tick 당 이동은 ``cfg.ramp_step``
+#: (= approach_speed / ramp_hz) 로 파생된다 -- 주기를 바꿔도 **속도가 보존**되게
+#: 하려고 그렇게 만들었고, 그래서 설정 화면도 속도만 노출한다.
 
 #: 접근 완료 판정 (rad). 속도 상수와 **분리한다** -- 예전에는 RAMP_STEP 하나가
 #: 스텝 크기와 수렴 임계값을 겸했는데, 주기를 올리면 스텝만 줄어야 하고 판정
 #: 기준은 그대로여야 한다. 붙여 두면 주기를 바꾸는 순간 판정이 5배 엄격해진다.
-APPROACH_DONE_RAD = 0.10
+#: 값은 ``WorkerConfig.approach_done_rad``.
 
 GRIPPER_OPEN = 0.0  # GELLO/franka_fr3 convention: 0=open, 1=closed
 
@@ -144,8 +147,8 @@ HOME_MAX_DQ = 0.35       # 연속 웨이포인트 관절 점프 상한 -- 초과
 #: 긴 이동 동안 포화 구간이 계속되므로 같은 캡이 필요하다 (2026-09-07 사고).
 #: (2026-09-10: 주기가 RAMP_HZ 로 바뀌어도 **속도**가 보존되도록 파생값으로
 #: 바꿨다. 20 Hz 시절의 0.06 rad/tick 과 같은 1.2 rad/s 다.)
-HOME_SPEED = 1.2                              # rad/s -- v_max(1.5)의 80%
-HOME_TICK_DQ = HOME_SPEED / RAMP_HZ           # rad/tick
+#: 값은 ``WorkerConfig.home_speed`` (rad/s -- 드라이버 v_max(1.5)의 80%).
+#: tick 당 이동은 ``cfg.home_tick_dq`` (= home_speed / ramp_hz) 로 파생된다.
 
 #: 노드 복구 재시도가 같은 이유로 계속 실패할 때 로그를 다시 찍는 주기(초).
 #: 2초마다 찍으면 로그가 그것만으로 차고, 안 찍으면 멈춘 것처럼 보인다.
@@ -351,6 +354,14 @@ class WorkerConfig:
     grip: str = "right"
     reset_pose: str = "libero"
     fps: int = _STATION.fps
+    # ---- 제어 주기 (issue #1). 기본값은 스테이션의 control: 블록에서 온다.
+    # 근거 주석은 이 파일 위쪽, 각 값을 쓰는 메커니즘 옆에 그대로 있다.
+    # 세션이 값을 들고 다니므로, 설정을 저장해도 **도는 세션은 바뀌지 않는다**.
+    ramp_hz: float = _STATION.control.ramp_hz
+    teleop_substeps: int = _STATION.control.teleop_substeps
+    approach_speed: float = _STATION.control.approach_speed
+    approach_done_rad: float = _STATION.control.approach_done_rad
+    home_speed: float = _STATION.control.home_speed
     max_episode_seconds: float = 20.0
     reset_wait_seconds: float = 10.0
     enable_wall: bool = True
@@ -390,6 +401,26 @@ class WorkerConfig:
     # 카메라별 정사각 크롭 정렬 (GUI Layout 페이지에서 조정). None 이면 기본값.
     # 에피소드마다 attrs["crop_params"] 로 찍힌다.
     crop_params: dict | None = None
+
+    @property
+    def ramp_period_s(self) -> float:
+        return 1.0 / self.ramp_hz
+
+    @property
+    def ramp_step(self) -> float:
+        """접근 램프의 tick 당 관절 이동 (rad). 파생값이라 주기를 바꿔도
+        **속도가 보존된다** -- 그래서 설정 화면은 속도만 노출한다."""
+        return self.approach_speed / self.ramp_hz
+
+    @property
+    def home_tick_dq(self) -> float:
+        """homing 의 tick 당 관절 이동 (rad). 위와 같은 이유로 파생값이다."""
+        return self.home_speed / self.ramp_hz
+
+    @property
+    def command_hz(self) -> float:
+        """텔레옵 명령 주기. 기록 주기의 정수배라는 것이 요점이다."""
+        return self.fps * self.teleop_substeps
 
     @property
     def scene_mode(self) -> bool:
@@ -797,7 +828,7 @@ class CollectionWorker(QThread):
         # **틱 수가 아니라 초** 로 센다. 예전에는 max_ticks 였는데, 그러면
         # RAMP_HZ 를 올리는 순간 타임아웃이 같은 비율로 짧아진다 (20->100 Hz
         # 에서 30초가 6초가 된다). 주기를 바꿔도 의미가 변하지 않아야 한다.
-        for _ in range(int(timeout_s * RAMP_HZ)):
+        for _ in range(int(timeout_s * self.cfg.ramp_hz)):
             interrupt = self._drain_interrupt(react_to_go_home=react_to_go_home)
             if interrupt:
                 return interrupt
@@ -814,11 +845,11 @@ class CollectionWorker(QThread):
             # acceleration_discontinuity abort.
             if q_cmd is None:
                 q_cmd = q.copy()
-            q_cmd = self._advance_cmd(q_cmd, target_q, step=HOME_TICK_DQ)
+            q_cmd = self._advance_cmd(q_cmd, target_q, step=self.cfg.home_tick_dq)
             cmd = dict(zip(JOINT_KEYS, np.append(q_cmd, GRIPPER_OPEN).tolist()))
             self._robot.send_action(cmd)
             self._emit_frames(obs)
-            time.sleep(RAMP_PERIOD_S)
+            time.sleep(self.cfg.ramp_period_s)
         return "quit"
 
     @staticmethod
@@ -946,13 +977,13 @@ class CollectionWorker(QThread):
                 wps.append(q)
             # 여기까지가 **모양**이다. 속도는 아직 아무도 안 봤다 -- 마지막에
             # 관절 공간에서 다시 잘라 tick 당 이동을 묶는다.
-            return self._densify(q_now, wps)
+            return self._densify(q_now, wps, self.cfg.home_tick_dq)
         except Exception:  # noqa: BLE001 - 어떤 실패든 폴백이 정답
             return None
 
     @staticmethod
     def _densify(q_start: np.ndarray, wps: "list[np.ndarray]",
-                 max_dq: float = HOME_TICK_DQ) -> "list[np.ndarray]":
+                 max_dq: "float | None" = None) -> "list[np.ndarray]":
         """웨이포인트 사이를 관절 공간에서 잘라 tick 당 이동을 ``max_dq`` 아래로.
 
         경로의 **모양은 그대로 두고 시간만 늘린다**. 자르는 두 점은 이미
@@ -964,7 +995,15 @@ class CollectionWorker(QThread):
 
         시작점을 함께 받는 이유: 첫 웨이포인트로 가는 첫 tick 이 가장 큰
         점프인 경우가 실제로 있다 (텔레옵이 끝난 자세에서 리프트로).
+
+        ``max_dq`` 는 **호출부가 넘긴다** (``cfg.home_tick_dq``). 시그니처의
+        기본값으로 두지 않는 이유: 기본 인자는 import 시점에 한 번 평가되어
+        그때 로드된 스테이션 값으로 굳는다. 이 메서드는 staticmethod 라
+        ``self.cfg`` 도 못 본다 -- 그래서 인자로 받는 것이 유일한 길이다.
+        테스트는 명시적으로 넘겨서 쓴다.
         """
+        if max_dq is None:
+            raise ValueError("max_dq 를 넘겨라 -- cfg.home_tick_dq 가 그 값이다")
         out: list = []
         prev = np.asarray(q_start, dtype=np.float64)
         for q in wps:
@@ -998,14 +1037,14 @@ class CollectionWorker(QThread):
             cmd = dict(zip(JOINT_KEYS, np.append(q_cmd, GRIPPER_OPEN).tolist()))
             self._robot.send_action(cmd)
             self._emit_frames(obs)
-            time.sleep(RAMP_PERIOD_S)
+            time.sleep(self.cfg.ramp_period_s)
         # EE 는 홈 포즈에 도착. 남은 널스페이스/추종 잔차를 관절 램프로 수렴.
         return self._ramp_to(self._reset_q, timeout_s=timeout_s,
                              react_to_go_home=react_to_go_home)
 
     @staticmethod
     def _advance_cmd(q_cmd: np.ndarray, target_q: np.ndarray,
-                     step: float = RAMP_STEP) -> np.ndarray:
+                     step: "float | None" = None) -> np.ndarray:
         """Move the commanded position one ``step`` toward ``target_q``.
 
         Both ramps used to command ``measured + clip(target - measured)``,
@@ -1019,17 +1058,22 @@ class CollectionWorker(QThread):
         same move takes 1.25 s (0.80 rad/s), a 3.5x speedup with no change
         to what the driver is allowed to do.
 
-        ``step`` is the per-tick cap (rad @ RAMP_HZ). The default RAMP_STEP
-        (2.0 rad/s) suits the short pre-teleop approach ramp; the long
-        homing fallback/residual ramp (``_ramp_to``) passes HOME_TICK_DQ
-        instead so the reference filter never sits saturated -- a late
-        control tick in saturation is what fires
-        joint_motion_generator_acceleration_discontinuity (see
-        HOME_TICK_DQ).
+        ``step`` is the per-tick cap (rad @ ``cfg.ramp_hz``). ``None`` means
+        ``cfg.ramp_step`` (approach_speed 2.0 rad/s), which suits the short
+        pre-teleop approach ramp; the long homing fallback/residual ramp
+        (``_ramp_to``) passes ``cfg.home_tick_dq`` instead so the reference
+        filter never sits saturated -- a late control tick in saturation is
+        what fires joint_motion_generator_acceleration_discontinuity.
+
+        The default is resolved here and not in the signature: a default
+        argument is evaluated once at import, which would freeze the value
+        from whichever station happened to be loaded first.
 
         (Same failure mode as the action-space bug: never feed a low-pass
         filter its own output back as the setpoint.)
         """
+        if step is None:
+            step = self.cfg.ramp_step
         return q_cmd + np.clip(target_q - q_cmd, -step, step)
 
     def _approach_ramp(self, timeout: float = 3600.0) -> str:
@@ -1059,7 +1103,7 @@ class CollectionWorker(QThread):
             q_led = np.array([act[k] for k in JOINT_KEYS[:7]])
             d = q_led - q_rob
             self._emit_frames(obs)
-            if np.abs(d).max() < APPROACH_DONE_RAD:
+            if np.abs(d).max() < self.cfg.approach_done_rad:
                 return "ok"
             # Integrated command, not measured+step -- see _advance_cmd. The
             # target here is live (the operator may still be moving), so the
@@ -1076,7 +1120,7 @@ class CollectionWorker(QThread):
             if now > deadline:
                 self.log_message.emit(f"[접근] {timeout:.0f}s 시간 초과 -- 세션 종료")
                 return "quit"
-            time.sleep(RAMP_PERIOD_S)
+            time.sleep(self.cfg.ramp_period_s)
 
     # ------------------------------------------------------------------ gate
     def _emit_gate_status(self) -> tuple[np.ndarray, bool]:
@@ -1370,7 +1414,8 @@ class CollectionWorker(QThread):
             # 각 묶음의 **마지막** 명령 틱에 얹는다 -- 그 틱에서 명령을 보내고
             # 곧바로 관측을 읽으므로, 기록되는 (action, obs) 쌍의 의미가
             # 예전과 똑같다. 나머지 틱은 명령만 보낸다.
-            cmd_budget = budget / TELEOP_SUBSTEPS
+            substeps = self.cfg.teleop_substeps
+            cmd_budget = budget / substeps
             max_frames = int(self.cfg.max_episode_seconds * self.cfg.fps)
             t_next = time.monotonic()
             n = 0
@@ -1380,7 +1425,7 @@ class CollectionWorker(QThread):
             # 홈 복귀·정렬 이동이 첫 판정에 섞이면 안 된다.
             drop_guard = LeaderDropGuard()
             for i in range(max_frames):
-                for k in range(TELEOP_SUBSTEPS):
+                for k in range(substeps):
                     # 버튼은 명령 주기로 본다 -- 기록 주기로만 보면 반응이
                     # TELEOP_SUBSTEPS 배 느려진다.
                     cmd = self._poll_cmd()
@@ -1409,7 +1454,7 @@ class CollectionWorker(QThread):
                         break
                     self._robot.send_action(action)
                     t_action = time.time()
-                    if k < TELEOP_SUBSTEPS - 1:
+                    if k < substeps - 1:
                         t_next += cmd_budget
                         time.sleep(max(0.0, t_next - time.monotonic()))
                 if stop:
