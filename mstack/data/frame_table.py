@@ -121,14 +121,20 @@ def _is_v2(ep: Any) -> bool:
     return "t" in ep and hasattr(ep["t"], "keys")
 
 
-def _collect_obs(grp: Any) -> dict:
+def _collect_obs(grp: Any, keys: Optional[list] = None) -> dict:
     """``obs`` 아래 1단계 데이터셋들. 하위 그룹은 내려가지 않는다 --
-    지금 스키마에 obs 하위 그룹이 없고, 생기면 여기서 명시적으로 다뤄야 한다."""
+    지금 스키마에 obs 하위 그룹이 없고, 생기면 여기서 명시적으로 다뤄야 한다.
+
+    ``keys`` 를 주면 그것만. 이미지 한 계열이 400프레임에서 368 MB 라,
+    한 프레임만 보려는 호출자가 전부를 올리지 않게 하는 것이 요점이다.
+    없는 이름은 조용히 건너뛴다 -- 스키마 설정에 따라 없는 obs 가 정상이다.
+    """
     out = {}
     obs = grp.get("obs")
     if obs is None:
         return out
-    for k in obs.keys():
+    names = list(obs.keys()) if keys is None else [k for k in keys if k in obs]
+    for k in names:
         d = obs[k]
         if hasattr(d, "shape"):
             out[k] = d
@@ -138,11 +144,13 @@ def _collect_obs(grp: Any) -> dict:
 # ------------------------------------------------------------------ knu-1.3.0
 
 
-def _table_v1(ep: Any, rate: Optional[float], align: str) -> FrameTable:
+def _table_v1(ep: Any, rate: Optional[float], align: str,
+              keys: Optional[list]) -> FrameTable:
     """1.3.0 은 이미 표다. 재구성할 것이 없고, 시각만 채워 준다."""
-    obs = {k: d[:] for k, d in _collect_obs(ep).items()}
+    obs = {k: d[:] for k, d in _collect_obs(ep, keys).items()}
     actions = ep["actions"][:] if "actions" in ep else None
-    n_rows = len(next(iter(obs.values()))) if obs else (len(actions) if actions is not None else 0)
+    n_rows = (len(actions) if actions is not None
+              else (len(next(iter(obs.values()))) if obs else 0))
 
     timing = ep.get("timing")
     if timing is not None and "frame" in timing:
@@ -209,7 +217,22 @@ def _select_clock(ep: Any, axis: str, align: str) -> np.ndarray:
     return host[:]
 
 
-def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str) -> FrameTable:
+def _read(ds: Any, idx: np.ndarray) -> np.ndarray:
+    """``ds`` 에서 ``idx`` 행만 읽는다. **중복을 빼고 읽는다.**
+
+    영차 유지는 같은 프레임을 여러 행이 공유하므로 ``idx`` 에 중복이 있다.
+    ``ds[:][idx]`` 는 쓰지 않는 프레임까지 전부 읽는다 -- 실측으로 185장을
+    읽어야 할 것을 91장으로 줄인다 (170 MB -> 84 MB). h5py 의 팬시 인덱싱은
+    **정렬된 중복 없는** 목록만 받으므로 np.unique 의 출력이 그대로 맞다.
+    """
+    if idx.size and idx[0] == 0 and idx[-1] == ds.shape[0] - 1 and idx.size == ds.shape[0]:
+        return ds[:]                      # 전부 쓰면 통째로 읽는 쪽이 빠르다
+    uniq, inv = np.unique(idx, return_inverse=True)
+    return ds[uniq][inv]
+
+
+def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str,
+              keys: Optional[list]) -> FrameTable:
     t_ctrl = ep["t"][CONTROL_AXIS][:]
     n_ctrl = len(t_ctrl)
 
@@ -237,33 +260,44 @@ def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str) -> FrameT
         t_rows = t_ctrl[rows]
         keep_actions = True
 
-    obs, image_age = {}, {}
+    wanted = _collect_obs(ep, keys)
     n_source = {a: len(ep["t"][a]) for a in ep["t"].keys()}
 
-    for name, ds in _collect_obs(ep).items():
-        axis = _axis_of(ds)
-        if axis == CONTROL_AXIS and anchor == CONTROL_AXIS:
-            obs[name] = ds[:][rows]
-            continue
-        if axis == anchor:
-            obs[name] = ds[:][rows]
+    # ---- 1) 어느 행도 못 채우는 앞부분을 **먼저** 잘라낸다.
+    # 축마다 따로 자르면, 먼저 처리한 계열이 나중 잘림을 못 받아 길이가
+    # 어긋난다. 그래서 선택 전에 한 번에 정한다.
+    per_axis: dict = {}
+    first = 0
+    for axis in {_axis_of(d) for d in wanted.values()} | ({CONTROL_AXIS} if keep_actions else set()):
+        if axis == anchor or (axis == CONTROL_AXIS and anchor == CONTROL_AXIS):
             continue
         clock = _select_clock(ep, axis, align)
         # 최신·인과: 행 시각 **이하** 에서 가장 최근. 보간하지 않는다.
         idx = np.searchsorted(clock, t_rows, side="right") - 1
+        per_axis[axis] = idx
         if (idx < 0).any():
-            # 첫 행보다 앞선 표본이 하나도 없는 축이 있다. 그 행들은 버린다 --
-            # 없는 관측을 0 이나 첫 프레임으로 채우면 조용히 거짓이 된다.
-            first = int(np.argmax(idx >= 0))
-            rows, t_rows, idx = rows[first:], t_rows[first:], idx[first:]
-            obs = {k: v[first:] for k, v in obs.items()}
-        obs[name] = ds[:][idx]
+            # 그 행보다 앞선 표본이 하나도 없다. **없는 관측을 0 이나 첫
+            # 프레임으로 채우지 않고 그 행을 버린다** -- 채우면 조용한 거짓이다.
+            first = max(first, int(np.argmax(idx >= 0)))
+    if first:
+        rows, t_rows = rows[first:], t_rows[first:]
+        per_axis = {a: i[first:] for a, i in per_axis.items()}
+
+    # ---- 2) 계열마다 필요한 행만 읽는다
+    obs, image_age = {}, {}
+    for name, ds in wanted.items():
+        axis = _axis_of(ds)
+        if axis == anchor or (axis == CONTROL_AXIS and anchor == CONTROL_AXIS):
+            obs[name] = _read(ds, rows)
+            continue
+        idx = per_axis[axis]
+        obs[name] = _read(ds, idx)
         if axis in CAMERA_AXES:
             image_age[axis] = t_rows - ep["t"][axis][:][idx]
 
     actions = None
     if keep_actions and "actions" in ep:
-        actions = ep["actions"][:][rows]
+        actions = _read(ep["actions"], rows)
 
     ft = FrameTable(t=t_rows, obs=obs, actions=actions, image_age=image_age,
                     n_source=n_source, rate=rate, version=_episode_version(ep),
@@ -291,7 +325,8 @@ def _check_causal(ft: FrameTable, anchor: str) -> None:
 
 def frame_table(ep: Any, rate: Optional[float] = None, *,
                 anchor: str = CONTROL_AXIS,
-                align: str = ALIGN_ARRIVAL) -> FrameTable:
+                align: str = ALIGN_ARRIVAL,
+                keys: Optional[list] = None) -> FrameTable:
     """에피소드를 한 행 = 한 표본의 표로 돌려준다.
 
     Args:
@@ -301,6 +336,8 @@ def frame_table(ep: Any, rate: Optional[float] = None, *,
         anchor: 행을 어느 축 위에 놓을지. 기본 ``"control"`` -- 유일하게
             액션을 함께 돌려주는 모드다 (모듈 문서의 인과성 참고).
         align: ``"arrival"`` (기본, 배포와 같은 규칙) 또는 ``"capture"``.
+        keys: 물질화할 obs 이름들. ``None`` 이면 전부. 이미지가 크므로
+            (400프레임 한 계열이 368 MB) 필요한 것만 주는 편이 좋다.
 
     Raises:
         ValueError: 정수배가 아닌 rate, 1.3.0 의 재표본 요청, 모르는 인자.
@@ -312,9 +349,55 @@ def frame_table(ep: Any, rate: Optional[float] = None, *,
         raise ValueError(
             f"anchor 는 'control' 또는 {tuple(CAMERA_AXES)} 여야 한다: {anchor!r}")
     if _is_v2(ep):
-        return _table_v2(ep, rate, anchor, align)
+        return _table_v2(ep, rate, anchor, align, keys)
     if anchor != CONTROL_AXIS:
         raise ValueError(
             "knu-1.x 에는 축이 하나뿐이라 anchor 를 고를 수 없다 "
             "(모든 계열이 이미 같은 행에 있다).")
-    return _table_v1(ep, rate, align)
+    return _table_v1(ep, rate, align, keys)
+
+
+def stream(ep: Any, name: str) -> "tuple[Any, np.ndarray]":
+    """계열 하나와 그 시간축. **표로 만들지 않는다.**
+
+    한 계열만 필요한 소비자 -- 프록시 클립 인코더, 뷰어의 이미지 로더, actions
+    만 읽는 통계 -- 를 위한 것이다. ``frame_table`` 로 보내면 두 가지가 잘못된다:
+    쓰지도 않을 계열까지 메모리에 올라가고, 카메라가 control 축으로 솎아져
+    30 fps 미리보기가 20 fps 가 된다.
+
+    반환하는 데이터셋은 **읽지 않은 h5py 핸들**이다. 호출자가 필요한 만큼만
+    슬라이스하면 된다.
+
+    Returns:
+        ``(데이터셋, 시각 배열)``. 시각은 에피소드 시작 기준 초.
+
+    Raises:
+        KeyError: 그 이름의 계열이 없을 때.
+    """
+    ds = ep.get(f"obs/{name}")
+    if ds is None:
+        ds = ep.get(name)                 # actions / rewards / dones
+    if ds is None:
+        raise KeyError(f"{name!r} 계열이 없다")
+    if _is_v2(ep):
+        return ds, ep["t"][_axis_of(ds)][:]
+    # 1.3.0: 모든 계열이 한 축을 공유한다.
+    timing = ep.get("timing")
+    if timing is None or "frame" not in timing:
+        return ds, np.full(ds.shape[0], np.nan)
+    t = timing["frame"][:]
+    return ds, t - t[0]
+
+
+def n_frames(ep: Any) -> int:
+    """control 축의 표본 수. ``num_samples`` attr 과 같은 값이고, 그것이
+    2.0.0 에서 ``num_samples`` 의 **정의**다 (DESIGN_knu_2_0_0 §1.2).
+
+    attr 을 먼저 믿는다 -- 트림이 attr 을 갱신하므로 그쪽이 정본이다.
+    """
+    n = ep.attrs.get("num_samples")
+    if n is not None:
+        return int(n)
+    if _is_v2(ep):
+        return int(len(ep["t"][CONTROL_AXIS]))
+    return int(ep["actions"].shape[0]) if "actions" in ep else 0

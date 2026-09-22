@@ -24,39 +24,21 @@ from pathlib import Path
 
 WT = str(Path(__file__).resolve().parents[2])
 sys.path.insert(0, WT)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.argv = ["t"]
 
 import h5py  # noqa: E402
 import numpy as np  # noqa: E402
 
-from mstack.data.frame_table import frame_table  # noqa: E402
+from mstack.data.frame_table import (  # noqa: E402
+    frame_table,
+    n_frames,
+    stream,
+)
+from v2_fixture import assert_same_table, axes_of, write_v2  # noqa: E402
 
 TMP = tempfile.mkdtemp(prefix="frametable-")
 DATASET = Path.home() / "libero_datasets" / "fr3-tabletop" / "scene_023.hdf5"
-
-
-def _v2_from_v1(ep1, path):
-    """실제 1.3.0 에피소드를 같은 내용의 2.0.0 로 옮긴다 (지어내는 값 없음)."""
-    tim = ep1["timing"]
-    t_row = tim["frame"][:]
-    t0 = t_row[0]
-    with h5py.File(path, "w") as g:
-        e = g.create_group("e")
-        e.attrs["dataset_version"] = "knu-2.0.0"
-        e.attrs["t0_wall"] = t0
-        e.attrs["control_hz"] = 20.0
-        tg, mg = e.create_group("t"), e.create_group("meta")
-        tg.create_dataset("control", data=t_row - t0)
-        for axis, pre in (("agent", "agentview"), ("wrist", "eye_in_hand")):
-            tg.create_dataset(axis, data=tim[f"{pre}_device"][:] - t0)
-            mg.create_dataset(f"{axis}/host", data=tim[f"{pre}_host"][:] - t0)
-        o = e.create_group("obs")
-        for k, axis in (("agentview_rgb", "agent"), ("eye_in_hand_rgb", "wrist"),
-                        ("joint_states", "control"), ("gripper_states", "control")):
-            d = o.create_dataset(k, data=ep1[f"obs/{k}"][:])
-            d.attrs["axis"] = axis
-        d = e.create_dataset("actions", data=ep1["actions"][:])
-        d.attrs["axis"] = "control"
 
 
 def _synthetic(path, *, n_ctrl=20, ctrl_hz=20.0, cam_hz=30.0, offset=0.015):
@@ -119,7 +101,7 @@ def main() -> None:
             for name in ("episode_000", "episode_037", "episode_099"):
                 if name not in f:
                     continue
-                _v2_from_v1(f[name], p)
+                write_v2(f[name], p)
                 for align in ("arrival", "capture"):
                     with h5py.File(p, "r") as g:
                         ft2 = frame_table(g["e"], align=align)
@@ -211,6 +193,54 @@ def main() -> None:
         else:
             raise AssertionError("도착 시각이 없는데 arrival 이 통과했다")
     print("9. 도착 시각이 없으면 arrival 을 거부하고 이유를 말한다 OK")
+
+    # ============================================ 10. keys= 로 필요한 것만
+    with h5py.File(p, "r") as g:
+        only = frame_table(g["e"], keys=["joint_states"], align="capture")
+        assert set(only.obs) == {"joint_states"}, set(only.obs)
+        assert "agentview_rgb" not in only.obs, (
+            "keys 를 줬는데 이미지가 올라왔다 -- 한 프레임만 보려는 뷰어가 "
+            "400프레임 368 MB 를 올리게 된다")
+        assert len(only) == len(frame_table(g["e"], align="capture")), (
+            "keys 가 행 수까지 바꿨다")
+        # 없는 이름은 조용히 건너뛴다 (스키마에 따라 없는 obs 가 정상이다)
+        assert set(frame_table(g["e"], keys=["없는것"], align="capture").obs) == set()
+    print("10. keys= 가 물질화를 좁힌다 (행 수는 그대로) OK")
+
+    # ============================================ 11. stream() / n_frames()
+    with h5py.File(p, "r") as g:
+        ds, t = stream(g["e"], "agentview_rgb")
+        assert ds.shape[0] == len(t_cam), (ds.shape, len(t_cam))
+        assert len(t) == len(t_cam), "시간축이 그 계열의 것이 아니다"
+        assert hasattr(ds, "chunks"), "읽지 않은 h5py 핸들이어야 한다"
+        ds_a, t_a = stream(g["e"], "actions")
+        assert len(t_a) == len(t_ctrl), "actions 가 control 축이 아니다"
+        assert n_frames(g["e"]) == len(t_ctrl), n_frames(g["e"])
+        try:
+            stream(g["e"], "없는계열")
+        except KeyError:
+            pass
+        else:
+            raise AssertionError("없는 계열인데 통과했다")
+    print(f"11. stream() 이 계열별 시간축을 준다 "
+          f"(카메라 {len(t)}행 vs control {len(t_a)}행), n_frames OK")
+
+    # ============================================ 12. 1.3.0 에서도 같은 API
+    if DATASET.exists():
+        with h5py.File(DATASET, "r") as f:
+            ep1 = f["episode_000"]
+            ds, t = stream(ep1, "agentview_rgb")
+            assert len(t) == ds.shape[0]
+            assert n_frames(ep1) == ep1["actions"].shape[0]
+            # 두 레이아웃이 같은 표를 준다 -- C5 의 모든 치환이 기댈 단언
+            p2 = os.path.join(TMP, "same.h5")
+            write_v2(ep1, p2)
+            ax = axes_of(p2)
+            assert set(ax) == {"control", "agent", "wrist"}, ax
+            with h5py.File(p2, "r") as g:
+                assert_same_table(frame_table(ep1), frame_table(g["e"]),
+                                  what="1.3.0 vs 2.0.0")
+            print(f"12. 같은 API 가 두 레이아웃에서 같은 표를 준다 OK (축 {ax})")
 
     print("\nframe_table 인수 통과")
 
