@@ -199,8 +199,26 @@ def _table_v1(ep: Any, rate: Optional[float], align: str,
 # ------------------------------------------------------------------ knu-2.0.0
 
 
-def _axis_of(ds: Any, default: str = CONTROL_AXIS) -> str:
+def axis_of(ds: Any, default: str = CONTROL_AXIS) -> str:
+    """이 데이터셋이 어느 시간축에 실리는가.
+
+    2.0.0 은 ``attrs["axis"]`` 로 **명시한다**. 1.3.0 은 축이 하나뿐이라
+    attr 이 없고, 그때는 ``default`` 가 답이다.
+
+    길이로 추정하지 마라. "actions 와 길이가 같으면 프레임 축" 이라는 추정이
+    1.3.0 에서는 맞지만 2.0.0 에서는 카메라를 조용히 놓친다 -- 그렇게 자른
+    에피소드는 액션만 잘리고 이미지가 남는다.
+    """
     return str(ds.attrs.get("axis", default) or default)
+
+
+def has_axis_attr(ds: Any) -> bool:
+    """축이 **명시되어** 있는가 (= 2.0.0 계열인가). 길이 추정으로 되돌아갈지
+    판단하는 데 쓴다."""
+    return "axis" in ds.attrs
+
+
+_axis_of = axis_of        # 내부 호출부 호환
 
 
 def _select_clock(ep: Any, axis: str, align: str) -> np.ndarray:

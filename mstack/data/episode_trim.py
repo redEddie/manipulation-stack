@@ -53,6 +53,8 @@ from dataclasses import dataclass
 import h5py
 import numpy as np
 
+from mstack.data.frame_table import axis_of, has_axis_attr
+
 ARM_DIMS = 7
 # 그리퍼 명령은 0/1 이산값이라, 이보다 큰 변화는 열림/닫힘 한 번을 뜻한다.
 GRIPPER_STEP = 0.05
@@ -197,14 +199,32 @@ def trim_tail(path: str, demo: str, n_trim: int) -> int:
     keep = plan.result_frames
     with h5py.File(path, "a") as f:
         grp, _scene = _episode_group(f, demo)   # 양포맷 동일 처리
-        targets: list[str] = []
+        names: list[str] = []
         grp.visititems(
-            lambda name, obj: targets.append(name)
+            lambda name, obj: names.append(name)
             if isinstance(obj, h5py.Dataset) else None)
+
+        # 어느 데이터셋이 프레임 축인가. **쓰기 전에 전부 정한다** -- 중간에
+        # 멈추면 일부만 잘린 파일이 남고, 그건 되돌릴 수 없다.
+        targets: list[str] = []
+        for name in names:
+            ds = grp[name]
+            if has_axis_attr(ds):
+                # knu-2.0.0: 축이 명시되어 있다. 축마다 길이가 다르므로
+                # "n 프레임" 을 모든 축에 똑같이 적용하면 안 된다 --
+                # 120 Hz 의 27 tick 은 0.225초이고 30 fps 카메라로는 7장이다.
+                # 시간 구간으로 자르는 재설계 전까지는 **거부한다**.
+                raise ValueError(
+                    f"{name} 에 axis={axis_of(ds)!r} 가 붙어 있다 (knu-2.0.0). "
+                    "축마다 프레임 수가 달라 '뒤에서 n 프레임' 을 그대로 적용할 "
+                    "수 없다 -- 시간 구간으로 자르는 재설계가 필요하다. "
+                    "잘못 자른 파일을 만드느니 멈춘다.")
+            # knu-1.3.0: 축이 하나뿐이라 길이가 곧 판별이다.
+            if ds.shape[0] == plan.n_frames:
+                targets.append(name)
+
         for name in targets:
             ds = grp[name]
-            if ds.shape[0] != plan.n_frames:
-                continue  # 프레임축이 아닌 데이터셋은 건드리지 않는다
             data = ds[:keep]
             spec = {"dtype": ds.dtype, "chunks": ds.chunks,
                     "compression": ds.compression,
