@@ -138,6 +138,7 @@ from lerobot.datasets.lerobot_dataset import CODEBASE_VERSION, LeRobotDataset
 from lerobot.datasets.utils import DatasetInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from mstack.config.station import load_station  # noqa: E402
 from mstack.data.dataset_schema import (  # noqa: E402
     ACTION_SPACE_EE_DELTA,
     OBS_AGENTVIEW_RGB,
@@ -747,6 +748,23 @@ def _check_resume_compatible(remote_features: dict, local_features: dict) -> Non
             )
 
 
+def _check_resume_fps(existing_fps: int, requested_fps: int) -> None:
+    """--resume 은 LeRobotDataset.resume() 이 기존 meta/info.json 의 fps 를
+    물려받고 --fps 를 쓰지 않는다. 넘어온 --fps 가 기존 것과 다르면 조용히
+    무시하는 대신 거부한다 -- fps 는 모든 프레임의 timestamp 와 비디오 속도를
+    만드는 값이라 어긋나면 이어붙인 데이터셋의 시간축 전체가 틀어진다."""
+    if existing_fps == requested_fps:
+        return
+    raise SystemExit(
+        "--resume 대상 Hub 데이터셋의 fps 와 --fps 가 다릅니다:\n"
+        f"  기존: {existing_fps}\n"
+        f"  지금: {requested_fps}\n"
+        "다른 fps 로 이어붙이면 프레임 timestamp 와 비디오 속도가 갈라져 Hub "
+        "데이터셋이 망가집니다 -- 스테이션 설정의 recording.fps 를 기존 "
+        "데이터셋에 맞추거나, --repo-id를 바꿔 별도 데이터셋으로 변환하세요."
+    )
+
+
 def _stamp_schema_version(root: Path, source_versions: "list[str]") -> None:
     """변환본 meta/info.json 에 원본 HDF5 의 스키마 버전을 남긴다 (issue #41).
 
@@ -769,12 +787,19 @@ def _stamp_schema_version(root: Path, source_versions: "list[str]") -> None:
 
 
 def main() -> None:
+    # fps 의 정본은 스테이션 설정(recording.fps)이다 -- 여기서 안 넘기면
+    # 어느 쪽 기준으로 만들어졌는지 알 수 없고, --resume 일치 검사도 못 한다.
+    station_fps = load_station().fps
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("hdf5_paths", type=Path, nargs="*",
                    help="<task>_demo.hdf5 파일들 (여러 개 가능). --push-only 일 때는 불필요")
     p.add_argument("--repo-id", required=True, help="예: knu-physical-ai/fr3-libero-teleop-lerobot")
     p.add_argument("--root", type=Path, required=True, help="로컬에 LeRobotDataset을 만들 경로")
-    p.add_argument("--fps", type=int, default=20)
+    p.add_argument("--fps", type=int, default=station_fps,
+                   help=f"LeRobot 데이터셋의 fps (기본 {station_fps} = 스테이션 설정 "
+                        "recording.fps). 모든 프레임의 timestamp 와 비디오 스트림 속도를 "
+                        "여기서 만든다 -- .hdf5 를 기록한 수집 루프 주파수와 맞아야 한다. "
+                        "--resume 에서는 기존 데이터셋의 fps 와 다르면 거부된다.")
     p.add_argument("--only-success", action="store_true", help="success=True인 에피소드만 포함")
     p.add_argument(
         "--include-failed", action="store_true",
@@ -939,6 +964,7 @@ def main() -> None:
             image_writer_processes=0,
             image_writer_threads=args.image_writer_threads,
         )
+        _check_resume_fps(ds.meta.info.fps, args.fps)
         _check_resume_compatible(ds.meta.features, features)
         print(
             f"기존 데이터셋에 이어붙임: 현재 {ds.meta.total_episodes}개 에피소드, "
