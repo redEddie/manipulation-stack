@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from mstack.data.hub_upload_state import changed_files
 from mstack.data.libero_format import hdf5_repack_status
+from mstack.config.station import load_station
 from mstack.gui.dialogs import HfAccountDialog, hf_account
 from mstack.gui.widgets import Recents
 from mstack.gui.dialogs.parts import RepoIdEdit
@@ -281,7 +282,8 @@ class PipelineDialog(QDialog):
         if self.repack_check.isChecked() and self._repack_todo:
             steps.append({"name": tr("재압축"), "program": sys.executable,
                           "args": [self._scripts['repack'], *self._repack_todo]})
-        convert = [self._scripts['convert'], *paths, "--repo-id", lerobot_repo, "--root", root]
+        convert = [self._scripts['convert'], *paths, "--repo-id", lerobot_repo, "--root", root,
+                   "--fps", str(load_station().fps)]
         if not rebuild:
             convert.append("--resume")
         steps.append({"name": tr("LeRobot 변환") + ("" if not rebuild else tr(" (전체 재빌드)")),

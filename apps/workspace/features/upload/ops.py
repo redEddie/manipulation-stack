@@ -18,6 +18,7 @@ from mstack.scene.dataset_sync import local_tasks, plan_sync
 from mstack.data.episode_stats import hdf5_files
 from apps.workspace.features.upload.hdf5_auto_dialog import Hdf5AutoDialog
 from mstack.data.lerobot_local import local_lerobot_status
+from mstack.config.station import load_station
 from mstack.gui.dialogs import (
     HdfUploadDialog,
     HfAccountDialog,
@@ -30,6 +31,21 @@ from apps.workspace.shared import jobs
 from mstack.gui.i18n import tr
 
 from apps.workspace.constants import CONVERT_SCRIPT, REPACK_SCRIPT, UPLOAD_SCRIPT
+
+
+def lerobot_convert_step(paths: list, repo: str, root: str, resume: bool) -> dict:
+    """LeRobot 변환 파이프라인 단계 하나.
+
+    --fps 는 변환기 기본값에 맡기지 않고 스테이션 설정에서 명시로 넘긴다.
+    이어붙이기에서 --fps 가 기존 데이터셋의 fps 와 다르면 변환기가 거부하는데,
+    명시하지 않으면 그 검사가 의도한 값을 받는지 알 수 없다."""
+    args = [CONVERT_SCRIPT, *paths, "--repo-id", repo, "--root", root,
+            "--fps", str(load_station().fps)]
+    if resume:
+        args.append("--resume")
+    return {"name": tr("LeRobot 변환 (이어붙이기)" if resume
+                       else "LeRobot 변환 (전체 재빌드)"),
+            "program": sys.executable, "args": args, "clear_root": root}
 
 
 class UploadOps:
@@ -216,9 +232,7 @@ class UploadOps:
         self.win._recents.add("repo_id", repo)
         self.win._recents.add("lerobot_root", root)
         steps = [
-            {"name": tr("LeRobot 변환 (전체 재빌드)"), "program": sys.executable,
-             "args": [CONVERT_SCRIPT, *paths, "--repo-id", repo, "--root", root],
-             "clear_root": root},
+            lerobot_convert_step(paths, repo, root, resume=False),
             {"name": tr("LeRobot 교체 업로드"), "program": sys.executable,
              "args": [CONVERT_SCRIPT, "--repo-id", repo, "--root", root,
                       "--push-only", "--replace", "--no-private"]},
@@ -294,10 +308,7 @@ class UploadOps:
         self.win._recents.add("repo_id", repo)
         self.win._recents.add("lerobot_root", root)
         steps = [
-            {"name": tr("LeRobot 변환 (이어붙이기)"), "program": sys.executable,
-             "args": [CONVERT_SCRIPT, *paths, "--repo-id", repo, "--root", root,
-                      "--resume"],
-             "clear_root": root},
+            lerobot_convert_step(paths, repo, root, resume=True),
             {"name": tr("LeRobot 추가 업로드"), "program": sys.executable,
              "args": [CONVERT_SCRIPT, "--repo-id", repo, "--root", root,
                       "--push-only", "--no-private"]},
