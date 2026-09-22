@@ -64,7 +64,7 @@ for t in test_phase4a test_grid_replay test_plan_form test_right_scene \
          test_hub_upload_state test_camera_node test_match_gate \
          test_app_structure test_ui_surface test_domain_attrs \
          test_episode_io test_layer_rules test_signal_slots test_instruction_counter \
-         test_dataset_meta test_launcher test_key_autorepeat \
+         test_dataset_meta test_dataset_index test_launcher test_key_autorepeat \
          test_station_save test_wheel_guard test_waypoint_kinematics \
          test_state_isolation test_resume_version test_workflow_gui test_node_diag \
          test_collect_layout test_script_bootstrap test_relation_shape \

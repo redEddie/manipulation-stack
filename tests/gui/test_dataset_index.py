@@ -1,0 +1,164 @@
+"""dataset_index — scene HDF5 에서 파생하는 3종 TSV 색인 검증.
+
+- 임시 디렉터리에 작은 scene HDF5 2개를 만들고 scenes/cells/episodes.tsv 의
+  헤더와 행 수·집계 값을 본다.
+- attr 이 빠진 에피소드(옛 스키마 시늄)가 있어도 죽지 않고 ``-`` 로 남는다.
+- 깨진 scene 파일 하나가 나머지 색인을 망치지 않는다.
+- 진입점 스크립트(``--out``)가 모듈과 같은 TSV 를 만든다.
+
+Qt 없이 돈다 — 로봇/카메라 불필요.
+"""
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import h5py
+import numpy as np
+
+WT = str(Path(__file__).resolve().parents[2])   # 리포 루트
+sys.path.insert(0, WT)
+
+from mstack.scene.dataset_index import (  # noqa: E402
+    CELLS_HEADER,
+    EPISODES_HEADER,
+    SCENES_HEADER,
+    build_dataset_index,
+)
+from mstack.scene.scene_format import SceneMetadata, SceneWriter  # noqa: E402
+
+TMP = Path(tempfile.mkdtemp(prefix="dsindex_"))
+
+
+def _cleanup():
+    shutil.rmtree(TMP, ignore_errors=True)
+
+
+def _make_scene(root: Path, scene_id: str, objects: list,
+                placements: dict, slots: list) -> None:
+    """slots: [(instruction_id, instruction, [success, ...])] -- success 목록만큼
+    에피소드를 저장한다."""
+    md = SceneMetadata(scene_id=scene_id, objects=objects,
+                       layout={"grid": [3, 3], "placements": placements})
+    w = SceneWriter(root, metadata=md, collector="test")
+    r = np.random.default_rng(0)
+    for iid, text, successes in slots:
+        for ok in successes:
+            w.start_episode()
+            for _ in range(3):
+                w.add_frame(
+                    agentview_rgb=r.integers(0, 255, (8, 8, 3), dtype=np.uint8),
+                    eye_in_hand_rgb=r.integers(0, 255, (8, 8, 3), dtype=np.uint8),
+                    joint_positions=r.standard_normal(7).astype(np.float32),
+                    gripper_position=0.5, ee_pos_quat=np.zeros(7),
+                    gripper_closed=False,
+                    commanded_joint_positions=r.standard_normal(7).astype(
+                        np.float32),
+                    commanded_gripper=0.0)
+            w.save_buffer(w.detach_buffer(), instruction=text,
+                          instruction_id=iid, success=ok, collector="test")
+    w.close()
+
+
+ds = TMP / "fr3-tabletop"
+ds.mkdir()
+_make_scene(
+    ds, "S000",
+    ["OBJ-CUP-BLU-01", "OBJ-BOWLL-YEL-01"],
+    {"OBJ-CUP-BLU-01": {"zone": [0, 0]}, "OBJ-BOWLL-YEL-01": {"zone": [0, 1]}},
+    [("I000", "pick up the blue cup and place it inside the large yellow bowl",
+      [True, False]),
+     ("I001", "drag the blue cup next to the large yellow bowl", [True])])
+_make_scene(
+    ds, "S001", ["OBJ-DRAWER-01"],
+    {"OBJ-DRAWER-01": {"zone": [0, 0]}},
+    [("I002", "open the top drawer", [True, True])])
+
+# 옛 스키마 시늄: S000 의 두 번째 에피소드에서 attr 을 뗀다.
+with h5py.File(ds / "scene_000.hdf5", "a") as f:
+    g = f["episode_001"]
+    for attr in ("success", "collector", "timestamp"):
+        del g.attrs[attr]
+
+out = TMP / "out"
+result = build_dataset_index(ds, out_dir=out)
+assert not result.errors, result.errors
+
+# ---- 1. 파일 3종 + 헤더 ----
+for kind, header in (("scenes", SCENES_HEADER), ("cells", CELLS_HEADER),
+                     ("episodes", EPISODES_HEADER)):
+    p = out / f"{kind}.tsv"
+    assert p.is_file(), p
+    first = p.read_text(encoding="utf-8").splitlines()[0].split("\t")
+    assert first == list(header), (kind, first)
+print("1 통과: 3종 TSV 생성 + 헤더 정확")
+
+# ---- 2. scenes.tsv: scene 2행, ordinal=scene_id, objects 쉼표 연결 ----
+scene_lines = (out / "scenes.tsv").read_text(encoding="utf-8").splitlines()
+assert len(scene_lines) == 3, scene_lines          # 헤더 + scene 2
+row = scene_lines[1].split("\t")
+assert row[0] == "S000" and row[1] == "S000", row  # ordinal 은 지금 scene_id
+assert row[3] == "3" and row[4].isdigit(), row     # n_episodes, bytes
+assert row[6] == "OBJ-CUP-BLU-01,OBJ-BOWLL-YEL-01", row
+assert scene_lines[2].split("\t")[1] == "S001"
+print("2 통과: scenes.tsv 2행 + n_episodes/bytes/objects (쉼표 연결)")
+
+# ---- 3. cells.tsv: 칸 집계 + 스킬/역할 해석 ----
+cell_lines = (out / "cells.tsv").read_text(encoding="utf-8").splitlines()
+assert len(cell_lines) == 4, cell_lines            # 헤더 + 칸 3
+cells = {l.split("\t")[1]: l.split("\t") for l in cell_lines[1:]}
+row = cells["I000"]
+assert row[0] == "S000", row
+assert row[2] == "pick-inside", row                # skill_of 정본 분류
+assert row[3] == "OBJ-CUP-BLU-01", row             # 조작 물체 oid
+assert row[4] == "OBJ-BOWLL-YEL-01", row           # 목적지 oid
+assert row[5] == "2" and row[6] == "1", row        # success 뺀 에피소드는 n_ok 에 안 센다
+row = cells["I001"]
+assert row[2] == "drag-next_to" and row[3] == "OBJ-CUP-BLU-01", row
+assert row[4] == "OBJ-BOWLL-YEL-01" and row[6] == "1", row
+row = cells["I002"]
+assert row[2] == "drawer-open" and row[3] == "OBJ-DRAWER-01", row
+assert row[4] == "-", row                          # 목적지 없는 지시문은 -
+assert row[5] == "2" and row[6] == "2", row
+print("3 통과: cells.tsv 칸 단위 집계 + 스킬/물체/목적지 (없으면 -)")
+
+# ---- 4. episodes.tsv: attr 빠진 에피소드는 - 로 남고 죽지 않는다 ----
+ep_lines = (out / "episodes.tsv").read_text(encoding="utf-8").splitlines()
+assert len(ep_lines) == 6, ep_lines                # 헤더 + 에피소드 5
+ep1 = ep_lines[2].split("\t")                      # episode_001 (attr 뺀 것)
+assert ep1[3] == "3", ep1                          # n_frames = actions.shape[0]
+assert ep1[4] == "-" and ep1[5] == "-" and ep1[6] == "-", ep1
+ep0 = ep_lines[1].split("\t")
+assert ep0[4] == "1" and ep0[5] == "test", ep0     # 정상 에피소드는 그대로
+print("4 통과: attr 이 빠진 에피소드는 - 로 남고 나머지는 정상")
+
+# ---- 5. 진입점 스크립트: --out 이 같아야 한다 ----
+out_cli = TMP / "out_cli"
+r = subprocess.run(
+    [sys.executable, str(Path(WT) / "scripts" / "analyze" /
+                         "build_dataset_index.py"), str(ds), "--out", str(out_cli)],
+    capture_output=True, text=True)
+assert r.returncode == 0, r.stderr
+for kind in ("scenes", "cells", "episodes"):
+    assert (out_cli / f"{kind}.tsv").is_file(), kind
+    assert (out_cli / f"{kind}.tsv").read_text(encoding="utf-8") == \
+           (out / f"{kind}.tsv").read_text(encoding="utf-8"), kind
+print("5 통과: 스크립트 --out 출력이 모듈과 동일")
+
+# ---- 6. 깨진 파일 하나가 나머지를 망치지 않는다 ----
+(ds / "scene_002.hdf5").write_bytes(b"not an hdf5")
+result2 = build_dataset_index(ds)
+assert len(result2.errors) == 1 and result2.errors[0][0] == "scene_002.hdf5", \
+    result2.errors
+assert len(result2.scenes) == 2 and len(result2.episodes) == 5, \
+    (len(result2.scenes), len(result2.episodes))
+print("6 통과: 깨진 scene 파일 건어너뛰기 + errors 기록")
+
+print("\ndataset_index 검증 통과")
+_cleanup()
+import os  # noqa: E402
+
+# os._exit 는 버퍼를 비우지 않는다 -- 먼저 비운다 (run_all.sh 는 종료 코드만 본다).
+sys.stdout.flush()
+os._exit(0)
