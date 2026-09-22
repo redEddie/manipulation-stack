@@ -16,10 +16,13 @@ running in ``pylibfranka-venv``.
 
 from __future__ import annotations
 
+import os
 import queue
 import re
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+from multiprocessing import get_context
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +30,7 @@ import numpy as np
 import zmq
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from mstack.data.libero_format import gzip4
 from mstack.data.provenance import collector_commit
 from mstack.data.dataset_schema import (
     FT_OBS_KEYS,
@@ -228,6 +232,16 @@ AGENT_CAMERA_SERIAL = _STATION.camera("agent").serial
 WRIST_CAMERA_SERIAL = _STATION.camera("wrist").serial
 
 
+def _nice_worker() -> None:
+    """압축 워커의 우선순위를 낮춘다. 20 Hz 기록 루프가 같은 기계에서 돌고
+    있고, 그 루프의 50 ms 마감이 압축보다 훨씬 중요하다. repack_hdf5.py 가
+    이미 쓰는 방식과 같다."""
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+
+
 class EpisodeSaver(QThread):
     """Owns ALL h5py-file-touching writer calls, serialized through one queue.
 
@@ -248,9 +262,50 @@ class EpisodeSaver(QThread):
         super().__init__()
         self._writer = None  # set by CollectionWorker.run() before start()
         self._q: "queue.Queue[tuple]" = queue.Queue()
+        self._pool = None
+        self._busy = False
 
     def set_writer(self, writer) -> None:
         self._writer = writer
+
+    def pending(self) -> int:
+        """아직 디스크에 닿지 않은 에피소드 수 (지금 쓰는 중인 것 포함).
+
+        게이트가 이것을 보고 다음 녹화를 막는다 -- 버퍼가 비압축이라
+        에피소드당 최대 0.74 GB 다. 실측으로 이 게이트는 거의 안 걸린다
+        (가장 짧은 갭 10.3초 vs 8워커 압축 0.7초).
+        """
+        return self._q.qsize() + (1 if self._busy else 0)
+
+    def _start_pool(self) -> None:
+        """압축 워커 풀. **세션당 한 번만 만든다** -- 기동이 0.18초라
+        에피소드마다 내면 갭을 그만큼 먹는다.
+
+        프로세스인 이유: zlib 이 GIL 을 놓기는 하지만, 별도 프로세스면 20 Hz
+        기록 루프가 도는 인터프리터와 메모리도 GC 도 공유하지 않는다.
+        ``os.nice(10)`` 으로 우선순위를 낮춰 커널이 기록 루프를 먼저 깨우게
+        한다 (실측: 8워커가 압축하는 동안 루프 마감 초과 최대 4.9 ms =
+        50 ms 예산의 9.8%).
+
+        코어가 적은 기계에서도 루프 몫이 남도록 ``cpu_count() - 4`` 로 묶는다.
+        풀을 못 만들면 ``None`` 으로 두고 직렬로 쓴다 -- 압축을 병렬로 못 한다고
+        수집을 막을 이유는 없다.
+        """
+        try:
+            n = max(1, min(8, (os.cpu_count() or 4) - 4))
+            self._pool = ProcessPoolExecutor(
+                n, mp_context=get_context("spawn"), initializer=_nice_worker)
+            # 워커를 실제로 띄워 둔다 -- 첫 에피소드가 기동 비용을 내지 않게.
+            list(self._pool.map(gzip4, [b""] * n))
+            self.log_message.emit(f"[저장] 압축 워커 {n}개 준비")
+        except Exception as e:  # noqa: BLE001
+            self._pool = None
+            self.log_message.emit(f"[저장] 압축 워커를 못 띄워 직렬로 씁니다 ({e})")
+
+    def _stop_pool(self) -> None:
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
 
     def enqueue_save(self, buf, success, instruction=None, instruction_id=None) -> None:
         """instruction/instruction_id 는 scene 모드 전용 -- 에피소드가 끝난
@@ -279,10 +334,18 @@ class EpisodeSaver(QThread):
         self._q.put(("stop",))
 
     def run(self) -> None:
+        self._start_pool()
+        try:
+            self._run_queue()
+        finally:
+            self._stop_pool()
+
+    def _run_queue(self) -> None:
         while True:
             item = self._q.get()
             if item[0] == "stop":
                 break
+            self._busy = True
             try:
                 if item[0] == "save":
                     _, buf, success, instruction, instruction_id = item
@@ -296,10 +359,11 @@ class EpisodeSaver(QThread):
                         # 저장 시점 명시 인자로 요구한다. 라벨(success) 없는
                         # 에피소드는 여기서 규격이 거부한다(아래 except 로 감).
                         name = self._writer.save_buffer(
-                            buf, success=success,
+                            buf, success=success, pool=self._pool,
                             instruction=instruction, instruction_id=instruction_id)
                     else:
-                        name = self._writer.save_buffer(buf, success=success)
+                        name = self._writer.save_buffer(buf, success=success,
+                                                        pool=self._pool)
                     dt = time.monotonic() - t0
                     if name:
                         self.episode_saved.emit(name, n)
@@ -339,6 +403,10 @@ class EpisodeSaver(QThread):
             except Exception as e:  # noqa: BLE001
                 self.log_message.emit(f"[저장 스레드 오류] {type(e).__name__}: {e}")
                 self.save_status.emit("")
+            finally:
+                # 예외로 빠져나가도 반드시 내린다 -- 안 내리면 pending() 이
+                # 영원히 1 이상이라 게이트가 다음 녹화를 계속 막는다.
+                self._busy = False
 
 
 @dataclass
@@ -431,6 +499,9 @@ class CollectionWorker(QThread):
         self._writer: Optional[LiberoTaskWriter] = None
         self._reset_q = FR3_RESET_POSES[self.cfg.reset_pose]
         self._episode_count = 0
+        #: 저장이 안 끝나 스페이스바가 막힌 횟수. 실측상 0 이어야 하고,
+        #: 0 이 아니면 압축이 갭을 못 따라간다는 뜻이다 (30 Hz 판단 근거).
+        self._save_gate_hits = 0
         self._last_gate_emit = 0.0
         self._last_leader_state = ""
         # 단계 표지: GUI 시그널 · 사람이 읽는 로그 · PUB 소켓 세 곳으로 나간다
@@ -1154,11 +1225,23 @@ class CollectionWorker(QThread):
                 # recording, only an explicit Start Teleop click does -- so a
                 # momentary match mid-motion can't silently kick things off.
                 if cmd and cmd[0] == "start_teleop":
-                    if all_ok:
+                    # 앞 에피소드가 아직 디스크에 안 닿았으면 시작하지 않는다.
+                    # 버퍼가 비압축이라 에피소드당 최대 0.74 GB 이고, 겹쳐
+                    # 쌓이면 메모리가 먼저 무너진다. 실측으로 이 게이트는 거의
+                    # 안 걸린다 -- 가장 짧은 갭이 10.3초인데 8워커 압축은 0.7초다.
+                    # 걸린다면 그것 자체가 신호이므로 로그에 남긴다.
+                    waiting = self.saver.pending() if self.saver else 0
+                    if waiting:
+                        self._save_gate_hits += 1
+                        self.log_message.emit(
+                            f"[GATE] 이전 에피소드를 저장하는 중입니다 "
+                            f"({waiting}개 대기). 잠시 후 다시 누르세요.")
+                    elif all_ok:
                         return "ok"
-                    self.log_message.emit(
-                        f"[GATE] 아직 자세가 맞지 않습니다 (최대 차이 {delta.max():.2f} rad > {GATE_RAD} rad)"
-                    )
+                    else:
+                        self.log_message.emit(
+                            f"[GATE] 아직 자세가 맞지 않습니다 (최대 차이 {delta.max():.2f} rad > {GATE_RAD} rad)"
+                        )
                 # 자동·수동 모두 자세 오차와 무관하게 시작한다 (2026-09-01
                 # 사용자 결정). 모터 보호는 wall 이 관절별로 맡는다: 정렬
                 # 반경 밖 관절은 최소 전류로만 당기고, 힘도 목표에서 멀수록
@@ -1900,6 +1983,12 @@ class CollectionWorker(QThread):
         self.cmd_quit()
 
     def _emit_session_summary(self) -> None:
+        # 저장 게이트가 걸린 횟수는 압축이 갭을 따라가는지의 유일한 실측이다.
+        # 0 이 아니면 30 Hz 로 올리기 전에 워커 수부터 다시 본다.
+        if self._save_gate_hits:
+            self.log_message.emit(
+                f"[저장] 저장이 안 끝나 시작이 막힌 횟수: {self._save_gate_hits}회 "
+                "-- 압축이 에피소드 간격을 따라가지 못하고 있습니다")
         episodes = self._writer.list_episodes()
         n_success = sum(1 for e in episodes if e["success"] is True)
         n_fail = sum(1 for e in episodes if e["success"] is False)

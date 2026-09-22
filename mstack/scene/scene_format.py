@@ -690,6 +690,7 @@ class SceneWriter:
         success: Optional[bool] = None,
         quality_status: Optional[str] = None,
         collector: Optional[str] = None,
+        pool: "Any" = None,
         timestamp: Optional[str] = None,
     ) -> Optional[str]:
         """Commits one detached episode buffer as the next ``episode_NNN``.
@@ -737,7 +738,7 @@ class SceneWriter:
         self._meta.attrs["next_episode_idx"] = idx + 1
         name = f"episode_{idx:03d}"
         grp = self._file.create_group(name)
-        write_episode_payload(grp, buf, self.schema, success=success)
+        write_episode_payload(grp, buf, self.schema, success=success, pool=pool)
 
         sid = self.metadata.scene_id
         grp.attrs["scene_id"] = sid
