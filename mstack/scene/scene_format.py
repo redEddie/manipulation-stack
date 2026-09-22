@@ -667,7 +667,11 @@ class SceneWriter:
             raise ValueError(f"(H, W, 3) uint8 이어야 한다: shape={arr.shape}, dtype={arr.dtype}")
         if "reference_image" in self._meta:
             del self._meta["reference_image"]
-        self._meta.create_dataset("reference_image", data=arr, compression="lzf")
+        # 단일 이미지라 프레임 축이 없다 -- 통째로 한 청크로 둔다. gzip 도
+        # 무손실이라 기준 사진의 목적(배치 재현·대표 이미지)에 그대로 맞는다.
+        self._meta.create_dataset("reference_image", data=arr,
+                                  compression="gzip", compression_opts=4,
+                                  chunks=arr.shape)
         self._file.flush()
 
     @property
@@ -686,6 +690,7 @@ class SceneWriter:
         success: Optional[bool] = None,
         quality_status: Optional[str] = None,
         collector: Optional[str] = None,
+        pool: "Any" = None,
         timestamp: Optional[str] = None,
     ) -> Optional[str]:
         """Commits one detached episode buffer as the next ``episode_NNN``.
@@ -733,7 +738,7 @@ class SceneWriter:
         self._meta.attrs["next_episode_idx"] = idx + 1
         name = f"episode_{idx:03d}"
         grp = self._file.create_group(name)
-        write_episode_payload(grp, buf, self.schema, success=success)
+        write_episode_payload(grp, buf, self.schema, success=success, pool=pool)
 
         sid = self.metadata.scene_id
         grp.attrs["scene_id"] = sid

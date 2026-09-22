@@ -102,10 +102,11 @@ from `configs/scenes/props.yaml`), `layout` (JSON), `description`, `station`,
 `slot_episode_idx`, `collector`, `station`, `timestamp`, `action_space`,
 `action_column_names`, `gripper_action_convention`, `crop_params`.
 
-Images are written with `lzf` during collection (fast, so the background save
-never stalls the operator) and re-compressed to `gzip` by
-`scripts/convert/repack_hdf5.py` afterwards. **Compression is not part of the
-schema** — the same version can be stored either way.
+Images are written as `gzip` level 4 with per-frame chunks (one frame per
+chunk) during collection, so new collections have **no repack step**.
+`scripts/convert/repack_hdf5.py` remains only for pre-2026-09-22 datasets
+still holding `lzf` images. **Compression is not part of the schema** — the
+same version can be stored either way.
 
 ### Not in 1.0.0
 

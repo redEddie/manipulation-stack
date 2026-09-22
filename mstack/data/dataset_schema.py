@@ -461,7 +461,7 @@ class DatasetSchemaConfig:
 
     # Off by default (issue #17): depth 는 카메라 ASIC 이 이미 계산하는 값이라
     # 호스트 연산은 공짜지만 데이터는 이미지급이다 -- 캠당 640x480 uint16 로
-    # 에피소드당 수십 MB, USB 대역 +~176Mbps. 무손실(lzf)로 원본 해상도
+    # 에피소드당 수십 MB, USB 대역 +~176Mbps. 무손실(gzip)로 원본 해상도
     # 그대로 저장하고 crop/resize 는 하지 않는다 (RGB-depth 픽셀 대응은
     # D455 에서 원래 안 맞으므로, 원시 저장 + 필요할 때 후처리가 일관적).
     # LeRobot 변환은 depth 를 무시한다 -- HDF5 원본 보관소에만 남는다.

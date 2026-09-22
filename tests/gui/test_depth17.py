@@ -51,7 +51,7 @@ def frame_kwargs(depth: bool):
     return kw
 
 
-# ---- 1. depth 켠 스키마: uint16 + lzf + 원본 해상도 (RGB 리사이즈와 무관) ----
+# ---- 1. depth 켠 스키마: uint16 + gzip-4 + 원본 해상도 (RGB 리사이즈와 무관) ----
 schema = DatasetSchemaConfig(save_agentview_depth=True,
                              save_eye_in_hand_depth=True,
                              save_timestamp=True, image_size=32)
@@ -66,12 +66,13 @@ with h5py.File(TMP / "d_on_demo.hdf5") as f:
     obs = f["data/demo_0/obs"]
     for key in ("agentview_depth", "eye_in_hand_depth"):
         d = obs[key]
-        assert d.dtype == np.uint16 and d.compression == "lzf"
+        assert d.dtype == np.uint16 and d.compression == "gzip"
+        assert d.compression_opts == 4, d.compression_opts
         assert d.shape == (5, 48, 64), d.shape      # depth 는 원본 해상도
     assert obs[OBS_AGENTVIEW_RGB].shape == (5, 32, 32, 3)  # RGB 만 리사이즈
     sc = schema_from_episode(f["data/demo_0"])
     assert sc.save_agentview_depth and sc.save_eye_in_hand_depth
-print("1 통과: uint16+lzf 저장, depth 원본 해상도(RGB 리사이즈 비적용), 스키마 왕복")
+print("1 통과: uint16+gzip-4 저장, depth 원본 해상도(RGB 리사이즈 비적용), 스키마 왕복")
 
 # ---- 2. 스키마 꺼짐(기본): depth 인자를 줘도 안 쓴다 ----
 w2 = LiberoTaskWriter(root=TMP, task_name="d_off", language_instruction="t")

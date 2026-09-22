@@ -95,6 +95,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import zlib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -142,6 +143,65 @@ from mstack.data.schema_description import (
     describe_schema,
     resolved_action_column_names,
 )
+
+
+#: 프레임 청크 하나를 gzip-4 로 압축한다. **모듈 최상단이어야 한다** --
+#: ProcessPoolExecutor 가 pickle 로 보내므로 지역 함수나 람다는 못 쓴다.
+#: HDF5 의 gzip 필터가 기대하는 것이 정확히 zlib 스트림이라, 여기서 만든
+#: 바이트열을 write_direct_chunk 로 그대로 넣으면 create_dataset 이 쓴 것과
+#: 같은 파일이 된다 (2026-09-22 왕복 일치 + 파일 크기 동일 확인).
+def gzip4(payload: bytes) -> bytes:
+    return zlib.compress(payload, 4)
+
+
+#: 이 프레임 수 아래면 풀을 쓰지 않는다. 프레임당 IPC 왕복이 있어서 짧은
+#: 에피소드는 직렬 쪽이 빠르고, 버려진 에피소드(n<2)까지 워커를 깨울 이유가 없다.
+_POOL_MIN_FRAMES = 8
+
+
+def write_image_dataset(grp: h5py.Group, name: str, data: np.ndarray,
+                        pool: Any = None) -> None:
+    """(T, ...) 이미지 계열을 gzip-4 + 프레임 청크로 쓴다.
+
+    프레임 청크인 이유: h5py 의 guess_chunk() 는 (16, 60, 80, 1) 을 고른다 --
+    16프레임 x 60x80 타일 x **채널 1개**. 실측(120프레임)으로 프레임 청크보다
+    30% 느리고 22% 크다 (2.91s/57.6MB vs 2.25s/47.2MB). 한 프레임이 한 청크면
+    episode_trim 의 청크 자르기도 첫 축이 항상 1 이라 단순해진다.
+
+    shuffle 은 걸지 않는다. 타입 한 원소 **안의** 바이트를 평면별로 모으는
+    필터라 1바이트 타입에는 섞을 것이 없고, 실측으로 출력이 바이트까지 같다.
+
+    ``pool`` 을 주면 압축을 워커 프로세스로 돌리고 결과를 원시 청크로 넣는다.
+    출력 파일은 직렬 경로와 동일하다 -- 같은 zlib 스트림을 같은 자리에 넣을
+    뿐이다. 주지 않으면(테스트·오프라인 도구) 평범하게 create_dataset 한다.
+    """
+    chunks = (1,) + data.shape[1:]
+    if pool is None or data.shape[0] < _POOL_MIN_FRAMES:
+        grp.create_dataset(name, data=data, compression="gzip",
+                           compression_opts=4, chunks=chunks)
+        return
+
+    # 워커가 죽었거나 풀이 닫혔으면 직렬로 되돌린다 -- 압축 하나 때문에
+    # 조작자의 에피소드를 잃는 것이 훨씬 나쁘다.
+    #
+    # **압축을 먼저 하고 데이터셋은 그 뒤에 만든다.** 순서를 뒤집어 만들어
+    # 놓고 폴백에서 지우면, HDF5 는 지운 자리를 회수하지 않아 파일이 그만큼
+    # 부풀어 오른다 (실측으로 직렬 경로와 크기가 달라졌다).
+    try:
+        blobs = list(pool.map(gzip4,
+                             (data[i].tobytes() for i in range(data.shape[0])),
+                             chunksize=4))
+    except Exception:  # noqa: BLE001
+        grp.create_dataset(name, data=data, compression="gzip",
+                           compression_opts=4, chunks=chunks)
+        return
+
+    ds = grp.create_dataset(name, shape=data.shape, dtype=data.dtype,
+                            compression="gzip", compression_opts=4,
+                            chunks=chunks)
+    zero = (0,) * (data.ndim - 1)
+    for i, blob in enumerate(blobs):
+        ds.id.write_direct_chunk((i,) + zero, blob)
 
 
 def renumber_episodes(data: Any) -> None:
@@ -330,6 +390,7 @@ def write_episode_payload(
     buf: LiberoEpisodeBuffer,
     schema: DatasetSchemaConfig,
     success: Optional[bool] = None,
+    pool: Any = None,
 ) -> int:
     """One episode's shared on-disk payload: the ``actions``/``rewards``/
     ``dones`` datasets, the ``obs/`` group, and the per-episode provenance
@@ -430,17 +491,11 @@ def write_episode_payload(
 
     obs = grp.create_group("obs")
     if schema.save_agentview_rgb:
-        obs.create_dataset(
-            OBS_AGENTVIEW_RGB,
-            data=np.stack(buf.agentview_rgb),
-            compression="lzf",
-        )
+        write_image_dataset(obs, OBS_AGENTVIEW_RGB,
+                            np.stack(buf.agentview_rgb), pool)
     if schema.save_eye_in_hand_rgb:
-        obs.create_dataset(
-            OBS_EYE_IN_HAND_RGB,
-            data=np.stack(buf.eye_in_hand_rgb),
-            compression="lzf",
-        )
+        write_image_dataset(obs, OBS_EYE_IN_HAND_RGB,
+                            np.stack(buf.eye_in_hand_rgb), pool)
     if schema.save_joint_states:
         obs.create_dataset(OBS_JOINT_STATES, data=np.stack(buf.joint_states))
     if schema.save_gripper_states:
@@ -467,14 +522,13 @@ def write_episode_payload(
             "timestamp", data=np.array(buf.timestamps, dtype=np.float64)
         )
     # 무손실 필수 (#17) -- JPEG 류 손실 압축은 depth 값을 파괴한다.
+    # (gzip 도 무손실이라 그대로 유효하다.)
     if schema.save_agentview_depth and buf.agentview_depth:
-        obs.create_dataset("agentview_depth",
-                           data=np.stack(buf.agentview_depth),
-                           compression="lzf")
+        write_image_dataset(obs, "agentview_depth",
+                            np.stack(buf.agentview_depth), pool)
     if schema.save_eye_in_hand_depth and buf.eye_in_hand_depth:
-        obs.create_dataset("eye_in_hand_depth",
-                           data=np.stack(buf.eye_in_hand_depth),
-                           compression="lzf")
+        write_image_dataset(obs, "eye_in_hand_depth",
+                            np.stack(buf.eye_in_hand_depth), pool)
     # Raw teleop command stream -- written whenever the caller supplied it,
     # independent of the schema and of which action space `actions` used:
     # realized-trajectory actions zero out wherever the follower is blocked
@@ -582,7 +636,8 @@ class NullTaskWriter:
     def save_episode(self, success: Optional[bool] = None) -> Optional[str]:
         return self.save_buffer(self.detach_buffer(), success=success)
 
-    def save_buffer(self, buf: LiberoEpisodeBuffer, success: Optional[bool] = None) -> Optional[str]:
+    def save_buffer(self, buf: LiberoEpisodeBuffer, success: Optional[bool] = None,
+                    pool: Any = None) -> Optional[str]:
         buf.clear()
         return None
 
@@ -746,7 +801,8 @@ class LiberoTaskWriter:
         """Synchronous convenience wrapper: detach + save_buffer in one call."""
         return self.save_buffer(self.detach_buffer(), success=success)
 
-    def save_buffer(self, buf: LiberoEpisodeBuffer, success: Optional[bool] = None) -> Optional[str]:
+    def save_buffer(self, buf: LiberoEpisodeBuffer, success: Optional[bool] = None,
+                    pool: Any = None) -> Optional[str]:
         """Commits one (detached) episode buffer as a new ``demo_N`` group.
 
         h5py is not thread-safe: every file-touching call on this writer
@@ -771,7 +827,7 @@ class LiberoTaskWriter:
         self._data.attrs["next_demo_idx"] = demo_idx + 1
         name = f"demo_{demo_idx}"
         grp = self._data.create_group(name)
-        write_episode_payload(grp, buf, self.schema, success=success)
+        write_episode_payload(grp, buf, self.schema, success=success, pool=pool)
 
         self._file.flush()
         buf.clear()
@@ -815,22 +871,32 @@ def _stored_bytes(group) -> int:
 
 
 def hdf5_repack_status(path) -> dict:
-    """Has this file been through scripts/convert/repack_hdf5.py?
+    """Does this file still need scripts/convert/repack_hdf5.py?
+
+    Since 2026-09-22 the collector writes images as ``gzip`` level 4 with
+    per-frame chunks, so a gzip episode no longer proves a repack ran -- a
+    file collected wholly after the switch is all-gzip from birth and already
+    in its final form. ``repacked`` therefore answers "is there anything left
+    for repack to do": ``lzf`` images mark a pre-switch file that was never
+    repacked (repack's remaining job), and anything already gzip needs
+    nothing, fresh or repacked. A file written by the current collector must
+    come back ``repacked`` -- reporting it as to-do would send every new
+    dataset through an old-dataset tool.
 
     Two signals, because the marker only exists on files repacked after it was
     introduced. The image compressor is the retroactive one and is decisive on
-    its own: the collector always writes images with ``lzf`` (fast, so the
-    background save never stalls the operator), and repack rewrites them with
-    ``gzip``. Anything already gzip has been repacked.
+    its own.
 
     **Every episode is checked, not just the first.** A file that was repacked
-    and then collected into again is the common case -- the operator adds a few
-    demos to an existing task file -- and it ends up *mixed*: the old episodes
-    are gzip, the new ones lzf, and the stale marker still names the earlier
-    run. Sampling one episode (or trusting the marker) reports such a file as
-    finished and silently drops it from the repack selection, which is exactly
-    the file that still has uncompressed episodes in it. So a mixed file counts
-    as not repacked, and the marker cannot override that.
+    and then collected into again is the common case -- the operator adds a
+    few demos to an existing task file. Before the switch that left it
+    *mixed* (old gzip, new lzf); now the mixed case is the reverse -- an old
+    un-repacked ``lzf`` file with new gzip episodes next to the ``lzf`` ones --
+    and the stale marker still names the earlier run either way. Sampling one
+    episode (or trusting the marker) reports such a file as finished and
+    silently drops it from the repack selection, which is exactly the file
+    that still has ``lzf`` episodes in it. So a mixed file counts as not
+    repacked, and the marker cannot override that.
 
     Returns ``{"repacked", "compression", "mixed", "marker", "new_since",
     "size", "episodes", "error"}``; never raises -- an unreadable file comes
