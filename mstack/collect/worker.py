@@ -122,14 +122,48 @@ GRIPPER_OPEN = 0.0  # GELLO/franka_fr3 convention: 0=open, 1=closed
 
 # ---- EE 경로 homing ----
 # 관절 직선 보간 homing 은 파지 직후처럼 EE 가 낮을 때 베이스가 돌면서
-# 테이블 높이를 수평으로 쓸고 지나간다. 대신 "수직으로 들어올린 뒤 홈 EE
-# 포즈까지 직선" 경로를 IK 로 풀어 관절 웨이포인트를 만든다. IK 실패나
-# 관절 점프가 크면 기존 관절 램프로 폴백 -- homing 이 안 되는 것보다는
-# 예전처럼 무섭게라도 돌아가는 쪽이 낫다.
-HOME_LIFT_M = 0.10       # 1단계: 현재 포즈에서 수직 리프트 높이
+# 테이블 높이를 수평으로 쓸고 지나간다. 대신 EE 경로를 만들어 IK 로 푼다.
+# IK 실패나 관절 점프가 크면 기존 관절 램프로 폴백 -- homing 이 안 되는
+# 것보다는 예전처럼 무섭게라도 돌아가는 쪽이 낫다.
+#
+# 2026-09-23: "수직 10cm 리프트 -> 홈까지 직선" 두 단계를 **연속 블렌딩**으로
+# 바꿨다. 실측 2,434개 종료 자세에서 고정 리프트가 양쪽으로 틀렸기 때문이다:
+# 80.3% 는 홈 높이(0.254 m)보다 낮게 끝나 10cm 를 올려도 35.6% 가 여전히 낮고,
+# 19.7% 는 이미 홈보다 높은데 거기에 10cm 를 더 올리고 있었다 (최대 0.618 m).
+#
+# 매 스텝의 진행 방향을 두 항으로 섞는다:
+#
+#     need = clip((Z_CLEAR - z) / HOME_BLEND_M, 0, 1) * (1 - s)**HOME_SCHED_POWER
+#     dir  = normalize(need * up + (1 - need) * toward_home)
+#
+# 앞 항(높이 피드백)이 **리프트 양을 시작 높이에 맞춰 스스로 정한다** -- 낮게
+# 끝나면 거의 수직으로 오르고, 이미 높으면 아예 안 오른다.
+#
+# 뒤 항(진행도 스케줄)이 없으면 Z_CLEAR 를 홈 높이 위로 못 올린다. 홈에
+# 가까워질수록 내려가야 하는데 그러면 높이 항이 다시 켜져 **극한 순환**에
+# 빠지기 때문이다 (실측: Z_CLEAR=홈+0.06, BLEND=0.06 에서 400/400 미수렴).
+# s 를 곱하면 끝에서 강제로 0 이 되어 홈에 커밋한다 (같은 설정에서 0/400).
+# s 는 **래칫**이다 -- 닫은 거리의 비율이고 줄어들지 않는다.
+#
+# 그래서 Z_CLEAR 를 홈보다 6cm 높게 잡을 수 있고, 그것이 실측상 가장 좋은
+# 지점이다 (수평 이동 중 최저 높이 최악값 0.136 -> 0.240 m, +76%). 경로는
+# 오히려 짧아진다 (0.323 -> 0.301 m, homing 0.99 -> 0.90 s). IK 성공률은
+# 실제 종료 자세 200개에서 195/200 -> 197/200.
+#: 홈 EE 높이보다 이만큼 위면 더 올라가지 않는다. **홈 높이 자체가 아니라
+#: 그 위**여야 테이블 위를 수평으로 지날 때 여유가 생긴다.
+HOME_CLEAR_MARGIN_M = 0.06
+#: 높이 게이트의 무름. 이 값만큼 Z_CLEAR 아래면 완전히 "위로"가 된다.
+#: 옛 HOME_LIFT_M 과 같은 0.10 이지만 뜻이 다르다 -- 올릴 **양**이 아니라
+#: 게이트의 **폭**이고, 실제로 올라가는 높이는 시작 높이가 정한다.
+HOME_BLEND_M = 0.10
+#: 진행도 스케줄의 지수. 작을수록 일찍 홈 쪽으로 기운다.
+HOME_SCHED_POWER = 0.5
 HOME_EE_STEP_M = 0.010   # 웨이포인트 간 EE 이동
 HOME_ROT_STEP_RAD = 0.05  # 웨이포인트 간 EE 회전
 HOME_MAX_DQ = 0.35       # 연속 웨이포인트 관절 점프 상한 -- 초과 시 폴백
+#: EE 경로 스텝 수 상한. 정상 경로는 최장 0.47 m = 47 스텝이라 600 이면
+#: 6 m 로 한참 여유가 있다. 이 상한에 닿으면 수렴하지 않은 것이므로 폴백한다.
+HOME_MAX_STEPS = 600
 #: tick 당 관절 이동 상한 (rad) = HOME_SPEED / RAMP_HZ.
 #:
 #: 웨이포인트 하나 = tick 하나가 아니다. 위의 EE 스텝은 **직교** 속도만
@@ -974,13 +1008,14 @@ class CollectionWorker(QThread):
         return q
 
     def _home_trajectory(self, q_now: np.ndarray) -> "list[np.ndarray] | None":
-        """수직 +HOME_LIFT_M 리프트 -> 홈 EE 포즈 직선의 관절 웨이포인트.
+        """홈 EE 포즈까지의 관절 웨이포인트. 방향을 "위로"와 "집으로" 사이에서
+        연속으로 섞는다 (근거와 상수는 파일 위 HOME_* 블록).
 
-        두 단계로 만든다. **모양**은 EE 스텝 크기로 샘플링하고(리프트 -> 직선),
-        **속도**는 마지막에 관절 공간에서 다시 잘라(_densify) tick 당 이동을
-        HOME_TICK_DQ 아래로 묶는다. 이 둘을 한 번에 하려던 것이 옛 버그였다 --
-        EE 스텝은 직교 속도만 묶어서, 자코비안이 나빠지는 자세에서는 1cm 가
-        관절 0.3rad 이 되고 그것이 한 tick 에 그대로 나갔다.
+        두 단계로 만든다. **모양**은 EE 스텝 크기로 샘플링하고, **속도**는
+        마지막에 관절 공간에서 다시 잘라(_densify) tick 당 이동을
+        cfg.home_tick_dq 아래로 묶는다. 이 둘을 한 번에 하려던 것이 옛
+        버그였다 -- EE 스텝은 직교 속도만 묶어서, 자코비안이 나빠지는
+        자세에서는 1cm 가 관절 0.3rad 이 되고 그것이 한 tick 에 그대로 나갔다.
 
         IK 는 직전 해를 시드로 체인하되(_ik_posture) 널스페이스로 자세를
         reset_q 쪽으로 함께 밀기 때문에, EE 가 홈에 도착할 때쯤이면 관절도
@@ -988,7 +1023,7 @@ class CollectionWorker(QThread):
         가 안전망으로 정리한다.
 
         반환 리스트의 한 원소 = 한 tick. None = 만들 수 없음(임포트 실패,
-        IK 발산, 관절 점프 초과).
+        IK 발산, 관절 점프 초과, 경로 미수렴).
         """
         try:
             # fr3_kinematics 는 mstack.robots 에 있다. GUI/클라이언트 모두
@@ -1001,7 +1036,6 @@ class CollectionWorker(QThread):
             reset_q = np.asarray(self._reset_q, dtype=np.float64)
             T_now = K.fk(q)
             T_home = K.fk(reset_q)
-            wps: list = []
 
             def _solve(T_target: np.ndarray, q_seed: np.ndarray):
                 q_next = self._ik_posture(K, T_target, q_seed, reset_q)
@@ -1013,35 +1047,45 @@ class CollectionWorker(QThread):
                     return None
                 return q_next
 
-            # 1단계: 수직 리프트 (자세 유지, z 만 상승)
-            n_lift = max(1, int(np.ceil(HOME_LIFT_M / HOME_EE_STEP_M)))
-            for i in range(1, n_lift + 1):
-                T = T_now.copy()
-                T[2, 3] = T_now[2, 3] + HOME_LIFT_M * i / n_lift
-                q = _solve(T, q)
-                if q is None:
-                    return None
-                wps.append(q)
+            # ---- 1) EE 위치 경로: "위로" 와 "집으로" 를 섞어 가며 한 걸음씩
+            p_home = T_home[:3, 3]
+            z_clear = float(p_home[2]) + HOME_CLEAR_MARGIN_M
+            p = T_now[:3, 3].astype(np.float64).copy()
+            d0 = float(np.linalg.norm(p_home - p))
+            s_done = 0.0                      # 진행도. 래칫이라 줄어들지 않는다
+            pts: list = []
+            for _ in range(HOME_MAX_STEPS):
+                d = p_home - p
+                dist = float(np.linalg.norm(d))
+                if dist < HOME_EE_STEP_M:
+                    pts.append(p_home.copy())
+                    break
+                s_done = max(s_done, min(max((d0 - dist) / max(d0, 1e-9), 0.0), 1.0))
+                need = (min(max((z_clear - p[2]) / HOME_BLEND_M, 0.0), 1.0)
+                        * (1.0 - s_done) ** HOME_SCHED_POWER)
+                v = need * np.array([0.0, 0.0, 1.0]) + (1.0 - need) * (d / dist)
+                n = float(np.linalg.norm(v))
+                v = (d / dist) if n < 1e-9 else (v / n)
+                p = p + HOME_EE_STEP_M * v
+                pts.append(p.copy())
+            else:
+                # 상한까지 홈에 못 닿았다. 폴백이 관절 램프로 데려간다.
+                return None
 
-            # 2단계: 리프트 포즈 -> 홈 포즈 직선 (위치 lerp + 회전 slerp).
-            # 참고: "위치만 잡고 자세는 널스페이스에 맡기는" 변형도 실험했으나,
-            # 자세 복귀 항의 권한이 부족해 도착 잔차가 1.2 rad/71°까지 커져
-            # 폐기했다. 한계 접근처럼 보이는 현상은 궤적이 아니라 텔레옵이
-            # 감아둔 시작 자세가 원인이다 -- 경로의 관절별 최소 한계 여유가
-            # 시작 자세의 여유와 동일함을 실측으로 확인(예: j7 0.379 vs 0.376).
-            T_lift = T_now.copy()
-            T_lift[2, 3] += HOME_LIFT_M
-            p0, p1 = T_lift[:3, 3], T_home[:3, 3]
-            R0 = T_lift[:3, :3]
+            # ---- 2) 자세는 경로 진행도에 비례해 slerp. 회전 스텝 상한을
+            # 지키려면 위치 스텝보다 촘촘해야 하는 경우가 있어 그때 다시 나눈다.
+            R0 = T_now[:3, :3]
             aa = K._rot_to_axis_angle(T_home[:3, :3] @ R0.T)
-            n = max(1,
-                    int(np.ceil(np.linalg.norm(p1 - p0) / HOME_EE_STEP_M)),
-                    int(np.ceil(np.linalg.norm(aa) / HOME_ROT_STEP_RAD)))
-            for i in range(1, n + 1):
-                s = i / n
+            n_rot = int(np.ceil(float(np.linalg.norm(aa)) / HOME_ROT_STEP_RAD))
+            if n_rot > len(pts):
+                idx = np.linspace(0, len(pts) - 1, n_rot)
+                pts = [pts[int(round(i))] for i in idx]
+
+            wps: list = []
+            for i, pp in enumerate(pts, 1):
                 T = np.eye(4)
-                T[:3, 3] = p0 + (p1 - p0) * s
-                T[:3, :3] = K.axis_angle_to_rot(aa * s) @ R0
+                T[:3, 3] = pp
+                T[:3, :3] = K.axis_angle_to_rot(aa * (i / len(pts))) @ R0
                 q = _solve(T, q)
                 if q is None:
                     return None
