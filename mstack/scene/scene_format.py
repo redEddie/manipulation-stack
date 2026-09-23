@@ -650,6 +650,11 @@ class SceneWriter:
     def discard_episode(self) -> None:
         self._buffer.clear()
 
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
+
     def add_command(self, t: float, joints, gripper: float) -> None:
         """명령 틱 하나 (버퍼만 만진다)."""
         self._buffer.add_command(t, joints, gripper)

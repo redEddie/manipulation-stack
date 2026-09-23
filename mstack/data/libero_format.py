@@ -292,9 +292,25 @@ class LiberoEpisodeBuffer:
         #: 여기 쌓으면 그 전부가 자기 축으로 남고, control 축은 그대로 둔다
         #: (옛 소비자가 보던 actions 의 의미가 안 바뀐다).
         self.commands: list = []
+        #: 이 역할들의 이미지는 **capture 에서 온다** -- 20 Hz 루프가 집어간
+        #: 프레임을 버퍼에 쌓지 않는다.
+        #:
+        #: 쌓으면 같은 에피소드를 두 번 들고 있게 된다: capture 1.11 GB +
+        #: 폴링 0.74 GB 이고 뒤엣것은 아무도 안 읽는다 (기록기가 per_axis 면
+        #: capture 를 쓴다). 게다가 _process_image 의 .copy() 가 tick 마다
+        #: 도므로 20 Hz x 2대면 37 MB/s 가 **50 ms 예산 안에서** 돈다.
+        #:
+        #: 폴링 자체는 그대로 둔다 -- 미리보기·기준사진·정지감지가 그 프레임을
+        #: 쓴다. 버퍼에 쌓는 것만 멈춘다.
+        self.capture_roles: set = set()
 
     def __len__(self) -> int:
         return len(self.joint_states)
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
 
     def add_command(self, t: float, joints, gripper: float) -> None:
         """명령 틱 하나 (버퍼만 만진다)."""
@@ -303,6 +319,11 @@ class LiberoEpisodeBuffer:
     def set_control_hz(self, hz: float) -> None:
         """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
         self._buffer.control_hz = float(hz)
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
 
     def add_command(self, t: float, joints, gripper: float) -> None:
         """명령 틱 하나. 기록 루프의 substep 마다 불린다 -- **추가 I/O 가 없다**
@@ -358,10 +379,12 @@ class LiberoEpisodeBuffer:
             if v is not None:
                 self.ft[key].append(np.asarray(v, dtype=np.float32))
         if self.schema.save_agentview_rgb:
-            self.agentview_rgb.append(self._process_image(agentview_rgb))
+            if "agent" not in self.capture_roles:
+                self.agentview_rgb.append(self._process_image(agentview_rgb))
         if self.schema.save_eye_in_hand_rgb:
-            self.eye_in_hand_rgb.append(self._process_image(
-                eye_in_hand_rgb, role="wrist"))
+            if "wrist" not in self.capture_roles:
+                self.eye_in_hand_rgb.append(self._process_image(
+                    eye_in_hand_rgb, role="wrist"))
         if self.schema.save_joint_velocities and joint_velocities is not None:
             self.joint_velocities.append(np.asarray(joint_velocities, dtype=np.float32))
         if self.schema.save_timestamp and timestamp is not None:
@@ -717,13 +740,21 @@ def _write_axes(grp: h5py.Group, obs: h5py.Group, buf: "LiberoEpisodeBuffer",
             grp.attrs["command_hz_actual"] = (t_cmd.size - 1) / float(
                 t_cmd[-1] - t_cmd[0])
 
+    polled = {"agent": buf.agentview_rgb, "wrist": buf.eye_in_hand_rgb}
     for axis, (ds_name, _pre, role) in AXIS_CAMERAS.items():
-        frames = buf.capture.get(axis)
-        if not frames:
-            continue
         if axis == "agent" and not schema.save_agentview_rgb:
             continue
         if axis == "wrist" and not schema.save_eye_in_hand_rgb:
+            continue
+        frames = buf.capture.get(axis)
+        if not frames:
+            # 이 카메라는 capture 를 못 했다 (무장 실패 등). 20 Hz 루프가
+            # 집어둔 폴링본이 있으면 **control 축에** 쓴다 -- 한쪽만 실패했다고
+            # 그 카메라 이미지를 통째로 잃으면 안 된다. 축이 갈리는 것은
+            # 사실 그대로이고, frame_table 이 둘 다 읽는다.
+            if polled[axis]:
+                write_image_dataset(obs, ds_name, np.stack(polled[axis]), pool)
+                obs[ds_name].attrs["axis"] = CONTROL_AXIS
             continue
         imgs = np.stack([buf._process_image(a, role) for _t, a, _m in frames])
         write_image_dataset(obs, ds_name, imgs, pool)
@@ -811,6 +842,11 @@ class NullTaskWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
 
     def add_command(self, t: float, joints, gripper: float) -> None:
         """명령 틱 하나 (버퍼만 만진다)."""
@@ -985,6 +1021,11 @@ class LiberoTaskWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
 
     def add_command(self, t: float, joints, gripper: float) -> None:
         """명령 틱 하나 (버퍼만 만진다)."""

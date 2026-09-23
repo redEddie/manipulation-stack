@@ -1530,12 +1530,19 @@ class CollectionWorker(QThread):
         그 세션은 옛 한 행 = 한 프레임 구조로 기록된다. 카메라 한 대가
         capture 를 지원하지 않는다고 수집을 막을 이유는 없다.
         """
-        for cam in self._robot.cameras.values():
-            if hasattr(cam, "start_capture"):
-                try:
-                    cam.start_capture(max_frames)
-                except Exception as e:  # noqa: BLE001
-                    self.log_message.emit(f"[수집] 카메라 프레임 모으기 실패: {e}")
+        armed = set()
+        for role, cam in self._robot.cameras.items():
+            if not hasattr(cam, "start_capture"):
+                continue
+            try:
+                cam.start_capture(max_frames)
+                armed.add(role)
+            except Exception as e:  # noqa: BLE001
+                self.log_message.emit(f"[수집] {role} 프레임 모으기 실패: {e}")
+        # 무장한 역할만 버퍼에 안 쌓는다. 실패한 카메라는 옛 경로 그대로
+        # 20 Hz 폴링본을 쌓아야 이미지가 아예 없는 에피소드가 안 나온다.
+        self._writer.expect_capture(armed)
+        self._armed_capture = armed
 
     def _collect_capture(self) -> None:
         """모은 프레임을 버퍼에 싣고 수집을 끈다. **반드시 불러야 한다** --
@@ -1554,6 +1561,13 @@ class CollectionWorker(QThread):
                 self.log_message.emit(f"[수집] 카메라 프레임 회수 실패: {e}")
                 continue
             if not frames:
+                if role in getattr(self, "_armed_capture", set()):
+                    # 무장했는데 한 장도 안 왔다. 그 역할은 버퍼에도 안 쌓았으므로
+                    # **이 에피소드에 그 카메라 이미지가 없다.** 조용히 넘기면
+                    # 나중에 파일을 열어야 알게 된다.
+                    self.log_message.emit(
+                        f"[수집] {role} 프레임이 하나도 안 왔습니다 -- 이 "
+                        "에피소드에는 그 카메라 이미지가 없습니다. 폐기하세요.")
                 continue
             self._writer.set_capture(role, frames)
             fn = [m.get("frame_no") for _t, _a, m in frames]

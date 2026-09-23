@@ -60,9 +60,14 @@ N_CAM = int(N_CTRL / HZ_CTRL * HZ_CAM)
 PIPE_MS = 0.015
 
 
-def build(with_capture: bool):
+def build(with_capture: bool, roles=("agent", "wrist")):
     sc = DatasetSchemaConfig()
     buf = LiberoEpisodeBuffer(sc)
+    if with_capture:
+        # 무장한 역할은 20 Hz 폴링본을 **버퍼에 쌓지 않는다** -- 쌓으면 같은
+        # 에피소드를 두 번 들고 있게 된다 (capture 1.11 GB + 폴링 0.74 GB,
+        # 뒤엣것은 아무도 안 읽는다).
+        buf.capture_roles = set(roles)
     for i in range(N_CTRL):
         t = T0 + i / HZ_CTRL
         buf.add_frame(
@@ -81,7 +86,7 @@ def build(with_capture: bool):
                         np.full(7, i, dtype=np.float32), 0.0)
     if with_capture:
         # 값에 프레임 번호를 넣어 둔다 -- 어느 것이 골라졌는지 값만 보면 안다.
-        for axis in ("agent", "wrist"):
+        for axis in roles:
             buf.set_capture(axis, [
                 (T0 + j / HZ_CAM + PIPE_MS, np.full((8, 8, 3), j, dtype="u1"),
                  {"t_device": T0 + j / HZ_CAM, "frame_no": 100 + j, "seq": j,
@@ -192,6 +197,36 @@ def main() -> None:
         ft = frame_table(e)
         assert len(ft) == N_CTRL and ft.version == "knu-1.x", (len(ft), ft.version)
     print("9. capture 가 없으면 옛 한 행 = 한 프레임 그대로 OK")
+
+    # ============================================ 10. 폴링본을 안 쌓는다
+    sc = DatasetSchemaConfig()
+    probe = LiberoEpisodeBuffer(sc)
+    probe.capture_roles = {"agent", "wrist"}
+    probe.add_frame(
+        agentview_rgb=np.zeros((8, 8, 3), "u1"),
+        eye_in_hand_rgb=np.zeros((8, 8, 3), "u1"),
+        joint_positions=np.zeros(7), gripper_position=0.0,
+        ee_pos_quat=np.array([0, 0, 0, 0, 0, 0, 1.0]), gripper_closed=False,
+        joint_velocities=np.zeros(7), timestamp=T0)
+    assert probe.agentview_rgb == [] and probe.eye_in_hand_rgb == [], (
+        "capture 가 무장됐는데 폴링본을 쌓았다 -- 같은 에피소드를 두 번 "
+        "들고 있게 되고, _process_image 의 copy 가 50 ms 예산 안에서 돈다")
+    print("10. 무장된 역할은 20 Hz 폴링본을 안 쌓는다 OK")
+
+    # ============================================ 11. 한쪽만 실패해도 안 잃는다
+    p3 = build(with_capture=True, roles=("agent",))
+    with h5py.File(p3, "r") as f:
+        e = f["e"]
+        a, w = e["obs/agentview_rgb"], e["obs/eye_in_hand_rgb"]
+        assert a.shape[0] == N_CAM and axis_of(a) == "agent"
+        assert w.shape[0] == N_CTRL, (
+            f"wrist 가 {w.shape[0]}장 -- capture 에 실패한 카메라의 이미지가 "
+            "통째로 사라졌다")
+        assert axis_of(w) == "control", axis_of(w)
+        ft = frame_table(e)
+        assert all(len(v) == len(ft) for v in ft.obs.values())
+    print(f"11. 한쪽만 capture 실패: agent {N_CAM}장(agent축) + "
+          f"wrist {N_CTRL}장(control축), 잃은 것 없음 OK")
 
     print("\n축별 기록 인수 통과")
 
