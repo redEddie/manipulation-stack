@@ -279,8 +279,40 @@ def _read(ds: Any, idx: np.ndarray) -> np.ndarray:
     return ds[uniq][inv]
 
 
-def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str,
-              keys: Optional[list]) -> FrameTable:
+@dataclass
+class RowPlan:
+    """어느 행을, 그리고 각 축의 어느 표본을 쓰는가 -- **데이터는 안 읽는다.**
+
+    떼어낸 이유는 화면 때문이다. 트림 뷰어는 그래프(control 축)와 영상(카메라
+    축)을 나란히 보여주는데, 둘이 따로 ``frame_table`` 을 부르면 행 집합이
+    어긋날 수 있다: 맨 앞 행을 채울 카메라 프레임이 없으면 그 행이 잘리는데
+    (``first``), 그 판단은 **요청한 계열에 카메라가 끼어 있을 때만** 일어난다.
+    그래서 그래프는 99행, 영상은 97행이 되고, 슬라이더 한 칸이 서로 다른
+    시각을 가리킨다. 계획을 한 번 세워 둘이 나눠 쓰면 그 어긋남이 없다.
+    """
+
+    #: anchor 축에서 쓰는 행 인덱스.
+    rows: np.ndarray
+    #: 그 행들의 시각 (초).
+    t: np.ndarray
+    #: 축 이름 -> 행마다 그 축의 어느 표본을 쓰는가 (영차 유지, 인과).
+    per_axis: dict
+    #: 축 이름 -> 원본 표본 수.
+    n_source: dict
+
+    def __len__(self) -> int:
+        return int(self.t.shape[0])
+
+
+def row_plan(ep: Any, rate: Optional[float] = None, *,
+             anchor: str = CONTROL_AXIS, align: str = ALIGN_ARRIVAL,
+             axes: Optional[set] = None) -> RowPlan:
+    """행 계획만 세운다. ``axes`` 는 행 선택에 참여시킬 비-anchor 축들이다."""
+    return _row_plan(ep, rate, anchor, align, set(axes or ()))
+
+
+def _row_plan(ep: Any, rate: Optional[float], anchor: str, align: str,
+              axes: set) -> RowPlan:
     t_ctrl = ep["t"][CONTROL_AXIS][:]
     n_ctrl = len(t_ctrl)
 
@@ -289,7 +321,6 @@ def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str,
         # 절반의 행에서 액션이 이미지보다 **먼저**가 되어 누출이다 (모듈 문서).
         rows = np.arange(len(ep["t"][anchor]))
         t_rows = ep["t"][anchor][:]
-        keep_actions = False
     else:
         step = 1
         if rate is not None:
@@ -306,17 +337,15 @@ def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str,
                     "규칙과 같은 이유로 거부한다.")
         rows = np.arange(0, n_ctrl, step)
         t_rows = t_ctrl[rows]
-        keep_actions = True
 
-    wanted = _collect_obs(ep, keys)
     n_source = {a: len(ep["t"][a]) for a in ep["t"].keys()}
 
-    # ---- 1) 어느 행도 못 채우는 앞부분을 **먼저** 잘라낸다.
+    # ---- 어느 행도 못 채우는 앞부분을 **먼저** 잘라낸다.
     # 축마다 따로 자르면, 먼저 처리한 계열이 나중 잘림을 못 받아 길이가
     # 어긋난다. 그래서 선택 전에 한 번에 정한다.
     per_axis: dict = {}
     first = 0
-    for axis in {_axis_of(d) for d in wanted.values()} | ({CONTROL_AXIS} if keep_actions else set()):
+    for axis in axes:
         if axis == anchor or (axis == CONTROL_AXIS and anchor == CONTROL_AXIS):
             continue
         clock = _select_clock(ep, axis, align)
@@ -330,8 +359,21 @@ def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str,
     if first:
         rows, t_rows = rows[first:], t_rows[first:]
         per_axis = {a: i[first:] for a, i in per_axis.items()}
+    return RowPlan(rows=rows, t=t_rows, per_axis=per_axis, n_source=n_source)
 
-    # ---- 2) 계열마다 필요한 행만 읽는다
+
+def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str,
+              keys: Optional[list]) -> FrameTable:
+    wanted = _collect_obs(ep, keys)
+    keep_actions = anchor == CONTROL_AXIS
+    axes = {_axis_of(d) for d in wanted.values()}
+    if keep_actions:
+        axes.add(CONTROL_AXIS)
+    plan = _row_plan(ep, rate, anchor, align, axes)
+    rows, t_rows = plan.rows, plan.t
+    per_axis, n_source = plan.per_axis, plan.n_source
+
+    # ---- 계열마다 필요한 행만 읽는다
     obs, image_age = {}, {}
     for name, ds in wanted.items():
         axis = _axis_of(ds)
@@ -453,3 +495,13 @@ def n_frames(ep: Any) -> int:
     if _is_v2(ep):
         return int(len(ep["t"][CONTROL_AXIS]))
     return int(ep["actions"].shape[0]) if "actions" in ep else 0
+
+
+def is_v2(ep: Any) -> bool:
+    """이 에피소드가 계열마다 시간축을 따로 갖는 배치인가 (knu-2.0.0)."""
+    return _is_v2(ep)
+
+
+def read_rows(ds: Any, idx: np.ndarray) -> np.ndarray:
+    """``ds`` 에서 ``idx`` 행만 읽는다 (중복은 한 번만). RowPlan 과 짝이다."""
+    return _read(ds, idx)

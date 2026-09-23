@@ -29,7 +29,9 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from mstack.data.dataset_schema import OBS_AGENTVIEW_RGB, OBS_EYE_IN_HAND_RGB
+from mstack.data.frame_table import CAMERA_AXES, is_v2, read_rows, row_plan
 from mstack.gui.i18n import tr
+
 
 class EpisodeLoadWorker(QThread):
     """Reads one episode's two image streams into RAM, off the UI thread.
@@ -58,8 +60,28 @@ class EpisodeLoadWorker(QThread):
                 # 에피소드 안쪽 페이로드는 동일해서 그룹만 찾으면 같은 코드다.
                 grp = f[self.demo] if self.demo in f else f["data"][self.demo]
                 obs = grp["obs"]
-                agent = obs[OBS_AGENTVIEW_RGB][:] if OBS_AGENTVIEW_RGB in obs else None
-                wrist = obs[OBS_EYE_IN_HAND_RGB][:] if OBS_EYE_IN_HAND_RGB in obs else None
+                # **행 계획을 거쳐 읽는다.** knu-2.0.0 은 카메라가 30 fps 로
+                # 자기 축에 실리고 그래프는 control 축이라, 원본 배열을 그대로
+                # 주면 슬라이더 한 칸이 둘에서 다른 시각을 가리킨다 -- 실측
+                # (scene_024/episode_000): 98칸에서 그래프는 4.90초인데 영상은
+                # 3.27초였고, 뒤 51장은 닿지도 않았다. 계획대로 뽑으면 행마다
+                # "그 시각 이하에서 가장 최근" 프레임이 온다 (정책이 보는 것과
+                # 같은 규칙). 덤으로 150장이 아니라 99장만 읽는다.
+                #
+                # 축 집합을 load_series 와 맞춘다 -- 따로 세우면 맨 앞 행을
+                # 채울 프레임이 없을 때 한쪽만 그 행을 버려 슬라이더가 어긋난다.
+                plan = (row_plan(grp, axes=set(CAMERA_AXES))
+                        if is_v2(grp) else None)
+
+                def pick(name, axis):
+                    if name not in obs:
+                        return None
+                    if plan is None or axis not in plan.per_axis:
+                        return obs[name][:]
+                    return read_rows(obs[name], plan.per_axis[axis])
+
+                agent = pick(OBS_AGENTVIEW_RGB, "agent")
+                wrist = pick(OBS_EYE_IN_HAND_RGB, "wrist")
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
             return

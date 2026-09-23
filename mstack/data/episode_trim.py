@@ -53,7 +53,7 @@ from dataclasses import dataclass
 import h5py
 import numpy as np
 
-from mstack.data.frame_table import axis_of, has_axis_attr
+from mstack.data.frame_table import CONTROL_AXIS, axis_of, has_axis_attr
 
 ARM_DIMS = 7
 # 그리퍼 명령은 0/1 이산값이라, 이보다 큰 변화는 열림/닫힘 한 번을 뜻한다.
@@ -135,6 +135,52 @@ def _release_idx(actions: np.ndarray) -> int | None:
     return int(changes[-1]) + 1 if len(changes) else None
 
 
+def _axis_of_name(grp, name: str) -> str | None:
+    """이 데이터셋이 어느 시간축에 놓여 있는가. 모르면 None.
+
+    세 가지로 정해진다. ``attrs["axis"]`` 가 정본이지만, 축 자체를 적는
+    ``t/<축>`` 과 그 축의 부가정보인 ``meta/<축>/*`` 는 경로가 이미 축을
+    말하고 있어서 태그가 붙어 있지 않다 (실측: 31개 중 12개).
+    """
+    ds = grp[name]
+    if has_axis_attr(ds):
+        return axis_of(ds)
+    parts = name.split("/")
+    if len(parts) == 2 and parts[0] == "t":
+        return parts[1]
+    if len(parts) == 3 and parts[0] == "meta":
+        return parts[1]
+    return None
+
+
+def _keep_by_axis(grp, keep_ctrl: int) -> "tuple[dict[str, int], float]":
+    """축마다 몇 행을 남길지. 기준은 **행 수가 아니라 시각**이다.
+
+    control 축에서 남는 마지막 행의 시각이 자르는 선이고, 다른 축은 그
+    시각 **이하**인 표본만 남는다. 프레임 수로 자르면 안 되는 이유는
+    주파수가 축마다 다르기 때문이다 -- control 5행(0.25초)은 30 fps
+    카메라로 7~8장이고 100 Hz 명령으로 25행이다.
+
+    ``side="right"`` 는 "t_cut 이하인 표본의 개수" 를 준다. 자르는 선 위에
+    정확히 놓인 표본은 **남긴다** -- 그 행이 쓰는 마지막 관측이다.
+    """
+    t_ctrl = grp["t"][CONTROL_AXIS][:]
+    t_cut = float(t_ctrl[keep_ctrl - 1])
+    keep: dict[str, int] = {}
+    for axis in grp["t"]:
+        keep[axis] = int(np.searchsorted(grp["t"][axis][:], t_cut, side="right"))
+    if keep.get(CONTROL_AXIS) != keep_ctrl:
+        raise ValueError(
+            f"control 축이 {keep[CONTROL_AXIS]} 행으로 잘리는데 {keep_ctrl} 행을 "
+            "기대했다 -- t/control 이 단조증가가 아니다.")
+    empty = sorted(a for a, k in keep.items() if k < 1)
+    if empty:
+        raise ValueError(
+            f"{', '.join(empty)} 축에 남는 표본이 없다 (자르는 선 {t_cut:.3f}s). "
+            "잘못 자른 파일을 만드느니 멈춘다.")
+    return keep, t_cut
+
+
 def _episode_group(f: h5py.File, demo: str):
     """legacy 는 data/demo_N, scene(scene-v1)은 루트 episode_NNN.
     에피소드 안쪽 페이로드는 동일하다. (그룹, scene 여부) 를 돌려준다."""
@@ -204,39 +250,69 @@ def trim_tail(path: str, demo: str, n_trim: int) -> int:
             lambda name, obj: names.append(name)
             if isinstance(obj, h5py.Dataset) else None)
 
-        # 어느 데이터셋이 프레임 축인가. **쓰기 전에 전부 정한다** -- 중간에
-        # 멈추면 일부만 잘린 파일이 남고, 그건 되돌릴 수 없다.
-        targets: list[str] = []
-        for name in names:
-            ds = grp[name]
-            if has_axis_attr(ds):
-                # knu-2.0.0: 축이 명시되어 있다. 축마다 길이가 다르므로
-                # "n 프레임" 을 모든 축에 똑같이 적용하면 안 된다 --
-                # 120 Hz 의 27 tick 은 0.225초이고 30 fps 카메라로는 7장이다.
-                # 시간 구간으로 자르는 재설계 전까지는 **거부한다**.
+        # 어느 데이터셋을 **몇 행까지** 남기는가. **쓰기 전에 전부 정한다** --
+        # 중간에 멈추면 일부만 잘린 파일이 남고, 그건 되돌릴 수 없다.
+        per_axis = any(has_axis_attr(grp[n]) for n in names)
+        targets: dict[str, int] = {}
+        if per_axis:
+            # knu-2.0.0: 축마다 주파수가 달라 "뒤에서 n 프레임" 을 그대로
+            # 적용할 수 없다. control 축에서 남는 마지막 행의 시각을 자르는
+            # 선으로 삼고, 각 축은 그 시각 이하만 남긴다.
+            if "t" not in grp or CONTROL_AXIS not in grp["t"]:
+                # 축 태그는 붙어 있는데 시간축이 없다. 그러면 자를 선을 정할
+                # 방법이 없고, 행 수로 자르면 카메라가 control 과 다른 만큼
+                # 잘린다 -- 잘못 자른 파일을 만드느니 멈춘다.
                 raise ValueError(
-                    f"{name} 에 axis={axis_of(ds)!r} 가 붙어 있다 (knu-2.0.0). "
-                    "축마다 프레임 수가 달라 '뒤에서 n 프레임' 을 그대로 적용할 "
-                    "수 없다 -- 시간 구간으로 자르는 재설계가 필요하다. "
-                    "잘못 자른 파일을 만드느니 멈춘다.")
-            # knu-1.3.0: 축이 하나뿐이라 길이가 곧 판별이다.
-            if ds.shape[0] == plan.n_frames:
-                targets.append(name)
+                    "axis 태그는 있는데 t/control 이 없다 -- 시각으로 자를 "
+                    "기준이 없다. 축마다 주파수가 달라 행 수로는 자를 수 없다.")
+            keep_axis, t_cut = _keep_by_axis(grp, keep)
+            unknown = []
+            for name in names:
+                axis = _axis_of_name(grp, name)
+                if axis is None:
+                    unknown.append(name)
+                elif axis in keep_axis:
+                    targets[name] = keep_axis[axis]
+                else:
+                    unknown.append(f"{name} (axis={axis!r} 에 t/{axis} 가 없다)")
+            if unknown:
+                # 프레임축인데 축을 모르는 것이 있으면 그것만 안 잘려 남는다 --
+                # 길이가 어긋난 파일은 조용히 잘못 읽힌다. 멈추는 편이 낫다.
+                raise ValueError(
+                    "축을 알 수 없는 데이터셋이 있다: " + ", ".join(unknown) +
+                    ". attrs['axis'] 를 붙이거나 t/<축> · meta/<축>/ 아래로 "
+                    "옮겨야 한다.")
+        else:
+            # knu-1.3.0 이하: 축이 하나뿐이라 길이가 곧 판별이다.
+            keep_axis, t_cut = {CONTROL_AXIS: keep}, None
+            targets = {n: keep for n in names if grp[n].shape[0] == plan.n_frames}
 
-        for name in targets:
+        for name, n_keep in targets.items():
             ds = grp[name]
-            data = ds[:keep]
+            if ds.shape[0] == n_keep:
+                continue            # 이 축은 자를 것이 없다
+            data = ds[:n_keep]
             spec = {"dtype": ds.dtype, "chunks": ds.chunks,
                     "compression": ds.compression,
                     "compression_opts": ds.compression_opts}
             if ds.chunks is not None:
                 # 청크의 첫 축이 남길 길이보다 크면 생성이 실패한다.
-                spec["chunks"] = (min(ds.chunks[0], keep), *ds.chunks[1:])
+                spec["chunks"] = (min(ds.chunks[0], n_keep), *ds.chunks[1:])
+            # **attrs 를 그대로 옮긴다.** 지우고 다시 만들면 attrs 도 같이
+            # 사라지는데, knu-2.0.0 에서는 그중 하나가 axis 다 -- 태그를 잃은
+            # 파일은 다음 트림에서 "축을 알 수 없다"로 막히고, frame_table 도
+            # 그 계열을 control 축으로 잘못 읽는다.
+            attrs = dict(ds.attrs)
             del grp[name]
-            grp.create_dataset(name, data=data, **spec)
+            new = grp.create_dataset(name, data=data, **spec)
+            for k, v in attrs.items():
+                new.attrs[k] = v
         grp.attrs["num_samples"] = keep
         prev = grp.attrs.get("trimmed", "")
         stamp = f"{time.strftime('%Y-%m-%d %H:%M')} -{n_trim}f"
+        if t_cut is not None:
+            cut = ", ".join(f"{a} {grp['t'][a].shape[0]}" for a in sorted(keep_axis))
+            stamp += f" @{t_cut:.3f}s ({cut})"
         grp.attrs["trimmed"] = f"{prev}; {stamp}" if prev else stamp
         if _scene:
             # 트림은 uid·개수를 안 바꿔 어떤 개수 검사에도 안 걸린다 --
