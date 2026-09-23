@@ -550,6 +550,9 @@ class CollectionWorker(QThread):
     episode_saved = pyqtSignal(str, int)  # demo_name, n_frames
     episode_discarded = pyqtSignal(int)  # n_frames
     reset_countdown = pyqtSignal(float)  # seconds remaining
+    #: reset 녹화 예약 상태. 버튼이 이것을 따라간다 -- 예약은 루프가
+    #: **소모**하므로 (한 번 찍고 풀린다) 화면이 스스로 기억하면 어긋난다.
+    reset_armed = pyqtSignal(bool)
     log_message = pyqtSignal(str)
     #: (살아 있나, 왜). 이유가 함께 가야 상태표시등이 "응답 없음" 이라고만
     #: 하지 않고 무엇 때문인지 보여줄 수 있다 (2026-09-06).
@@ -678,10 +681,15 @@ class CollectionWorker(QThread):
         self.saver.enqueue_delete(name)
 
     def _arm_reset(self) -> None:
-        self._reset_armed = True
+        """예약을 건다/푼다 (같은 버튼을 다시 누르면 취소)."""
+        self._reset_armed = not self._reset_armed
+        self.reset_armed.emit(self._reset_armed)
+        if not self._reset_armed:
+            self.log_message.emit("[reset] 예약을 취소했습니다")
+            return
         self.log_message.emit(
-            f"[reset] 다음 홈 복귀를 {self._slot_instruction_id or '(slot 미선택)'} "
-            "로 기록합니다")
+            f"[reset] 이번 테이크가 끝나면 홈 복귀를 "
+            f"{self._slot_instruction_id or '(slot 미선택)'} 로 기록합니다")
 
     def _handle_set_slot(self, instruction: str, instruction_id: str) -> None:
         """delete_episode 처럼 상태와 무관한 인라인 커맨드 -- 모든 드레인
@@ -2042,6 +2050,7 @@ class CollectionWorker(QThread):
                     # 집 근처라 금방 끝나고, 남은 잔차를 그쪽이 정리한다.
                     if self._reset_armed:
                         self._reset_armed = False
+                        self.reset_armed.emit(False)
                         r = self._record_reset()
                         if r == "quit":
                             break

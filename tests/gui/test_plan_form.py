@@ -269,6 +269,59 @@ assert [r["instr"] for r in rows] == [cands[0]] + seen["offered"][:2], rows
 assert all(r["id"] is None and r["target"] == 10 for r in rows[1:])
 print("9 통과: 추천 문장에서 골라 행 추가 (이미 있는 문장은 후보에서 뺌)")
 
+# ---- 10. kind 왕복: 불러오기 -> 고르기 -> 저장 -> 다시 불러오기 ----
+# kind 는 "0번(I000) 예약" 이 아니라 슬롯의 콤보 필드다 -- 25개 scene 전부가
+# I000 을 실제 작업에 쓰고 있어 번호를 예약하면 같은 ID 가 만든 시점에 따라
+# 다른 뜻이 되고, 불투명 ID 로 가면 "0번" 이라는 위치 자체가 사라진다
+# (collection_plan.PlanSlot 주석). 여기선 그 필드가 폼에서 왕복하는지 본다:
+# 파일에 kind 가 없으면 task 로 표시하고, 저장할 때 task 는 키를 아예 안 써
+# 기존 파일과 바이트가 달라지지 않게 한다 (지금 instructions.json 에 kind 키 0개).
+from mstack.scene.collection_plan import KIND_RESET as _KR, KIND_TASK as _KT  # noqa: E402
+
+kind_dir = Path(tempfile.mkdtemp(prefix="planform_kind_"))
+kind_copy = kind_dir / "instructions.json"
+shutil.copy(f"{WT}/configs/collection/plans/example.json", kind_copy)
+
+dlgA = PlanEditDialog(None, kind_copy)
+# kind 키가 없는 기존 파일은 전부 task 로 표시
+for i in range(dlgA.tree.topLevelItemCount()):
+    assert dlgA.tree.itemWidget(dlgA.tree.topLevelItem(i), 3).currentText() == _KT
+itA0 = dlgA.tree.topLevelItem(0)
+dlgA.tree.itemWidget(itA0, 3).setCurrentIndex(1)          # task -> reset
+itA1 = dlgA.tree.topLevelItem(1)
+dlgA.tree.itemWidget(itA1, 3).setCurrentIndex(1)          # reset, 문장도 짧은 이름
+dlgA.tree.itemWidget(itA1, 1).setText("reset")
+dlgA._save()
+assert not dlgA.error_label.text(), dlgA.error_label.text()
+saved = json.loads(kind_copy.read_text())
+slots = saved["scenes"][0]["slots"]
+assert slots[0].get("kind") == _KR, slots[0]
+assert slots[1].get("kind") == _KR and slots[1]["instruction"] == "reset", slots[1]
+# task 슬롯에는 kind 키가 아예 없다 -- 기본값을 적으면 기존 파일과 바이트가 달라진다
+assert all("kind" not in s for s in slots[2:]), [s for s in slots[2:] if "kind" in s]
+
+# 다시 불러오면 고른 kind 가 그대로 보인다
+dlgB = PlanEditDialog(None, kind_copy)
+combo0 = dlgB.tree.itemWidget(dlgB.tree.topLevelItem(0), 3)
+assert combo0.currentText() == _KR, combo0.currentText()
+assert dlgB.tree.itemWidget(dlgB.tree.topLevelItem(1), 3).currentText() == _KR
+assert dlgB.tree.itemWidget(dlgB.tree.topLevelItem(2), 3).currentText() == _KT
+# reset -> task 되돌림: 키가 사진다. 그리고 다른 행을 reset 으로 왕복 한 번 더
+combo0.setCurrentIndex(0)
+dlgB.tree.itemWidget(dlgB.tree.topLevelItem(2), 3).setCurrentIndex(1)
+dlgB._save()
+assert not dlgB.error_label.text(), dlgB.error_label.text()
+slots = json.loads(kind_copy.read_text())["scenes"][0]["slots"]
+assert "kind" not in slots[0], slots[0]          # task 되돌림 -> 키 제거
+assert slots[1].get("kind") == _KR, slots[1]     # reset 유지
+assert slots[2].get("kind") == _KR, slots[2]     # task -> reset
+dlgC = PlanEditDialog(None, kind_copy)
+texts = [dlgC.tree.itemWidget(dlgC.tree.topLevelItem(i), 3).currentText()
+         for i in range(dlgC.tree.topLevelItemCount())]
+assert texts[:3] == [_KT, _KR, _KR], texts
+assert all(t == _KT for t in texts[3:]), texts
+print("10 통과: kind 왕복 + task 는 JSON 에 kind 키 없음")
+
 print("\n계획 폼 + 드롭다운 검증 통과")
 import os  # noqa: E402
 

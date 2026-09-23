@@ -42,6 +42,12 @@ class CollectionOps:
             return
         getattr(self.win.worker, name)(*args)
 
+    def on_reset_armed(self, armed: bool) -> None:
+        """예약 표시를 워커의 상태에 맞춘다 (버튼이 기억하지 않는다)."""
+        act = self.win.tb_actions.get("reset_rec")
+        if act is not None:
+            act.setChecked(bool(armed))
+
     def save(self, success: bool) -> None:
         """Episode end -- the success flag is remembered for stats."""
         if self.win.worker is None:

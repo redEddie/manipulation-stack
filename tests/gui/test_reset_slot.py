@@ -25,7 +25,6 @@ from pathlib import Path
 WT = str(Path(__file__).resolve().parents[2])
 sys.path.insert(0, WT)
 
-import numpy as np  # noqa: E402
 
 from mstack.scene.collection_plan import (  # noqa: E402
     KIND_RESET,
@@ -131,5 +130,34 @@ for name in ("cmd_record_reset", "_record_reset", "_action_from_q"):
 # 예약은 한 번만 소모된다
 assert "self._reset_armed = False" in src, "예약이 소모되지 않는다 (매번 찍힌다)"
 print("5. reset 은 액션 출처만 바꾼 같은 기록 루프로 찍힌다 (예약 1회 소모) OK")
+
+# ---------------------------------------------- 6. GUI 에서 누를 자리가 있다
+# 워커에 명령이 있어도 화면에서 못 부르면 없는 기능이다. 예약 상태는
+# **워커가 알려 준다** -- 루프가 예약을 소모하므로(한 번 찍고 풀린다)
+# 버튼이 스스로 기억하면 실제와 어긋난다.
+import os  # noqa: E402
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+sys.path.insert(0, WT + "/apps")
+from PyQt6.QtWidgets import QApplication  # noqa: E402
+
+_app = QApplication.instance() or QApplication(sys.argv)
+
+tb_src = (Path(WT) / "apps/workspace/shell/toolbar.py").read_text()
+assert '"reset_rec"' in tb_src, "툴바에 reset 녹화 버튼이 없다"
+assert "cmd_record_reset" in tb_src, "버튼이 워커 명령에 연결돼 있지 않다"
+assert "setCheckable(True)" in tb_src, "예약 상태를 보여 주지 않는다"
+
+ws_src = (Path(WT) / "apps/collect_workspace.py").read_text()
+assert "reset_armed.connect" in ws_src, (
+    "reset_armed 신호가 화면에 연결돼 있지 않다 -- 버튼이 워커와 따로 논다")
+
+from mstack.collect.worker import CollectionWorker  # noqa: E402
+
+assert hasattr(CollectionWorker, "reset_armed"), "예약 상태 신호가 없다"
+ops_src = (Path(WT) / "apps/workspace/features/collection/ops.py").read_text()
+assert "def on_reset_armed" in ops_src and "setChecked" in ops_src, (
+    "신호를 받아 버튼 상태를 맞추는 자리가 없다")
+print("6. 툴바 버튼 -> cmd_record_reset, 예약 상태는 워커 신호로 따라간다 OK")
 
 print("\nreset 역할 표시 인수 통과")

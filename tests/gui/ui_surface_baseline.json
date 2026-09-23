@@ -107,6 +107,7 @@
     "match",
     "quick",
     "record",
+    "reset_rec",
     "save",
     "savefail",
     "skip"

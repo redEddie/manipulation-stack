@@ -758,6 +758,7 @@ class WorkspaceWindow(QMainWindow):
         w.episode_progress.connect(self.collection.on_progress)
         w.episode_saved.connect(self.collection.on_saved)
         w.episode_discarded.connect(self.collection.on_discarded)
+        w.reset_armed.connect(self.collection.on_reset_armed)
         w.reset_countdown.connect(self.collection.on_countdown)
         w.log_message.connect(self.log)
         w.node_status.connect(self.collection.on_node_status)

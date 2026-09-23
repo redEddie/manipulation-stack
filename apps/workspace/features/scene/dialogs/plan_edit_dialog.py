@@ -28,19 +28,20 @@ from apps.workspace.features.scene.dialogs.plan_json_dialog import PlanJsonDialo
 from apps.workspace.features.scene.dialogs.sentence_checks import build_sentence_checks
 from apps.workspace.shared.sizing import scrollable
 from mstack.gui.i18n import tr
-from mstack.scene.collection_plan import load_plan
+from mstack.scene.collection_plan import KINDS, KIND_RESET, KIND_TASK, load_plan
 from mstack.scene.scene_format import INSTRUCTION_ID_RE
 
 
 class PlanEditDialog(QDialog):
-    """수집 계획 편집 — scene 별로 (문장, 목표)만 표에서 고친다.
+    """수집 계획 편집 — scene 별로 (문장, 목표, 종류)만 표에서 고친다.
 
     나머지는 자동이다: 기존 행은 파일의 instruction_id 를 그대로 유지하고
     (수집된 에피소드와의 연결이 ID 에 걸려 있다), 새 행은 저장 시점에 그
     scene 의 다음 빈 번호를 받는다. 행을 지워도 남은 행의 ID 는 바뀌지
     않고, 지운 ID 번호도 재사용하지 않는다 -- 같은 번호가 다른 문장으로
     되살아나면 이미 수집된 데이터와 어긋난다. note 같은 부가 필드는 그대로
-    보존하며, 저장은 여전히 load_plan 검증을 통과해야 반영된다.
+    보존하며, 저장은 여전히 load_plan 검증을 통과해야 반영된다. 종류(kind)
+    는 기본값 task 라 JSON 에는 안 적고, reset 으로 고른 행만 적는다.
     """
 
     def __init__(self, parent, path: Path, scene_id: "str | None" = None) -> None:
@@ -53,8 +54,9 @@ class PlanEditDialog(QDialog):
 
         col = QVBoxLayout(self)
         hint = QLabel(tr(
-            "문장과 목표 개수만 고치면 됩니다. ID 는 자동입니다 — 기존 행은 "
-            "번호를 유지하고, 새 행은 저장할 때 다음 번호를 받습니다."))
+            "문장, 목표, 종류만 고치면 됩니다. ID 는 자동입니다 — 기존 행은 "
+            "번호를 유지하고, 새 행은 저장할 때 다음 번호를 받습니다. 종류는 "
+            "task(작업 문장) 와 reset(집으로 복귀, 문법 검사 제외) 입니다."))
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#888;")
         col.addWidget(hint)
@@ -82,7 +84,8 @@ class PlanEditDialog(QDialog):
         col.addLayout(srow)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels([tr("ID"), tr("문장 (instruction)"), tr("목표")])
+        self.tree.setHeaderLabels([tr("ID"), tr("문장 (instruction)"), tr("목표"),
+                                   tr("종류")])
         self.tree.setRootIsDecorated(False)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         col.addWidget(self.tree, 1)
@@ -157,7 +160,10 @@ class PlanEditDialog(QDialog):
             self._work[sid] = [
                 {"id": sl.get("instruction_id"),
                  "instr": str(sl.get("instruction", "")),
-                 "target": int(sl.get("target") or 1)}
+                 "target": int(sl.get("target") or 1),
+                 # kind 는 없으면 task -- 지금 계획 파일 전부에 kind 키가
+                 # 0개라, 없는 것이 곧 기본값이라는 뜻으로 읽혀야 한다.
+                 "kind": str(sl.get("kind") or KIND_TASK)}
                 for sl in sc.get("slots", []) if isinstance(sl, dict)]
         self._cur_sid = None
         self.scene_combo.blockSignals(True)
@@ -184,6 +190,19 @@ class PlanEditDialog(QDialog):
         spin.setRange(1, 999)
         spin.setValue(max(1, row["target"]))
         self.tree.setItemWidget(it, 2, spin)
+        # kind 는 "각 scene 의 0번(I000) 을 reset 으로 예약" 하지 않고 이
+        # 콤보 필드로 고른다 -- 지금 25개 scene 전부가 I000 을 실제 작업에
+        # 쓰고 있어 번호를 예약하면 같은 ID 가 만든 시점에 따라 다른 뜻이
+        # 되고(수천 에피소드에 걸친 조용한 충돌), 불투명 ID 로 가면 "0번"
+        # 이라는 위치 자체가 사라진다. 콤보 값은 JSON 그대로 -- 고른 화면이
+        # 곧 저장되는 바이트라 보는 것과 쓰는 것이 1:1 이어야 한다.
+        kind = QComboBox()
+        kind.addItems(KINDS)
+        kind.setCurrentText(row.get("kind") or KIND_TASK)
+        kind.setToolTip(tr(
+            "task: 사람이 수행할 작업 문장 (통일 문법 검사 대상)\n"
+            "reset: 팔이 집으로 돌아가는 구간 -- 자동 homing 이라 문법 검사 제외"))
+        self.tree.setItemWidget(it, 3, kind)
 
     def _collect_rows(self) -> list:
         rows = []
@@ -191,7 +210,8 @@ class PlanEditDialog(QDialog):
             it = self.tree.topLevelItem(i)
             rows.append({"id": it.data(0, Qt.ItemDataRole.UserRole),
                          "instr": self.tree.itemWidget(it, 1).text().strip(),
-                         "target": self.tree.itemWidget(it, 2).value()})
+                         "target": self.tree.itemWidget(it, 2).value(),
+                         "kind": self.tree.itemWidget(it, 3).currentText()})
         return rows
 
     def _load_rows(self, sid: str) -> None:
@@ -373,6 +393,14 @@ class PlanEditDialog(QDialog):
                 sl["instruction_id"] = r["id"]
                 sl["instruction"] = r["instr"]
                 sl["target"] = r["target"]
+                if r.get("kind") == KIND_RESET:
+                    sl["kind"] = KIND_RESET
+                else:
+                    # task 는 기본값이라 키를 아예 쓰지 않는다 -- 없던 키를
+                    # 적으면 전부 기본값인 기존 파일과 바이트가 달라져 불필요한
+                    # diff 가 생긴다 (reset->task 로 되돌린 행의 남은 키도
+                    # 여기서 같이 뺀다).
+                    sl.pop("kind", None)
                 slots.append(sl)
             sc["slots"] = slots
         text = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
