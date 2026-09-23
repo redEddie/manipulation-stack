@@ -208,6 +208,60 @@ def ensure_scene(path: Path, scene_id: str) -> bool:
     return True
 
 
+#: reset 슬롯의 기본 문장. 사람이 읽는 이름일 뿐이고, 역할은 kind 가 정한다.
+RESET_INSTRUCTION = "reset"
+
+
+def ensure_reset_slot(path: Path, scene_id: str,
+                      instruction: str = RESET_INSTRUCTION) -> str:
+    """``scene_id`` 의 reset 슬롯 ID. 없으면 만들어서 돌려준다.
+
+    **조작자가 수집 중에 슬롯을 갈아끼우지 않게 하려는 함수다.** reset 을
+    찍으려고 지시문 선택을 task 에서 reset 으로 바꿨다가 되돌리는 것은,
+    한 번은 되지만 매 테이크마다 하기에는 번거롭고 되돌리는 것을 잊으면
+    다음 테이크가 엉뚱한 칸에 들어간다. 그래서 화면은 "지금 것을 찍어라"
+    하나만 보내고, 어느 칸에 넣을지는 여기서 정한다.
+
+    ID 는 그 scene 에서 **안 쓰인 다음 번호**다. 0번을 예약하지 않는 이유는
+    PlanSlot.kind 주석에 있다 -- 이미 25개 scene 전부가 I000 을 실제 작업에
+    쓰고 있다.
+
+    target 은 1 이다. 홈 복귀는 테이크마다 도는데 그것을 전부 찍으면 reset
+    이 데이터의 절반이 된다. 필요하면 계획 화면에서 올린다.
+    """
+    path = Path(path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("최상위가 매핑이 아니다")
+    except (OSError, ValueError):
+        raw = {"plan_version": 1, "scenes": []}
+    scenes = raw.setdefault("scenes", [])
+    sc = next((s for s in scenes
+               if isinstance(s, dict) and s.get("scene_id") == scene_id), None)
+    if sc is None:
+        sc = {"scene_id": scene_id, "slots": []}
+        scenes.append(sc)
+        scenes.sort(key=lambda s: str(s.get("scene_id", "")))
+    slots = sc.setdefault("slots", [])
+    for sl in slots:
+        if isinstance(sl, dict) and str(sl.get("kind", "")) == KIND_RESET:
+            return str(sl.get("instruction_id", ""))
+    used = {str(sl.get("instruction_id", "")) for sl in slots
+            if isinstance(sl, dict)}
+    n = 0
+    while f"I{n:03d}" in used:
+        n += 1
+    iid = f"I{n:03d}"
+    slots.append({"instruction_id": iid, "instruction": instruction,
+                  "target": 1, "kind": KIND_RESET})
+    raw.setdefault("plan_version", 1)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8")
+    return iid
+
+
 def check_scene_against_plan(plan: CollectionPlan, scene_id: str,
                              episodes: list) -> list:
     """scene 파일의 에피소드가 계획과 어긋난 곳을 찾는다.

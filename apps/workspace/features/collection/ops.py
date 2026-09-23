@@ -42,6 +42,40 @@ class CollectionOps:
             return
         getattr(self.win.worker, name)(*args)
 
+    def arm_reset_recording(self) -> None:
+        """R / 툴바 버튼 -- 이번 테이크의 홈 복귀를 reset 칸에 기록한다.
+
+        **어느 칸인지는 여기서 정하고, 조작자의 지시문 선택은 안 건드린다.**
+        수집 중에 선택을 reset 으로 갈아끼웠다 되돌리는 것은 한 번은 되지만
+        매 테이크마다 하기에는 번거롭고, 되돌리는 것을 잊으면 다음 테이크가
+        엉뚱한 칸에 들어간다.
+
+        그 scene 에 reset 슬롯이 없으면 만든다 -- 슬롯을 먼저 손으로 만들어
+        두라는 요구는 "R 누르면 알아서" 와 어긋난다 (조작자, 2026-09-23).
+        """
+        if self.win.worker is None:
+            self.win.log("[제어] 아직 연결되지 않았습니다.")
+            return
+        sid = self.win.scene_ops.session_scene_id()
+        if not sid:
+            self.win.log("[reset] scene 세션이 아니라 기록할 칸이 없습니다.")
+            return
+        instr = iid = ""
+        try:
+            from mstack.scene.collection_plan import (
+                RESET_INSTRUCTION,
+                ensure_reset_slot,
+            )
+            from mstack.scene.dataset_meta import plan_path as _plan_path
+
+            root = Path(self.win.root_edit.text().strip() or ".")
+            iid = ensure_reset_slot(_plan_path(root), sid)
+            instr = RESET_INSTRUCTION
+        except Exception as e:  # noqa: BLE001 -- 계획을 못 써도 기록은 된다
+            self.win.log(f"[reset] 계획에 슬롯을 못 넣었습니다({e}) -- "
+                         "지금 고른 지시문으로 기록합니다")
+        self.win.worker.cmd_record_reset(instr, iid)
+
     def on_reset_armed(self, armed: bool) -> None:
         """예약 표시를 워커의 상태에 맞춘다 (버튼이 기억하지 않는다)."""
         act = self.win.tb_actions.get("reset_rec")

@@ -609,6 +609,8 @@ class CollectionWorker(QThread):
         self._preview_last = 0.0
         #: 다음 홈 복귀를 에피소드로 찍을 것인가 (cmd_record_reset).
         self._reset_armed = False
+        #: 그 에피소드를 넣을 칸 (instruction, instruction_id).
+        self._reset_slot = ("", "")
         # Stale-frame bookkeeping, see _get_obs.
         self._cam_last_fp: dict = {}
         self._cam_stale: dict = {}
@@ -643,15 +645,21 @@ class CollectionWorker(QThread):
     def cmd_set_episode_success(self, name: str, success: bool) -> None:
         self.saver.enqueue_set_success(name, success)
 
-    def cmd_record_reset(self) -> None:
+    def cmd_record_reset(self, instruction: str = "",
+                         instruction_id: str = "") -> None:
         """다음 홈 복귀를 **에피소드로 찍는다**. 한 번만 걸리고 소모된다.
 
-        지금 고른 slot 이 그 에피소드에 찍히므로, 조작자는 reset slot 을
-        고른 뒤 이것을 누른다. 예약제인 이유는 양 때문이다 -- 홈 복귀는 매
-        에피소드마다 도는데 그것을 전부 찍으면 reset 이 데이터의 절반이 된다.
-        가장 잘 된 테이크 뒤에 한 번 거는 것이 쓰임에 맞는다.
+        slot 을 **인자로 받는다** -- 지금 고른 지시문은 그대로 둔다. 예전에는
+        현재 slot 에 찍었는데, 그러면 reset 을 찍으려고 선택을 task 에서
+        reset 으로 바꿨다가 되돌려야 했고, 되돌리는 것을 잊으면 다음 테이크가
+        엉뚱한 칸에 들어간다. 어느 칸에 넣을지는 부르는 쪽이 정한다
+        (collection_plan.ensure_reset_slot).
+
+        예약제인 이유는 양이다 -- 홈 복귀는 매 테이크마다 도는데 그것을 전부
+        찍으면 reset 이 데이터의 절반이 된다. 잘 된 테이크 뒤에 한 번 거는
+        것이 쓰임에 맞는다.
         """
-        self._cmds.put(("record_reset",))
+        self._cmds.put(("record_reset", instruction, instruction_id))
 
     def cmd_set_slot(self, instruction: str, instruction_id: str) -> None:
         """scene 모드: 현재 slot(수행할 instruction)을 바꾼다.
@@ -680,16 +688,21 @@ class CollectionWorker(QThread):
         thread-safe); pending saves queued before this delete commit first."""
         self.saver.enqueue_delete(name)
 
-    def _arm_reset(self) -> None:
-        """예약을 건다/푼다 (같은 버튼을 다시 누르면 취소)."""
+    def _arm_reset(self, instruction: str = "", instruction_id: str = "") -> None:
+        """예약을 건다/푼다 (같은 키를 다시 누르면 취소)."""
         self._reset_armed = not self._reset_armed
         self.reset_armed.emit(self._reset_armed)
         if not self._reset_armed:
             self.log_message.emit("[reset] 예약을 취소했습니다")
             return
+        # 안 주면 지금 slot 으로 떨어진다 -- 부르는 쪽이 계획을 못 읽은
+        # 경우이고, 그때도 기록은 되게 한다.
+        self._reset_slot = (instruction or self._slot_instruction,
+                            instruction_id or self._slot_instruction_id)
         self.log_message.emit(
             f"[reset] 이번 테이크가 끝나면 홈 복귀를 "
-            f"{self._slot_instruction_id or '(slot 미선택)'} 로 기록합니다")
+            f"{self._reset_slot[1] or '(slot 미선택)'} 로 기록합니다 "
+            "(지금 고른 지시문은 그대로)")
 
     def _handle_set_slot(self, instruction: str, instruction_id: str) -> None:
         """delete_episode 처럼 상태와 무관한 인라인 커맨드 -- 모든 드레인
@@ -716,7 +729,7 @@ class CollectionWorker(QThread):
                     self._handle_set_slot(cmd[1], cmd[2])
                     continue
                 if cmd[0] == "record_reset":
-                    self._arm_reset()
+                    self._arm_reset(*cmd[1:])
                     continue
                 result = cmd  # last one wins if several piled up
         except queue.Empty:
@@ -779,7 +792,7 @@ class CollectionWorker(QThread):
                 elif cmd[0] == "set_slot":
                     self._handle_set_slot(cmd[1], cmd[2])
                 elif cmd[0] == "record_reset":
-                    self._arm_reset()
+                    self._arm_reset(*cmd[1:])
                 elif cmd[0] == "quit":
                     quit_seen = True
                 elif cmd[0] == "go_home":
@@ -811,7 +824,7 @@ class CollectionWorker(QThread):
                 elif cmd[0] == "set_slot":
                     self._handle_set_slot(cmd[1], cmd[2])
                 elif cmd[0] == "record_reset":
-                    self._arm_reset()
+                    self._arm_reset(*cmd[1:])
                 elif cmd[0] == "quit":
                     quit_seen = True
                 elif cmd[0] == "go_home":
@@ -1676,7 +1689,7 @@ class CollectionWorker(QThread):
             self._writer.discard_episode()
             self.log_message.emit(f"[reset] 기록하지 않았습니다 ({outcome}, {n}프레임)")
             return "ok"
-        instr, iid = self._episode_slot
+        instr, iid = self._reset_slot
         self.saver.enqueue_save(self._writer.detach_buffer(), True,
                                 instruction=instr, instruction_id=iid)
         self._episode_count += 1

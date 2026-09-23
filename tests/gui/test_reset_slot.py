@@ -145,7 +145,7 @@ _app = QApplication.instance() or QApplication(sys.argv)
 
 tb_src = (Path(WT) / "apps/workspace/shell/toolbar.py").read_text()
 assert '"reset_rec"' in tb_src, "툴바에 reset 녹화 버튼이 없다"
-assert "cmd_record_reset" in tb_src, "버튼이 워커 명령에 연결돼 있지 않다"
+assert "arm_reset_recording" in tb_src, "버튼이 예약 자리에 연결돼 있지 않다"
 assert "setCheckable(True)" in tb_src, "예약 상태를 보여 주지 않는다"
 
 ws_src = (Path(WT) / "apps/collect_workspace.py").read_text()
@@ -159,5 +159,42 @@ ops_src = (Path(WT) / "apps/workspace/features/collection/ops.py").read_text()
 assert "def on_reset_armed" in ops_src and "setChecked" in ops_src, (
     "신호를 받아 버튼 상태를 맞추는 자리가 없다")
 print("6. 툴바 버튼 -> cmd_record_reset, 예약 상태는 워커 신호로 따라간다 OK")
+
+# ---------------------------------------------- 7. R 만 누르면 된다
+# 슬롯을 손으로 만들고 수집 중에 선택을 갈아끼우는 것은 "알아서" 가 아니다
+# (조작자, 2026-09-23). 칸은 화면이 정하고, 조작자의 지시문 선택은 그대로 둔다.
+from mstack.scene.collection_plan import ensure_reset_slot  # noqa: E402
+
+task_only = write_plan([
+    {"instruction_id": "I000", "instruction": TASK, "target": 10}])
+iid = ensure_reset_slot(task_only, "S000")
+assert iid and iid != "I000", f"reset 이 task 칸을 덮어썼다: {iid}"
+assert ensure_reset_slot(task_only, "S000") == iid, "부를 때마다 칸이 늘어난다"
+made = load_plan(task_only)
+resets = [s for s in made.slots_for("S000") if s.is_reset]
+assert len(resets) == 1 and resets[0].target == 1, resets
+assert made.slots_for("S000")[0].kind == KIND_TASK, "원래 task 칸이 바뀌었다"
+# 계획에 없던 scene 도 만들어 준다
+assert ensure_reset_slot(task_only, "S042")
+print(f"7. reset 칸이 없으면 만든다 ({iid}, target 1) -- 손으로 만들 필요 없다 OK")
+
+ks_src = (Path(WT) / "apps/collect_workspace.py").read_text()
+assert "Qt.Key.Key_R" in ks_src, "R 키가 없다"
+assert "arm_reset_recording" in ks_src, "R 이 예약에 연결돼 있지 않다"
+# 테이크 **사이의** 단계에서도 걸려야 한다 -- 조작자가 예약을 거는 자리가
+# 녹화 중만은 아니다 (자세 게이트에서 다음 테이크를 준비하며 누른다).
+_r = ks_src.index("Qt.Key.Key_R")
+_guard = ks_src[_r:_r + 900]
+for st in ("gate", "approach", "reset_wait", "recording"):
+    assert f'"{st}"' in _guard, f"R 이 {st} 단계에서 안 먹는다"
+assert "arm_reset_recording" in tb_src, "툴바도 같은 자리를 불러야 한다"
+assert "ensure_reset_slot" in ops_src, (
+    "화면이 칸을 정하지 않는다 -- 조작자가 지시문 선택을 갈아끼워야 한다")
+assert "cmd_record_reset(instr, iid)" in ops_src, "칸을 워커에 안 넘긴다"
+w_src = (Path(WT) / "mstack/collect/worker.py").read_text()
+assert "self._reset_slot" in w_src, "워커가 넘겨받은 칸을 안 쓴다"
+assert "instr, iid = self._reset_slot" in w_src, (
+    "reset 을 현재 slot 에 저장한다 -- 조작자 선택을 건드리게 된다")
+print("8. R / 버튼 둘 다 같은 자리로, 지금 고른 지시문은 안 바뀐다 OK")
 
 print("\nreset 역할 표시 인수 통과")

@@ -940,6 +940,20 @@ class WorkspaceWindow(QMainWindow):
                 if state in ("reset_wait", "homing") and not self.session.no_dataset_session:
                     self.collection.toggle_last_verdict()
                     return True
+            elif key == Qt.Key.Key_R:
+                # **테이크 사이의 단계에서도 걸 수 있어야 한다** (조작자,
+                # 2026-09-23). 예약은 "다음 홈 복귀 한 번" 이고 홈 복귀는
+                # 테이크가 끝날 때마다 돌므로, 어느 단계에서 걸든 뜻이
+                # 정해진다 -- 녹화 중이면 이번 테이크의 것, 자세 게이트나
+                # 자동 정렬 중이면 곧 할 테이크의 것. 다시 누르면 취소된다.
+                #
+                # connecting/idle 은 뺀다: 아직 찍을 테이크가 없어서 예약이
+                # 무엇을 가리키는지 말할 수 없고, 워커도 없을 수 있다.
+                if (state in ("recording", "reset_wait", "gate",
+                              "approach", "homing")
+                        and not self.session.no_dataset_session):
+                    self.collection.arm_reset_recording()
+                    return True
             elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if state == "recording":
                     self.collection.cmd("cmd_discard_episode")

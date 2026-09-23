@@ -84,10 +84,11 @@ def build_toolbar(win) -> None:
     # reset 녹화 예약. 체크 상태는 **워커가 알려 준다** -- 예약은 루프가
     # 소모하므로(한 번 찍고 풀린다) 버튼이 스스로 기억하면 어긋난다.
     _reset = add("reset_rec", tr("⟲ Rec reset"),
-                 lambda: win.collection.cmd("cmd_record_reset"),
-                 tr("이번 테이크가 끝난 뒤의 홈 복귀를 에피소드로 기록합니다.\n"
-                    "지금 고른 지시문(slot)으로 저장되므로, kind=reset 슬롯을 "
-                    "고른 뒤 누르세요.\n"
+                 win.collection.arm_reset_recording,
+                 tr("R -- 이번 테이크가 끝난 뒤의 홈 복귀를 에피소드로 "
+                    "기록합니다.\n"
+                    "이 scene 의 reset 칸에 들어가고, 없으면 만듭니다. "
+                    "지금 고른 지시문은 그대로입니다.\n"
                     "한 번만 걸립니다 -- 다시 누르면 취소."))
     _reset.setCheckable(True)
     tb.addSeparator()
