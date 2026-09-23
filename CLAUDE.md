@@ -111,6 +111,16 @@ Two things that look like safety layers and are not:
   app-wide by `mstack/gui/wheel_guard.py`, so screens need not handle it.
   These came from real breakage in the launcher (2026-09-05~06); apply them
   when touching workspace screens rather than re-deriving them.
+- **Scene and instruction IDs are never renumbered, and gaps are normal.**
+  Deleting S007 leaves a hole; the next scene is still the next free number.
+  Renumbering rewrites what every `episode_uid` refers to, and those IDs have
+  already left the repository — they are in the Hub dataset, in the paper's
+  tables, and in whatever notes someone kept. It has been done once
+  (`scene_renumber_20260917.json`: 6 scenes removed, **22 renumbered**), which
+  is why the file exists at all: it is the only way to read anything written
+  before that date. Do not add a second such file. The same holds for
+  `instruction_id` within a scene — `PlanSlot.kind`, not position, says what a
+  slot is for, precisely so that no number needs to carry meaning.
 - Prop/scene decisions are recorded on GitHub issues (e.g. #36); props.yaml
   color tokens must be lowercase (the grammar parser lowercases phrases).
 - This repository is **public**. Do not commit hostnames, serials or paths that
