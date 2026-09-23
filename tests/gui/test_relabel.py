@@ -28,7 +28,7 @@ from mstack.scene.scene_format import list_scene_episodes  # noqa: E402
 d = Path(tempfile.mkdtemp(prefix="relabel_"))
 subprocess.run([sys.executable, WT + "/scripts/check/check_scene_file.py",
                 "--selftest", "--keep", str(d)], check=True, capture_output=True)
-scene = d / "scene_000.hdf5"
+scene = d / "scene_AAAAAAA1.hdf5"   # selftest 의 고정 픽스처 ID
 legacy = d / "selftest_task_demo.hdf5"
 
 cw.CameraOps.refresh_cameras = lambda self: None

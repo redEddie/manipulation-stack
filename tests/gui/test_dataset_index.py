@@ -27,9 +27,14 @@ from mstack.scene.dataset_index import (  # noqa: E402
     SCENES_HEADER,
     build_dataset_index,
 )
-from mstack.scene.scene_format import SceneMetadata, SceneWriter  # noqa: E402
+from mstack.scene.scene_format import (  # noqa: E402
+    SceneMetadata,
+    SceneWriter,
+    scene_filename,
+)
 
 TMP = Path(tempfile.mkdtemp(prefix="dsindex_"))
+SID_A, SID_B, SID_C = "SAAAAAAA1", "SBBBBBBB1", "SCCCCCCC1"   # 불투명 ID (고정)
 
 
 def _cleanup():
@@ -65,19 +70,19 @@ def _make_scene(root: Path, scene_id: str, objects: list,
 ds = TMP / "fr3-tabletop"
 ds.mkdir()
 _make_scene(
-    ds, "S000",
+    ds, SID_A,
     ["OBJ-CUP-BLU-01", "OBJ-BOWLL-YEL-01"],
     {"OBJ-CUP-BLU-01": {"zone": [0, 0]}, "OBJ-BOWLL-YEL-01": {"zone": [0, 1]}},
     [("I000", "pick up the blue cup and place it inside the large yellow bowl",
       [True, False]),
      ("I001", "drag the blue cup next to the large yellow bowl", [True])])
 _make_scene(
-    ds, "S001", ["OBJ-DRAWER-01"],
+    ds, SID_B, ["OBJ-DRAWER-01"],
     {"OBJ-DRAWER-01": {"zone": [0, 0]}},
     [("I002", "open the top drawer", [True, True])])
 
-# 옛 스키마 시늄: S000 의 두 번째 에피소드에서 attr 을 뗀다.
-with h5py.File(ds / "scene_000.hdf5", "a") as f:
+# 옛 스키마 시늄: SID_A 의 두 번째 에피소드에서 attr 을 뗀다.
+with h5py.File(ds / scene_filename(SID_A), "a") as f:
     g = f["episode_001"]
     for attr in ("success", "collector", "timestamp"):
         del g.attrs[attr]
@@ -95,15 +100,18 @@ for kind, header in (("scenes", SCENES_HEADER), ("cells", CELLS_HEADER),
     assert first == list(header), (kind, first)
 print("1 통과: 3종 TSV 생성 + 헤더 정확")
 
-# ---- 2. scenes.tsv: scene 2행, ordinal=scene_id, objects 쉼표 연결 ----
+# ---- 2. scenes.tsv: scene 2행, ordinal 은 만든 순서 1부터, objects 쉼표 연결 ----
+# scene ID 가 불투명해지면서 "몇 번째"는 ID 에서 읽히지 않는다 -- 그 자리를
+# ordinal 열이 맡고, scene_id 열에는 불투명 ID 가 그대로 든다.
 scene_lines = (out / "scenes.tsv").read_text(encoding="utf-8").splitlines()
 assert len(scene_lines) == 3, scene_lines          # 헤더 + scene 2
 row = scene_lines[1].split("\t")
-assert row[0] == "S000" and row[1] == "S000", row  # ordinal 은 지금 scene_id
+assert row[0] == "1" and row[1] == SID_A, row      # ordinal = 만든 순서
 assert row[3] == "3" and row[4].isdigit(), row     # n_episodes, bytes
 assert row[6] == "OBJ-CUP-BLU-01,OBJ-BOWLL-YEL-01", row
-assert scene_lines[2].split("\t")[1] == "S001"
-print("2 통과: scenes.tsv 2행 + n_episodes/bytes/objects (쉼표 연결)")
+row2 = scene_lines[2].split("\t")
+assert row2[0] == "2" and row2[1] == SID_B, row2
+print("2 통과: scenes.tsv 2행 + ordinal(만든 순서)/n_episodes/bytes/objects (쉼표 연결)")
 
 # ---- 3. cells.tsv: 칸 집계 + 스킬/역할 해석 ----
 # 이 데이터셋엔 instructions.json 이 없다 — kind 는 전부 기본값 task 다.
@@ -111,7 +119,7 @@ cell_lines = (out / "cells.tsv").read_text(encoding="utf-8").splitlines()
 assert len(cell_lines) == 4, cell_lines            # 헤더 + 칸 3
 cells = {l.split("\t")[1]: l.split("\t") for l in cell_lines[1:]}
 row = cells["I000"]
-assert row[0] == "S000", row
+assert row[0] == SID_A, row
 assert row[2] == "task", row                       # 계획 없음 -> 기본값 task
 assert row[3] == "pick-inside", row                # skill_of 정본 분류
 assert row[4] == "OBJ-CUP-BLU-01", row             # 조작 물체 oid
@@ -167,7 +175,7 @@ print("6 통과: 깨진 scene 파일 건어너뛰기 + errors 기록")
 ds2 = TMP / "fr3-reset"
 ds2.mkdir()
 _make_scene(
-    ds2, "S010",
+    ds2, SID_C,
     ["OBJ-CUP-BLU-01", "OBJ-BOWLL-YEL-01"],
     {"OBJ-CUP-BLU-01": {"zone": [0, 0]}, "OBJ-BOWLL-YEL-01": {"zone": [0, 1]}},
     [("I000", "pick up the blue cup and place it inside the large yellow bowl",
@@ -176,7 +184,7 @@ _make_scene(
 (ds2 / "instructions.json").write_text(json.dumps({
     "plan_version": 1,
     "scenes": [{
-        "scene_id": "S010",
+        "scene_id": SID_C,
         "slots": [
             {"instruction_id": "I000",
              "instruction": "pick up the blue cup and place it inside the "

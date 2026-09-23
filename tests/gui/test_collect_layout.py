@@ -50,19 +50,22 @@ from apps.workspace.features.collection.page import (  # noqa: E402
 )
 from apps.workspace.shared.tabs import center_tab_key  # noqa: E402
 from mstack.scene.scene_format import (  # noqa: E402
+    SCENE_ID_RE,
     SceneMetadata,
     SceneWriter,
     list_scene_episodes,
+    scene_filename,
 )
 
 CUP, BOWL = "OBJ-CUP-BLU-01", "OBJ-BOWLS-WHT-01"
 SENT = {"I000": "pick up the blue cup and place it on the white bowl",
         "I001": "pick up the white bowl and place it on the blue cup",
         "I002": "push the blue cup to the white bowl"}
+SID0 = "SAAAAAAA1"     # 이 테스트가 미리 만든 scene -- 불투명 ID (고정)
 
 # ------------------------------------------------------------- 데이터 한 벌
 root = Path(tempfile.mkdtemp(prefix="collectui_"))
-md = SceneMetadata(scene_id="S000", objects=[CUP, BOWL],
+md = SceneMetadata(scene_id=SID0, objects=[CUP, BOWL],
                    layout={"grid": [3, 3],
                            "placements": {CUP: {"zone": [0, 0]},
                                           BOWL: {"zone": [2, 2]}}})
@@ -85,7 +88,7 @@ for iid, n in (("I000", 3), ("I001", 1)):
 EPISODES = w.list_episodes()
 w.close()
 (root / "instructions.json").write_text(json.dumps(
-    {"plan_version": 1, "scenes": [{"scene_id": "S000", "slots": [
+    {"plan_version": 1, "scenes": [{"scene_id": SID0, "slots": [
         {"instruction_id": k, "instruction": v, "target": 3}
         for k, v in sorted(SENT.items())]}]}, ensure_ascii=False), encoding="utf-8")
 
@@ -146,8 +149,8 @@ print("5. 단축키 표 + 상태별 강조 OK (Space 는 한 줄에 두 역할)"
 
 # --------------------------------------- 6. 목록 한 줄 = 즉시 전환 (버튼 없음)
 class _FakeWorker:
-    cfg = type("C", (), {"task_name": "S000", "scene_metadata": None,
-                         "scene_id": "S000", "instruction_id": "I001",
+    cfg = type("C", (), {"task_name": SID0, "scene_metadata": None,
+                         "scene_id": SID0, "instruction_id": "I001",
                          "language_instruction": SENT["I001"]})()
     _slot_instruction_id = "I001"
     _slot_instruction = SENT["I001"]
@@ -168,7 +171,7 @@ win.collection.refresh_instruction()
 win.scene_planning.refresh_instruction_list()
 
 assert not win.instr_box.isHidden(), "scene 세션인데 Instruction 상자가 없다"
-assert win.instr_counter.text() == "S000 · I001 · 1/3", win.instr_counter.text()
+assert win.instr_counter.text() == f"#1 · I001 · 1/3", win.instr_counter.text()
 assert win.instr_sentence.text() == SENT["I001"], win.instr_sentence.text()
 rows = [win.instr_tree.topLevelItem(i)
         for i in range(win.instr_tree.topLevelItemCount())]
@@ -353,7 +356,7 @@ tree = win.plan_progress_tree
 top = tree.topLevelItem(0)
 assert top is not None and top.childCount() >= 2, "계획 표가 비었다"
 win.scene_planning.on_plan_row_picked(top.child(1))     # I001
-assert win.scene_combo.currentData() == "S000", win.scene_combo.currentData()
+assert win.scene_combo.currentData() == SID0, win.scene_combo.currentData()
 assert win.scene_iid_edit.text() == "I001", win.scene_iid_edit.text()
 assert win.lang_edit.text() == SENT["I001"], win.lang_edit.text()
 # 머리줄(scene)은 고를 것이 없다 -- 아무 일도 일어나지 않는다
@@ -405,8 +408,8 @@ from apps.workspace.shared.collapsible import CollapsibleBox  # noqa: E402
 titles = [b._title for b in right_conf.findChildren(CollapsibleBox)]
 assert titles == ["New Scene", "Scene Management", "Scene"], titles
 tree.setCurrentItem(top.child(0))
-assert win.scene_planning.selected_plan_scene() == "S000"
-assert "S000" in win.conf_layout_card.text(), win.conf_layout_card.text()
+assert win.scene_planning.selected_plan_scene() == SID0
+assert SID0 in win.conf_layout_card.text(), win.conf_layout_card.text()
 from apps.workspace.features.scene import planning as _planning  # noqa: E402
 
 opened: dict = {}
@@ -429,9 +432,9 @@ try:
     win.scene_planning.on_edit_plan()
 finally:
     _planning.PlanEditDialog = _real_dialog
-assert opened.get("scene_id") == "S000", opened
+assert opened.get("scene_id") == SID0, opened
 assert tree.topLevelItemCount() >= 1, "the plan table was not refilled after a save"
-assert win.scene_planning.selected_plan_scene() == "S000", "the picked scene was lost on refill"
+assert win.scene_planning.selected_plan_scene() == SID0, "the picked scene was lost on refill"
 print("13. Instruction 탭 줄 클릭 = scene + 지시문 OK (세션 중엔 잠김) · 제목행 전체 펼치기/접기 OK · 고른 scene 배치/편집 OK")
 
 # ---------------------- 14. 새 Scene = 탭 + **누르는 즉시 파일** (여러 개)
@@ -444,8 +447,11 @@ assert not hasattr(win, "_pending_scene_meta"), \
     "'대기 구성' 이 아직 있다 -- 만들면 곧바로 파일이어야 한다"
 win.scene_ops.on_new_scene()
 assert center_tab_key(win) == "scene", center_tab_key(win)
-assert "S001" in win.scene_composer.title_label.text(), \
-    win.scene_composer.title_label.text()
+# 제목에는 **새 불투명 ID**가 뜬다 -- "다음 번호"가 아니라 난수다 (S7QK3M2A 식)
+_title_a = win.scene_composer.title_label.text()
+_sid_a = next((t for t in _title_a.split() if SCENE_ID_RE.match(t)), None)
+assert _sid_a, _title_a
+sid_a = _sid_a
 
 
 def _compose(objs, zones):
@@ -475,34 +481,45 @@ win.scene_composer._placements = {}
 win.scene_composer._refresh()
 assert not win.scene_create_btn.isEnabled(), "빈 구성인데 만들기가 눌린다"
 assert win.scene_create_btn.toolTip().strip(), "왜 못 누르는지 말하지 않는다"
-# 라벨에 scene 번호가 없다 -- 번호는 고르는 것이 아니라 자동으로 붙는다
-# (2026-09-07 조작자 지적).
-assert "S001" not in win.scene_create_btn.text(), win.scene_create_btn.text()
+# 라벨에 scene ID 가 없다 -- ID 는 고르는 것이 아니라 만드는 순간 자동으로
+# 뽑힌다 (2026-09-07 조작자 지적; 번호에서 불투명 난수로 바뀜).
+assert sid_a not in win.scene_create_btn.text(), win.scene_create_btn.text()
 # 저장 여부는 늘 한 줄로 말한다 (이 탭에 [저장] 은 따로 없다)
 assert "아직" in win.scene_save_state.text(), win.scene_save_state.text()
 assert not win.scene_clear_btn.isEnabled(), "체크가 없는데 전체 해제가 눌린다"
 
 RED = "OBJ-CUP-RED-01"
+n_files0 = len(list(root.glob("scene_*.hdf5")))
 _compose([CUP, BOWL], {CUP: [0, 1], BOWL: [2, 0]})
-assert (root / "scene_001.hdf5").exists(), "만들었는데 파일이 없다"
-assert len(list_scene_episodes(root / "scene_001.hdf5")) == 0, "빈 scene 이어야 한다"
-assert win.scene_combo.currentData() == "S001", win.scene_combo.currentData()
-# 연달아 또 하나 -- 미리 여러 개를 짜 두는 것이 이 화면의 용도다
-assert "S002" in win.scene_composer.title_label.text(), \
-    win.scene_composer.title_label.text()
+# 만드는 순간 ID 를 다시 뽑는다 -- 콤보가 가리키는 것이 곧 방금 만든 scene 이고
+# 파일명은 그 ID 에서 기계적으로 나온다
+made1 = win.scene_combo.currentData()
+assert SCENE_ID_RE.match(made1), made1
+assert (root / scene_filename(made1)).exists(), "만들었는데 파일이 없다"
+assert len(list_scene_episodes(root / scene_filename(made1))) == 0, "빈 scene 이어야 한다"
+# 연달아 또 하나 -- 미리 여러 개를 짜 두는 것이 이 화면의 용도다. 제목의
+# 새 ID 는 방금 만든 것과 다른 다음 난수다
+_title_b = win.scene_composer.title_label.text()
+sid_b = next((t for t in _title_b.split() if SCENE_ID_RE.match(t)), None)
+assert sid_b, _title_b
+assert sid_b != made1, (sid_b, made1)
 _compose([CUP, BOWL, RED], {CUP: [0, 2], BOWL: [2, 1], RED: [1, 1]})
+made2 = win.scene_combo.currentData()
+assert made2 != made1, (made2, made1)
 made = sorted(p.name for p in root.glob("scene_*.hdf5"))
-assert made == ["scene_000.hdf5", "scene_001.hdf5", "scene_002.hdf5"], made
+assert made == sorted([scene_filename(SID0), scene_filename(made1),
+                       scene_filename(made2)]), made
+assert len(made) == n_files0 + 2, (n_files0, made)
 # 만든 scene 은 **계획에도 함께** 들어간다 -- 입구가 하나여야 한다.
 plan_now = json.loads((root / "instructions.json").read_text(encoding="utf-8"))
 in_plan = {sc["scene_id"] for sc in plan_now["scenes"]}
-assert {"S000", "S001", "S002"} <= in_plan, in_plan
-assert [sc for sc in plan_now["scenes"] if sc["scene_id"] == "S001"][0]["slots"] == [], \
+assert {SID0, made1, made2} <= in_plan, in_plan
+assert [sc for sc in plan_now["scenes"] if sc["scene_id"] == made1][0]["slots"] == [], \
     "새 scene 의 지시문은 비어 있어야 한다 (무엇을 시킬지는 사람이 정한다)"
 # 그리고 지시문이 없다는 것이 연결 거부 문구로 정확히 나온다
 win.scene_combo.setCurrentIndex(
     [i for i in range(win.scene_combo.count())
-     if win.scene_combo.itemData(i) == "S001"][0])
+     if win.scene_combo.itemData(i) == made1][0])
 _, _, _, err = win.scene_ops.scene_config_from_ui()
 assert err and "지시문이 없습니다" in err, err
 # 만든 뒤에도 체크는 남는다 (한 소품만 바꿔 변종을 짜는 길). 처음부터 다시

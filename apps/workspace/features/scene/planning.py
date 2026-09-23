@@ -18,12 +18,13 @@ from mstack.scene.collection_plan import (
 )
 from mstack.scene.scene_format import (
     INSTRUCTION_ID_RE,
-    SCENE_FILE_RE,
     count_by_slot,
     iter_scene_files,
     list_scene_episodes,
     read_scene_metadata,
     scene_filename,
+    scene_label,
+    scene_ordinals,
 )
 from apps.workspace.shared.info import scene_fields
 
@@ -49,6 +50,8 @@ class ScenePlanningOps:
                 tr("이 데이터셋에는 지시문이 없습니다 (instructions.json 없음)."))
             return
         root = Path(self.win.root_edit.text().strip() or ".")
+        # 표에는 #번호만 -- 난수 ID 는 줄을 읽기 어렵게만 한다.
+        ords = scene_ordinals(root)
         done = total = 0
         skipped: list = []
         for sp in plan.scenes:
@@ -74,14 +77,14 @@ class ScenePlanningOps:
                 # 배치는 있는데 무엇을 시킬지가 없다 -- 새 scene 을 만든
                 # 직후의 정상 상태이고, 다음에 할 일이 정해져 있다.
                 top = QTreeWidgetItem([
-                    f"{sp.scene_id}{note}", "", "",
+                    f"{scene_label(sp.scene_id, ords)}{note}", "", "",
                     tr("지시문이 없습니다 — [지시문 편집] 에서 적으세요")])
                 top.setData(0, _SCENE_ROLE, sp.scene_id)
                 for col_i in range(4):
                     top.setForeground(col_i, Qt.GlobalColor.darkYellow)
                 tree.addTopLevelItem(top)
                 continue
-            top = QTreeWidgetItem([f"{sp.scene_id}{note}", "", "", ""])
+            top = QTreeWidgetItem([f"{scene_label(sp.scene_id, ords)}{note}", "", "", ""])
             top.setData(0, _SCENE_ROLE, sp.scene_id)
             for s in sp.slots:
                 c = counts.get(s.instruction_id, {}).get("usable", 0)
@@ -109,7 +112,8 @@ class ScenePlanningOps:
             d=done, t=total, p=pct, n=plan.path.name)
         if skipped:
             text += tr("  ·  파일 없는 scene {n}개 표시 안 함 ({s})").format(
-                n=len(skipped), s=", ".join(skipped[:4]))
+                n=len(skipped),
+                s=", ".join(scene_label(x, ords) for x in skipped[:4]))
         self.win.plan_progress_label.setText(text)
 
     def selected_plan_scene(self) -> "str | None":

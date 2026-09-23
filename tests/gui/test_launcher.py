@@ -1,7 +1,7 @@
 """런처 마법사 검증 (offscreen) — 모드 분기, 새 데이터셋 생성, 이어서 하기.
 
 Cancel 버튼이 없고 첫 페이지는 모드 버튼 2개만 보이는 것, Finish 가
-폴더/dataset-identity.json/instructions.json 복사를 만드는 것, legacy 폴더에
+폴더/dataset-identity.json 을 만드는 것(지시문은 안 가져온다), legacy 폴더에
 identity 를 자동 생성하는 것, apply_result 가 env+recents 에 반영하는 것까지.
 """
 import json
@@ -37,7 +37,7 @@ def _cleanup():
     shutil.rmtree(TMP, ignore_errors=True)
 
 
-# 원본 데이터셋 (복사 원본): identity + instructions.json + scene 파일 1개
+# 원본 데이터셋 (컨셉 원본): identity + instructions.json + scene 파일 1개
 SRC = TMP / "src-dataset"
 SRC.mkdir()
 (SRC / "dataset-identity.json").write_text(json.dumps({
@@ -107,11 +107,11 @@ newp.name_edit.setText("new-ds")
 newp.location_edit.setText(str(TMP))
 assert newp.isComplete(), newp.error.text()
 assert str(TMP / "new-ds") in newp.preview.text()
-# 설정 가져오기: 컨셉 prefill
+# 컨셉 가져오기: 문장만 prefill (지시문 계획은 안 가져온다)
 newp._entries = discover_datasets([TMP])
 newp.copy_combo.blockSignals(True)
 newp.copy_combo.clear()
-newp.copy_combo.addItem("(비어 있게 시작)", None)
+newp.copy_combo.addItem("(가져오지 않음)", None)
 for e in newp._entries:
     newp.copy_combo.addItem(e.name, str(e.path))
 newp.copy_combo.blockSignals(False)
@@ -127,7 +127,11 @@ assert res2.mode == "new" and res2.dataset_root == ds
 ident2 = load_identity(ds)
 assert ident2.name == "new-ds" and ident2.concept == "원본 컨셉"
 assert ident2.hf_repo == "knu-physical-ai/new-ds"
-assert (ds / "instructions.json").is_file()    # 원본 계획 복사됨
+# **지시문 계획은 안 가져온다** (2026-09-23 조작자 결정). 새 데이터셋을
+# 만드는 이유는 대개 다른 것을 모으려는 것이고, 복사된 계획의 scene_id 는
+# 이 폴더에 없는 파일을 가리켜 진행률·추천·검증이 유령 항목을 센다.
+assert not (ds / "instructions.json").exists(), \
+    "원본 계획이 따라왔다 -- 남의 scene 과 문장이 통째로 들어온다"
 print("4 통과: New dataset -- 검증/미리보기/복사/생성 + hf_repo 기본값")
 
 # ---- 5. apply_result: station env + recents ----

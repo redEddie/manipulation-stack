@@ -155,8 +155,12 @@ class DoctorOps:
             QMessageBox.warning(win, tr("Scene 열기 실패"), str(e))
             return
         self._scene_id = scene_id
+        # 제목은 #번호 + 파일명. 파일명에 ID 가 들어 있으므로 ID 를 또
+        # 적지 않는다 -- 둘 다 적으면 제목이 난수 두 줄이 된다.
+        from mstack.scene.scene_format import scene_label, scene_ordinals
         win.doctor_title.setText(tr("{sid} — {f}").format(
-            sid=scene_id, f=path.name))
+            sid=scene_label(scene_id, scene_ordinals(path.parent)),
+            f=path.name))
         self._show_photo(path)
         win.doctor_info.set_scene(md)
 

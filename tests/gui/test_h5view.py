@@ -17,7 +17,7 @@ from apps.workspace.features.dataset.hdf5_tree_dialog import Hdf5TreeDialog  # n
 d = tempfile.mkdtemp(prefix="h5view_")
 subprocess.run([sys.executable, WT + "/scripts/check/check_scene_file.py",
                 "--selftest", "--keep", d], check=True, capture_output=True)
-p = Path(d) / "scene_000.hdf5"
+p = Path(d) / "scene_AAAAAAA1.hdf5"   # selftest 의 고정 픽스처 ID
 assert p.exists()
 
 dlg = Hdf5TreeDialog(None, p)
@@ -46,7 +46,7 @@ for want in ("@scene_id", "@description", "@objects", "@layout",
 sid_item = next(meta.child(i) for i in range(meta.childCount())
                 if meta.child(i).text(0) == "@scene_id")
 dlg.tree.setCurrentItem(sid_item)
-assert "S000" in dlg.detail.toPlainText()
+assert "SAAAAAAA1" in dlg.detail.toPlainText()
 ep = find(root, "episode_000")
 img = find(find(ep, "obs"), OBS_AGENTVIEW_RGB)
 dlg.tree.setCurrentItem(img)

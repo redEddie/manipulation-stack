@@ -87,7 +87,9 @@ win.scene_combo.setCurrentIndex(win.scene_combo.findData("S000"))
 win.scene_iid_edit.setText(IID)
 win.collection.refresh_instruction()
 t = win.instr_counter.text()
-assert t == f"S000 · {IID} · 2", t          # target 없음 -- 누계만, 0/0 도 아님
+# 화면은 scene 을 **#번호**로 부른다 (불투명 ID 는 곁눈질로 안 읽힌다).
+# 번호는 만든 순서라 이 픽스처에서는 scene 하나뿐이니 #1 이다.
+assert t == f"#1 · {IID} · 2", t          # target 없음 -- 누계만, 0/0 도 아님
 assert "/" not in t
 print(f"2 통과: 계획 없음 -- 누계만 ({t})")
 
@@ -104,7 +106,7 @@ def _write_plan(target: int) -> None:
 _write_plan(10)
 win.collection.refresh_instruction()
 t = win.instr_counter.text()
-assert t == f"S000 · {IID} · 2/10", t
+assert t == f"#1 · {IID} · 2/10", t
 assert "#2ecc71" not in win.instr_counter.styleSheet()
 # 진행률 트리는 ② Configure 의 Plan 탭에 있고(2026-09-06 이동),
 # refresh_instruction 가 연쇄 갱신하지는 **않는다**: 그 표는 계획의 모든
@@ -120,13 +122,13 @@ print(f"3 통과: 계획 target 과 맞춤 -- {t} (미달이라 초록 아님) +
 # ---- 4. target 도달(2/2) 이면 초록, 초과(11/10)도 숫자 정확 ----
 _write_plan(2)
 win.collection.refresh_instruction()
-assert win.instr_counter.text() == f"S000 · {IID} · 2/2", win.instr_counter.text()
+assert win.instr_counter.text() == f"#1 · {IID} · 2/2", win.instr_counter.text()
 assert "#2ecc71" in win.instr_counter.styleSheet(), win.instr_counter.styleSheet()
 # 임시로 셋째(실패) 에피소드를 success 로 뒤집어 3/2 -- 넘어도 정확히 보여준다
 with h5py.File(scene, "a") as f:
     f[bad].attrs["quality_status"] = QUALITY_SUCCESS
 win.collection.refresh_instruction()
-assert win.instr_counter.text() == f"S000 · {IID} · 3/2", win.instr_counter.text()
+assert win.instr_counter.text() == f"#1 · {IID} · 3/2", win.instr_counter.text()
 with h5py.File(scene, "a") as f:
     f[bad].attrs["quality_status"] = QUALITY_FAILED
 win.collection.refresh_instruction()
@@ -136,7 +138,7 @@ print("4 통과: target 도달=초록, 초과(3/2)도 숫자 그대로")
 win.scene_iid_edit.setText("I009")
 win.collection.refresh_instruction()
 t = win.instr_counter.text()
-assert t == "S000 · I009 · 0" and "/" not in t, t
+assert t == "#1 · I009 · 0" and "/" not in t, t
 win.scene_iid_edit.setText(IID)
 print(f"5 통과: 계획에 없는 slot -- 누계만 ({t})")
 
@@ -144,14 +146,14 @@ print(f"5 통과: 계획에 없는 slot -- 누계만 ({t})")
 #    GUI DatasetOps 삭제 경로로 지우고, 카운터가 HDF5 를 다시 읽는지 본다.
 _write_plan(10)
 win.collection.refresh_instruction()
-assert win.instr_counter.text() == f"S000 · {IID} · 2/10"
+assert win.instr_counter.text() == f"#1 · {IID} · 2/10"
 ok = win.delete_ops.delete_episodes({scene: [ok0]})
 assert ok
 # 삭제 직후 count_by_slot 실측
 counts = count_by_slot(scene)
 assert counts[IID] == {"total": 2, "usable": 1}, counts
 # 카운터도 줄었다 -- GUI 를 켠 순간 누계였다면 여전히 2/10 이다
-assert win.instr_counter.text() == f"S000 · {IID} · 1/10", win.instr_counter.text()
+assert win.instr_counter.text() == f"#1 · {IID} · 1/10", win.instr_counter.text()
 assert "#2ecc71" not in win.instr_counter.styleSheet()
 print("6 통과: 에피소드 삭제 뒤 카운터 감소 2/10 -> 1/10 (HDF5 실측, GUI 누계 아님)")
 
@@ -173,7 +175,7 @@ win.scene_iid_edit.setText(IID)
 _write_plan(10)
 win.collection.refresh_instruction()
 assert win.hud_counter.text() == "1 / 10", win.hud_counter.text()
-assert win.hud_slot.text() == f"S000 · {IID}", win.hud_slot.text()
+assert win.hud_slot.text() == f"#1 · {IID}", win.hud_slot.text()
 assert win.hud_counter.font().pointSize() >= 24, "거리에서 읽히려면 크게"
 
 anc, scrolled = win.hud_counter.parent(), False

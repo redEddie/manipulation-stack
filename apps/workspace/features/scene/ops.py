@@ -18,6 +18,7 @@ from mstack.collect.session_meta import (
     payload_from_node,
     reset_pose_from_station,
 )
+from PyQt6.QtCore import Qt
 from mstack.scene.scene_format import (
     INSTRUCTION_ID_RE,
     SceneWriter,
@@ -26,6 +27,8 @@ from mstack.scene.scene_format import (
     next_scene_id,
     read_scene_metadata,
     scene_filename,
+    scene_label,
+    scene_ordinals,
 )
 
 STATION = load_station()
@@ -49,33 +52,24 @@ class SceneOps:
             sid_next = "S???"
         self.win.scene_combo.addItem(tr("— 새 Scene ({sid}) —").format(sid=sid_next), None)
         try:
-            # scene ID 가 불투명해서(S7QK3M2A) 그것만으로는 사람이 목록에서
-            # 자리를 못 잡는다. **만든 순서 번호를 앞에 붙인다** -- 색인
-            # (scenes.tsv) 의 ordinal 과 같은 규칙이고, 여기서는 이미 읽고
-            # 있는 metadata 의 created 로 그 자리에서 센다.
-            #
-            # 번호는 **표시용이다.** 고르면 넘어가는 값은 여전히 scene_id 라,
-            # 앞의 scene 을 지워 번호가 당겨져도 가리키는 파일은 안 바뀐다.
-            rows = []
+            # **목록에는 #번호만.** 여덟 글자 난수는 목록에서 읽히지 않고
+            # 자리만 먹는다. 전체 ID 는 툴팁에 남는다 -- 파일을 찾을 때
+            # 쓰는 것은 ID 이고, 번호는 지우면 당겨지는 표시용이다.
+            ords = scene_ordinals(root)
             for p in iter_scene_files(root):
                 try:
-                    rows.append((read_scene_metadata(p), None))
+                    md = read_scene_metadata(p)
                 except Exception as e:  # noqa: BLE001
-                    rows.append((None, f"{p.name} (읽기 실패: {type(e).__name__})"))
-            order = sorted(
-                (i for i, (md, _) in enumerate(rows) if md is not None),
-                key=lambda i: (not rows[i][0].created,
-                               str(rows[i][0].created or ""),
-                               str(rows[i][0].scene_id)))
-            seq = {i: n for n, i in enumerate(order, start=1)}
-            for i, (md, err) in enumerate(rows):
-                if md is None:
-                    self.win.scene_combo.addItem(err, None)
+                    self.win.scene_combo.addItem(
+                        f"{p.name} (읽기 실패: {type(e).__name__})", None)
                     continue
-                label = f"#{seq[i]}  {md.scene_id} · 물체 {len(md.objects)}개"
+                label = f"{scene_label(md.scene_id, ords)} · 물체 {len(md.objects)}개"
                 if md.description:
                     label += f" · {md.description[:28]}"
                 self.win.scene_combo.addItem(label, md.scene_id)
+                self.win.scene_combo.setItemData(
+                    self.win.scene_combo.count() - 1,
+                    f"{md.scene_id}\n{p.name}", Qt.ItemDataRole.ToolTipRole)
         except Exception:  # noqa: BLE001
             pass
         self.win.scene_combo.blockSignals(False)

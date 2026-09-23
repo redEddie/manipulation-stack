@@ -211,6 +211,61 @@ def new_scene_id(root: Path | None = None) -> str:
             return sid
 
 
+#: (파일 지문) -> {scene_id: 순번}. list_scene_episodes 와 같은 방식으로
+#: 캐시한다 -- 정본은 파일이고, 폴더가 바뀌면 지문이 달라져 무효가 된다.
+_ORDINAL_CACHE: dict = {}
+
+
+def scene_ordinals(root: Path) -> dict:
+    """``{scene_id: 1,2,3...}`` -- **만든 순서**. 화면에서만 쓴다.
+
+    scene ID 가 불투명해지면서(``S7QK3M2A``) 사람이 "몇 번째 scene" 을 말할
+    방법이 없어졌다. 그 자리를 이 번호가 메운다.
+
+    **어디에도 저장하지 않는다.** 저장하는 순간 두 번째 식별자가 되고, 앞의
+    scene 을 지우면 낡는다 -- 2026-09-17 의 재넘버링이 그래서 문제였다
+    (CLAUDE.md). 파일·episode_uid·Hub 가 쓰는 이름은 언제나 scene_id 다.
+    지우면 뒤 번호가 당겨지는 것이 정상이고, 그래서 번호로 파일을 찾으면 안 된다.
+
+    metadata attrs 만 읽는다 (이미지 청크는 안 건드린다). created 를 모르는
+    파일은 뒤로, 같은 값이면 scene_id 로 가른다 -- 두 번 읽어도 같은 표가
+    나와야 한다.
+    """
+    root = Path(root)
+    files = iter_scene_files(root)
+    try:
+        fp = tuple((p.name, p.stat().st_mtime_ns) for p in files)
+    except OSError:
+        fp = None
+    if fp is not None and fp in _ORDINAL_CACHE:
+        return dict(_ORDINAL_CACHE[fp])
+    rows = []
+    for p in files:
+        try:
+            with h5py.File(p, "r") as f:
+                a = f["metadata"].attrs
+                rows.append((str(a.get("created", "")), str(a["scene_id"])))
+        except Exception:  # noqa: BLE001 -- 잠겼거나 깨진 파일은 번호에서 뺀다
+            continue
+    rows.sort(key=lambda r: (not r[0], r[0], r[1]))
+    out = {sid: n for n, (_c, sid) in enumerate(rows, start=1)}
+    if fp is not None:
+        _ORDINAL_CACHE.clear()          # 폴더 하나 분량만 들고 있으면 된다
+        _ORDINAL_CACHE[fp] = dict(out)
+    return out
+
+
+def scene_label(scene_id: str, ordinals: "dict | None" = None) -> str:
+    """화면에 쓰는 짧은 이름 -- ``#7``. 번호를 모르면 ID 그대로.
+
+    ID 를 함께 보여주지 않는 이유는 길이다. 여덟 글자 난수는 목록에서 읽히지
+    않고 자리만 먹는다 (조작자, 2026-09-23). 전체 ID 가 필요한 자리 -- 툴팁,
+    상세 카드, 로그 -- 에는 그대로 남는다. 파일을 찾을 때 쓰는 것은 ID 다.
+    """
+    n = (ordinals or {}).get(scene_id)
+    return f"#{n}" if n else str(scene_id)
+
+
 def next_scene_id(root: Path) -> str:
     """옛 이름. ``new_scene_id`` 를 부른다 -- "다음" 이라는 말이 순서를
     풍기지만 더 이상 순서가 없다. 부르는 곳을 옮긴 뒤 지운다."""

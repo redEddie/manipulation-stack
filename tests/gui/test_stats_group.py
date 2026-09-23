@@ -24,17 +24,21 @@ WT = str(Path(__file__).resolve().parents[2])   # 리포 루트
 sys.path.insert(0, WT)
 
 from mstack.data.episode_stats import scan_dataset, task_table  # noqa: E402
-from mstack.scene.scene_format import SceneMetadata, SceneWriter, list_scene_episodes  # noqa: E402
+from mstack.scene.scene_format import (  # noqa: E402
+    SceneMetadata, SceneWriter, list_scene_episodes, scene_filename,
+)
 
 d = Path(tempfile.mkdtemp(prefix="statsgrp_"))
 subprocess.run([sys.executable, WT + "/scripts/check/check_scene_file.py",
                 "--selftest", "--keep", str(d)], check=True, capture_output=True)
-scene0 = d / "scene_000.hdf5"
+SID_A = "SAAAAAAA1"          # selftest 의 고정 픽스처 ID
+SID_B = "SBBBBBBB1"          # 이 테스트가 새로 만드는 scene (불투명 ID)
+scene0 = d / scene_filename(SID_A)
 eps0 = list_scene_episodes(scene0)
 sentence = eps0[0]["instruction"]
 
-# 같은 문장으로 S001 을 하나 더 만든다 -- 훨씬 느린(작은 |Δa|) 궤적으로
-md = SceneMetadata(scene_id="S001", objects=["OBJ-CUP-BLU-01", "OBJ-BOWLS-WHT-01"],
+# 같은 문장으로 SID_B 를 하나 더 만든다 -- 훨씬 느린(작은 |Δa|) 궤적으로
+md = SceneMetadata(scene_id=SID_B, objects=["OBJ-CUP-BLU-01", "OBJ-BOWLS-WHT-01"],
                    layout={"grid": [3, 3], "placements": {
                        "OBJ-CUP-BLU-01": {"zone": [0, 0]},
                        "OBJ-BOWLS-WHT-01": {"zone": [2, 2]}}})
@@ -54,27 +58,28 @@ for _ in range(3):
                   success=True, collector="t")
 w.close()
 
-stats = scan_dataset([str(scene0), str(d / "scene_001.hdf5"),
+stats = scan_dataset([str(scene0), str(d / scene_filename(SID_B)),
                       str(d / "selftest_task_demo.hdf5")])
 by_group = {}
 for s in stats:
     by_group.setdefault(s.group, []).append(s)
 groups_same_sentence = [g for g in by_group if g[1] == sentence]
 scenes = sorted(g[0] for g in groups_same_sentence)
-assert scenes == ["S000", "S001"], scenes                # 같은 문장이 scene 별로 분리
-# S001 그룹은 자기들끼리만 비교 -> 전부 느려도 그룹 내 편차는 ~0 (튀는 것 없음)
-s1 = by_group[("S001", sentence)]
+assert scenes == sorted([SID_A, SID_B]), scenes       # 같은 문장이 scene 별로 분리
+# SID_B 그룹은 자기들끼리만 비교 -> 전부 느려도 그룹 내 편차는 ~0 (튀는 것 없음)
+s1 = by_group[(SID_B, sentence)]
 assert all(abs(s.task_dev) < 1e-6 for s in s1), [s.task_dev for s in s1]
 assert not any(s.flagged for s in s1)
 # 그룹 라벨은 scene 이 앞에 붙는다, legacy 는 문장만
-assert s1[0].group_label.startswith("S001 · ")
+assert s1[0].group_label.startswith(f"{SID_B} · ")
 leg = [s for s in stats if s.scene == ""]
 assert leg and leg[0].group_label == leg[0].task
 # task_table 도 그룹 단위 행
 rows = task_table(stats)
-assert any(r_["scene"] == "S001" and r_["task"] == sentence for r_ in rows)
-assert any(r_["scene"] == "S000" and r_["task"] == sentence for r_ in rows)
-print(f"통과: (scene,문장) 그룹 분리 -- 그룹 {len(by_group)}개, S001 느린 궤적이 S000 기준으로 튀지 않음")
+assert any(r_["scene"] == SID_B and r_["task"] == sentence for r_ in rows)
+assert any(r_["scene"] == SID_A and r_["task"] == sentence for r_ in rows)
+print(f"통과: (scene,문장) 그룹 분리 -- 그룹 {len(by_group)}개, "
+      f"{SID_B} 느린 궤적이 {SID_A} 기준으로 튀지 않음")
 
 # ---- GUI: 후보 목록은 왼쪽 패널(Scene 콤보 + Instruction 목록)을 따른다 ----
 sys.path.insert(0, WT + "/apps")
@@ -105,12 +110,12 @@ assert win.rank_combo.count() >= 5, win.rank_combo.count()
 # 그룹 열은 없앴다 -- 한 지시문 안에서만 보므로 같은 값만 반복한다.
 assert win.rank_tree.columnCount() == 4, win.rank_tree.columnCount()
 
-scene1 = d / "scene_001.hdf5"
+scene1 = d / scene_filename(SID_B)
 
-# 왼쪽 패널을 (씬=S001, 지시문=I000) 으로 놓는다 -- 갤러리 로더 대신 직접.
+# 왼쪽 패널을 (씬=SID_B, 지시문=I000) 으로 놓는다 -- 갤러리 로더 대신 직접.
 # Gallery 가 채우는 것과 같은 모양: instruction 목록 첫 줄은 (전체)=None,
 # 그 다음 줄에 instruction_id.
-win.gallery_scene_combo.addItem("scene_001", str(scene1))
+win.gallery_scene_combo.addItem(scene_filename(SID_B), str(scene1))
 win.gallery_scene_combo.setCurrentIndex(win.gallery_scene_combo.count() - 1)
 eps1 = list_scene_episodes(scene1)
 win.gallery.shown = eps1

@@ -248,7 +248,7 @@ class NewDatasetPage(QWizardPage):
         form.addRow(tr("생성될 경로"), self.preview)
         self.copy_combo = QComboBox()
         self.copy_combo.currentIndexChanged.connect(self._on_copy_pick)
-        form.addRow(tr("설정 가져오기"), self.copy_combo)
+        form.addRow(tr("컨셉 가져오기"), self.copy_combo)
         self.concept_edit = QPlainTextEdit()
         self.concept_edit.setPlaceholderText(
             tr("이 데이터셋이 어떤 태스크·장면을 모으는지 (업로드 시 설명으로 쓰입니다)"))
@@ -269,7 +269,7 @@ class NewDatasetPage(QWizardPage):
         self._entries = discover_datasets(candidates)
         self.copy_combo.blockSignals(True)
         self.copy_combo.clear()
-        self.copy_combo.addItem(tr("(비어 있게 시작)"), None)
+        self.copy_combo.addItem(tr("(가져오지 않음)"), None)
         for e in self._entries:
             # data 는 str 로 -- Path 객체는 findData 가 identity 비교라 못 찾는다
             self.copy_combo.addItem(e.name, str(e.path))
@@ -313,7 +313,10 @@ class NewDatasetPage(QWizardPage):
             self.concept_edit.setPlainText(entry.identity.concept)
 
     def copy_source(self) -> "Path | None":
-        """설정을 복사해올 원본 데이터셋 폴더 (없으면 None)."""
+        """컨셉 문장을 가져올 원본 데이터셋 폴더 (없으면 None).
+
+        **지시문 계획은 가져오지 않는다** -- 이유는 wizard._build_result 에.
+        """
         data = self.copy_combo.currentData()
         return Path(data) if data else None
 

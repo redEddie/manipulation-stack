@@ -62,14 +62,14 @@ import subprocess  # noqa: E402
 _d = Path(tempfile.mkdtemp(prefix="replay_"))
 subprocess.run([sys.executable, WT + "/scripts/check/check_scene_file.py",
                 "--selftest", "--keep", str(_d)], check=True, capture_output=True)
-t1 = load_trajectory(_d / "scene_000.hdf5", "episode_000")
+t1 = load_trajectory(_d / "scene_AAAAAAA1.hdf5", "episode_000")
 assert t1["q"].shape[1] == 7 and len(t1["grip"]) == len(t1["q"])
 assert t1["source"] == "commanded_joint_states"
 t2 = load_trajectory(_d / "selftest_task_demo.hdf5", "demo_0")
 assert t2["q"].shape[1] == 7
 # 없는 에피소드 / 없는 파일 -> 친절한 SystemExit
 try:
-    load_trajectory(_d / "scene_000.hdf5", "episode_999")
+    load_trajectory(_d / "scene_AAAAAAA1.hdf5", "episode_999")
     raise AssertionError("없는 에피소드가 통과됨")
 except SystemExit as e:
     assert "가 없습니다" in str(e) and "episode_000" in str(e), e

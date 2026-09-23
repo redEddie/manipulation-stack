@@ -19,7 +19,9 @@ from mstack.collect.worker import (
     GATE_RAD,
     WorkerConfig,
 )
-from mstack.scene.scene_format import count_by_slot, read_scene_metadata, scene_filename
+from mstack.scene.scene_format import (count_by_slot, read_scene_metadata,
+                                       scene_filename, scene_label,
+                                       scene_ordinals)
 from apps.workspace.features.collection.header import set_header_state
 from apps.workspace.features.collection.page import set_live_keys
 from apps.workspace.models import _new_stats
@@ -253,7 +255,10 @@ class CollectionOps:
             else:
                 text = self.win.lang_edit.text().strip()
             sentence.setText(text)
-        head = f"{sid} · {iid}" if iid else str(sid)
+        # HUD 는 곁눈질로 읽는 자리다 -- 난수 ID 대신 #번호.
+        root = Path(self.win.root_edit.text().strip() or ".")
+        short = scene_label(sid, scene_ordinals(root)) if sid else ""
+        head = f"{short} · {iid}" if iid else str(short)
         if target is not None:
             # 목표 도달은 초록. 초과(11/10)도 그대로 -- 숫자는 정확히.
             label.setText(f"{head} · {usable}/{target}")
@@ -273,7 +278,9 @@ class CollectionOps:
         self.win.hud_counter.setStyleSheet(
             "color:#7bed9f;" if target is not None and usable >= target
             else "color:#fff;")
-        self.win.hud_slot.setText(f"{sid} · {iid}" if iid else str(sid or ""))
+        short = (scene_label(sid, scene_ordinals(
+            Path(self.win.root_edit.text().strip() or "."))) if sid else "")
+        self.win.hud_slot.setText(f"{short} · {iid}" if iid else str(short or ""))
         # 지시문: 세션 중이면 워커가 쥔 것, 아니면 Configure 에서 고른 것.
         if self.win.session.scene_session and self.win.worker is not None:
             instr = getattr(self.win.worker, "_slot_instruction", "")

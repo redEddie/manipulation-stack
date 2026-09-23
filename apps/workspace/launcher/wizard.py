@@ -18,7 +18,6 @@ Finish 하면:
 
 from __future__ import annotations
 
-import shutil
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -31,7 +30,6 @@ from mstack.data.dataset_schema import SCHEMA_VERSION
 from mstack.scene.dataset_meta import (
     DatasetIdentity,
     load_identity,
-    plan_path,
     save_identity,
 )
 from mstack.gui.i18n import tr
@@ -148,9 +146,15 @@ class LauncherWizard(QWizard):
                 created=today, station=station, cameras=dict(serials))
             root.mkdir(parents=True, exist_ok=False)
             save_identity(root, ident)
-            src = pg.copy_source()
-            if src is not None and plan_path(src).is_file():
-                shutil.copy2(plan_path(src), plan_path(root))
+            # **지시문(instructions.json)은 가져오지 않는다.** 예전에는
+            # 고른 데이터셋의 계획 파일을 그대로 복사했는데, 새 데이터셋을
+            # 만드는 이유는 대개 다른 것을 모으려는 것이라 남의 scene 과
+            # 문장이 통째로 딸려 왔다 -- 그리고 그 안의 scene_id 는 이 폴더에
+            # 존재하지도 않는 파일을 가리킨다. 진행률·추천·검증이 전부 그
+            # 유령 항목을 세고, 지우는 것은 사람 몫이었다 (조작자, 2026-09-23).
+            #
+            # 컨셉 문장은 계속 가져온다 -- 그쪽은 칸에 채워져 보이고 고칠 수
+            # 있어서, 원하지 않으면 지우면 된다 (pages.NewDatasetPage).
         else:
             pg2: ContinuePage = self.page(PAGE_CONTINUE)  # type: ignore[assignment]
             root = pg2.selected_path()

@@ -49,6 +49,7 @@ from mstack.scene.scene_format import (  # noqa: E402
     QUALITY_BAD_DATA,
     QUALITY_STATUSES,
     SCENE_FILE_RE,
+    SCENE_ID_OPAQUE_RE,
     SceneMetadata,
     SceneWriter,
     count_by_slot,
@@ -58,6 +59,7 @@ from mstack.scene.scene_format import (  # noqa: E402
     next_scene_id,
     read_reference_image,
     read_scene_metadata,
+    scene_filename,
 )
 
 REQUIRED_EPISODE_ATTRS = (
@@ -329,8 +331,10 @@ def selftest(keep: Path | None) -> None:
         },
         "relations": [["OBJ-CUP-BLU-01", "next_to", "OBJ-BOWLS-YEL-01"]],
     }
-    sid = next_scene_id(root)
-    assert sid == "S000", sid
+    # scene ID 는 불투명 난수다. selftest 산출물은 tests/gui 픽스처(--keep)로도
+    # 쓰이므로 소비자가 파일명을 박아 쓸 수 있게 **새 형식을 하나 고정**한다
+    # -- "첫 번째면 S000" 같은 순서 가정은 ID 에 순서가 없어져서 성립하지 않는다.
+    sid = "SAAAAAAA1"
     md = SceneMetadata(
         scene_id=sid,
         objects=["OBJ-CUP-BLU-01", "OBJ-CUP-WHT-01", "OBJ-BOWLS-YEL-01",
@@ -390,14 +394,14 @@ def selftest(keep: Path | None) -> None:
     _expect_raise(FileExistsError, lambda: SceneWriter(root, metadata=md), "기존 scene 덮어쓰기")
 
     # -- resume: 파일에서 metadata 를 읽고, 번호는 이어서
-    w2 = SceneWriter(root, scene_id="S000", resume=True, collector="tester2")
+    w2 = SceneWriter(root, scene_id=sid, resume=True, collector="tester2")
     assert w2.metadata.objects == md.objects
     _dummy_frames(w2, seed=5)
     assert w2.save_buffer(w2.detach_buffer(), instruction=I3, instruction_id="I003", success=True) == "episode_003"
     assert w2.num_episodes == 4
     w2.close()
 
-    path = root / "scene_000.hdf5"
+    path = root / scene_filename(sid)
 
     # -- 불변식 전수 검사
     problems = verify_scene_file(path)
@@ -409,7 +413,8 @@ def selftest(keep: Path | None) -> None:
     eps = list_scene_episodes(path)
     # E번호는 slot 로컬 -- I000 과 I003 이 각각 E000 부터 센다
     assert [e["episode_uid"] for e in eps] == [
-        "EP-S000-I000-E000", "EP-S000-I000-E001", "EP-S000-I003-E000", "EP-S000-I003-E001"]
+        f"EP-{sid}-I000-E000", f"EP-{sid}-I000-E001",
+        f"EP-{sid}-I003-E000", f"EP-{sid}-I003-E001"]
     assert [e["collector"] for e in eps] == ["tester", "tester", "tester", "tester2"]
     assert eps[1]["quality_status"] == "bad_data" and eps[1]["success"] is False
     assert count_by_slot(path) == {
@@ -425,7 +430,11 @@ def selftest(keep: Path | None) -> None:
             assert g[f"obs/{key}"].dtype == np.float32, key
         assert str(g.attrs["instruction"]) == I0  # 따옴표 없이 그대로
     assert read_reference_image(path) is not None
-    assert next_scene_id(root) == "S001"
+    # 새 ID 는 난수다 -- "다음 번호가 뭐냐"가 아니라 "새 ID 가 규격에 맞고
+    # 기존 파일과 겹치지 않는가"가 단정할 성질이다.
+    nid = next_scene_id(root)
+    assert SCENE_ID_OPAQUE_RE.match(nid) and nid != sid \
+        and not (root / scene_filename(nid)).exists(), nid
     md_back = read_scene_metadata(path)
     assert md_back.description == md.description
     assert empty_zones(md_back.layout) == [(0, 1), (1, 0), (1, 2), (2, 1)]
@@ -441,7 +450,7 @@ def selftest(keep: Path | None) -> None:
     from mstack.scene.scene_format import delete_scene_episodes
     probe_dir = root / "editprobe"
     probe_dir.mkdir(exist_ok=True)
-    probe = probe_dir / "scene_000.hdf5"
+    probe = probe_dir / scene_filename(sid)
     _shutil.copyfile(path, probe)
     with h5py.File(probe, "r") as f:
         assert int(f["metadata"].attrs.get("edit_count", 0)) == 0
@@ -465,7 +474,7 @@ def selftest(keep: Path | None) -> None:
     #    knu-1.1.1 로 남았다. 세 갈래를 다 주면 올라가는지 여기서 고정한다.
     raise_dir = root / "raiseprobe"
     raise_dir.mkdir(exist_ok=True)
-    low = raise_dir / "scene_000.hdf5"
+    low = raise_dir / scene_filename(sid)
     _shutil.copyfile(path, low)
     with h5py.File(low, "r+") as f:
         m = f["metadata"]
@@ -476,7 +485,7 @@ def selftest(keep: Path | None) -> None:
             if a in m.attrs:
                 del m.attrs[a]
     w = SceneWriter(
-        raise_dir, scene_id="S000", resume=True, session_version="knu-1.2.2",
+        raise_dir, scene_id=sid, resume=True, session_version="knu-1.2.2",
         session_payload={"mass": 0.85, "com": [-0.01, 0.0, 0.03]},
         session_reset={"name": "libero", "qpos": [0.0] * 7},
         session_provenance={"collector_commit": "deadbeef",
@@ -492,18 +501,18 @@ def selftest(keep: Path | None) -> None:
         assert str(m["collector_commit"]) == "deadbeef", dict(m)
         assert str(m["fr3_system_version"]) == "5.10.0", dict(m)
     # 판번호를 모르면 예전처럼 올리지 않는다 (도장이 내용을 넘어서면 안 된다)
-    noprov = raise_dir / "scene_001.hdf5"
+    noprov = raise_dir / scene_filename("SAAAAAAA2")
     _shutil.copyfile(low, noprov)
     with h5py.File(noprov, "r+") as f:
         m = f["metadata"]
         m.attrs["dataset_version"] = "knu-1.1.1"
-        m.attrs["scene_id"] = "S001"
+        m.attrs["scene_id"] = "SAAAAAAA2"
         for a in ("payload_mass", "payload_com", "reset_pose", "reset_qpos",
                   "provenance_source"):
             if a in m.attrs:
                 del m.attrs[a]
     w2 = SceneWriter(
-        raise_dir, scene_id="S001", resume=True, session_version="knu-1.2.2",
+        raise_dir, scene_id="SAAAAAAA2", resume=True, session_version="knu-1.2.2",
         session_payload={"mass": 0.85, "com": [-0.01, 0.0, 0.03]},
         session_reset={"name": "libero", "qpos": [0.0] * 7},
         session_provenance=None)

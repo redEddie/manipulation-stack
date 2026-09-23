@@ -37,7 +37,7 @@ from mstack.scene.scene_format import (  # noqa: E402
 d = Path(tempfile.mkdtemp(prefix="sceneedit_"))
 subprocess.run([sys.executable, WT + "/scripts/check/check_scene_file.py",
                 "--selftest", "--keep", str(d)], check=True, capture_output=True)
-scene = d / "scene_000.hdf5"
+scene = d / "scene_AAAAAAA1.hdf5"   # selftest 의 고정 픽스처 ID
 eps0 = list_scene_episodes(scene)
 names0 = [e["name"] for e in eps0]
 by_slot = {}
@@ -323,7 +323,7 @@ from mstack.data.proxy_clip import proxy_path, remap_scene_proxies  # noqa: E402
 d3 = Path(tempfile.mkdtemp(prefix="sceneedit_remap_"))
 subprocess.run([sys.executable, WT + "/scripts/check/check_scene_file.py",
                 "--selftest", "--keep", str(d3)], check=True, capture_output=True)
-sc3 = d3 / "scene_000.hdf5"
+sc3 = d3 / "scene_AAAAAAA1.hdf5"
 eps3 = list_scene_episodes(sc3)
 slots3 = {}
 for e in eps3:

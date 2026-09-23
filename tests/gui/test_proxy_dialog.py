@@ -31,7 +31,7 @@ app = QApplication.instance() or QApplication(sys.argv)
 d = Path(tempfile.mkdtemp(prefix="proxydlg_"))
 subprocess.run([sys.executable, str(WT / "scripts/check/check_scene_file.py"),
                 "--selftest", "--keep", str(d)], check=True, capture_output=True)
-scene = d / "scene_000.hdf5"
+scene = d / "scene_AAAAAAA1.hdf5"   # selftest 의 고정 픽스처 ID
 proxies = Path(tempfile.mkdtemp(prefix="proxydlg_clips_"))
 
 sc = scan_file(scene, proxies)
