@@ -200,7 +200,9 @@ def _scan_file(path: Path) -> tuple:
         meta_scene_id = (str(mattrs["scene_id"]) if "scene_id" in mattrs
                          else None)
         scene_row = {
-            "ordinal": meta_scene_id,
+            # **여기서는 비워 둔다.** 순번은 한 파일만 보고는 못 정한다 --
+            # 폴더 전체를 created 순으로 세워야 나온다 (아래 _number_scenes).
+            "ordinal": None,
             "scene_id": meta_scene_id,
             "created": mattrs.get("created"),
             "n_episodes": 0,
@@ -243,6 +245,30 @@ def _write_tsv(path: Path, header: tuple, rows: list) -> None:
     for row in rows:
         lines.append("\t".join(_clean(row.get(k)) for k in header))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _number_scenes(scenes: list) -> None:
+    """``ordinal`` 을 **만든 순서**로 1 부터 매긴다 (제자리 수정).
+
+    scene ID 가 불투명해지면서(``S7QK3M2A``) 사람이 "몇 번째 scene" 을 말할
+    방법이 없어졌다. 그 자리를 이 열이 맡는다 -- R2R 처럼 "짧은 불투명 ID +
+    별도의 넘버링 문서" 이고, 이 파일이 그 문서다.
+
+    **순번은 표시용이지 식별자가 아니다.** 앞의 scene 을 지우면 뒤의 순번이
+    당겨지고, 그래서 어디에도 저장하지 않는다 -- 저장하는 순간 2026-09-17 의
+    재넘버링과 같은 것이 된다 (CLAUDE.md 의 규칙). 파일·에피소드·Hub 가
+    쓰는 이름은 언제나 scene_id 다.
+
+    created 를 모르는 파일은 뒤로 보낸다. 같은 값이면 scene_id 로 가른다 --
+    무엇이든 한 가지로 정해져야 두 번 읽을 때 같은 표가 나온다.
+    """
+    order = sorted(
+        range(len(scenes)),
+        key=lambda i: (scenes[i].get("created") is None,
+                       str(scenes[i].get("created") or ""),
+                       str(scenes[i].get("scene_id") or "")))
+    for n, i in enumerate(order, start=1):
+        scenes[i]["ordinal"] = n
 
 
 def build_dataset_index(root: Path,
@@ -300,6 +326,7 @@ def build_dataset_index(root: Path,
             "n_episodes": cell["n_episodes"],
             "n_ok": cell["n_ok"],
         })
+    _number_scenes(scenes)
     result = DatasetIndex(scenes=scenes, cells=cells, episodes=episodes,
                           errors=errors)
     if out_dir is not None:

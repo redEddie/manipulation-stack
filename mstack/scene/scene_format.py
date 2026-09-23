@@ -128,36 +128,93 @@ from mstack.config.quality import (  # noqa: F401  (여기서 재수출한다)
 )
 
 # ------------------------------------------------------------------- ID 규칙
-SCENE_ID_RE = re.compile(r"^S(\d{3,})$")
+#
+# scene ID 는 **불투명**하다 -- ``S7QK3M2A`` 처럼 순서도 뜻도 없는 값이다.
+# 예전에는 ``S000`` 부터 세는 번호였고, 번호에는 두 가지가 딸려 온다:
+#
+# * 중간을 지우면 "다시 채워야 할 것 같은" 구멍이 남는다. 2026-09-17 에
+#   실제로 그렇게 했다 -- scene 6개를 빼고 **22개를 재넘버링**했고, 그
+#   순간 이미 밖으로 나간 모든 ``episode_uid`` 가 다른 것을 가리키게 됐다
+#   (Hub 데이터셋, 논문 표, 사람의 메모). 되돌릴 방법은
+#   ``scene_renumber_20260917.json`` 뿐이다.
+# * 번호는 "몇 번째"라는 뜻을 풍긴다. 그래서 "0번은 reset 으로 예약하자"
+#   같은 생각이 자연스러워지는데, 그것은 위치에 의미를 싣는 일이고 같은
+#   사고를 한 번 더 부른다 (PlanSlot.kind 주석).
+#
+# 사람이 읽을 이름은 색인이 준다 (``dataset_index`` 의 ``scenes.tsv``) --
+# R2R 처럼 "짧은 불투명 ID + 별도의 넘버링 문서" 다. 그래서 ID 자체는 짧고
+# 헷갈리지 않기만 하면 된다.
+#
+# 글자는 Crockford base32 에서 ``I L O U`` 를 뺀 것이다: 손으로 옮겨 적거나
+# 읽어 줄 때 1/I, 0/O 가 섞이지 않고, U 는 빼면 우연히 만들어지는 낱말이
+# 준다. 8글자면 32^8 = 1.1e12 라 실수로 겹칠 일이 없다.
+SCENE_ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+SCENE_ID_LEN = 8
+#: 새로 만드는 ID 의 모양.
+SCENE_ID_OPAQUE_RE = re.compile(rf"^S[{SCENE_ID_ALPHABET}]{{{SCENE_ID_LEN}}}$")
+#: 번호 시절의 모양. **읽기는 계속 받는다.** 새 ID 를 쓰기로 한 것이지 옛
+#: 파일을 못 읽게 하기로 한 것이 아니다 -- fr3-tabletop 의 24개는 논문 분석에
+#: 계속 쓰이고, 거부하면 그 폴더 전체가 안 열린다.
+SCENE_ID_LEGACY_RE = re.compile(r"^S(\d{3,})$")
+SCENE_ID_RE = re.compile(
+    rf"^S(?:[{SCENE_ID_ALPHABET}]{{{SCENE_ID_LEN}}}|\d{{3,}})$")
 INSTRUCTION_ID_RE = re.compile(r"^I(\d{3,})$")
-# 파일명은 scene ID 에서 기계적으로 파생된다. 이 정규식은 scene ID 할당과 파일
-# 목록에만 쓴다 -- 파일명에서 task/instruction 을 판별하는 용도가 아니다(그건
-# metadata 가 정본이고, 이 포맷에는 애초에 파일명에 instruction 이 없다).
-SCENE_FILE_RE = re.compile(r"^scene_(\d{3,})\.hdf5$")
+# 파일명은 scene ID 에서 기계적으로 파생된다. 이 정규식은 파일 목록에만 쓴다
+# -- 파일명에서 task/instruction 을 판별하는 용도가 아니다(그건 metadata 가
+# 정본이고, 이 포맷에는 애초에 파일명에 instruction 이 없다).
+SCENE_FILE_RE = re.compile(
+    rf"^scene_(?:[{SCENE_ID_ALPHABET}]{{{SCENE_ID_LEN}}}|\d{{3,}})\.hdf5$")
 EPISODE_GROUP_RE = re.compile(r"^episode_(\d{3,})$")
 
 
 def scene_filename(scene_id: str) -> str:
     m = SCENE_ID_RE.match(scene_id)
     if not m:
-        raise ValueError(f"잘못된 scene ID: {scene_id!r} (예: 'S000')")
-    return f"scene_{int(m.group(1)):03d}.hdf5"
+        raise ValueError(
+            f"잘못된 scene ID: {scene_id!r} "
+            f"(S + {SCENE_ID_ALPHABET} 에서 {SCENE_ID_LEN}글자, 예: 'S7QK3M2A')")
+    if SCENE_ID_LEGACY_RE.match(scene_id):
+        # 번호 시절 파일명은 0 을 채운 3자리였다 -- S24 와 S024 가 같은
+        # 파일을 가리켰으므로 그 규칙을 유지한다.
+        return f"scene_{int(scene_id[1:]):03d}.hdf5"
+    return f"scene_{scene_id[1:]}.hdf5"
 
 
 def iter_scene_files(root: Path) -> list[Path]:
-    """``root`` 아래 scene 파일들을 번호순으로. legacy ``*_demo.hdf5`` 와는
-    글롭이 겹치지 않아 두 포맷이 같은 디렉터리에 있어도 서로 안 보인다."""
+    """``root`` 아래 scene 파일들. legacy ``*_demo.hdf5`` 와는 글롭이 겹치지
+    않아 두 포맷이 같은 디렉터리에 있어도 서로 안 보인다.
+
+    정렬은 **파일명 사전순**이다. ID 에 순서가 없으므로 이것은 "만든 순서"가
+    아니고, 그렇게 읽혀서도 안 된다 -- 목록을 시간순으로 보고 싶으면
+    metadata 의 ``created`` 를 쓴다. 여기서 정렬하는 이유는 같은 폴더가
+    언제 읽어도 같은 순서를 주게 하기 위해서다 (diff·로그가 흔들리지 않게).
+    """
     root = Path(root)
     out = [p for p in root.glob("scene_*.hdf5") if SCENE_FILE_RE.match(p.name)]
-    out.sort(key=lambda p: int(SCENE_FILE_RE.match(p.name).group(1)))
+    out.sort(key=lambda p: p.name)
     return out
 
 
+def new_scene_id(root: Path | None = None) -> str:
+    """새 scene ID. **번호가 아니라 난수다** -- 순서도 뜻도 없다.
+
+    ``root`` 를 주면 그 폴더에 같은 ID 가 있는지 확인하고 다시 뽑는다.
+    32^8 에서 부딪힐 일은 없지만, 확인이 한 번의 디렉터리 읽기라서 둔다.
+    """
+    import secrets
+
+    taken = {p.name for p in iter_scene_files(root)} if root is not None else set()
+    while True:
+        sid = "S" + "".join(secrets.choice(SCENE_ID_ALPHABET)
+                            for _ in range(SCENE_ID_LEN))
+        if scene_filename(sid) not in taken:
+            return sid
+
+
 def next_scene_id(root: Path) -> str:
-    """새 scene 에 줄 다음 ID. 기존 파일 번호의 max+1 -- 중간에 지워진 번호가
-    있어도 재사용하지 않는다 (scene ID 도 episode ID 처럼 재사용 금지)."""
-    nums = [int(SCENE_FILE_RE.match(p.name).group(1)) for p in iter_scene_files(root)]
-    return f"S{max(nums, default=-1) + 1:03d}"
+    """옛 이름. ``new_scene_id`` 를 부른다 -- "다음" 이라는 말이 순서를
+    풍기지만 더 이상 순서가 없다. 부르는 곳을 옮긴 뒤 지운다."""
+    return new_scene_id(root)
 
 
 def episode_uid(scene_id: str, instruction_id: str, episode_idx: int) -> str:

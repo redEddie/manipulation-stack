@@ -49,13 +49,30 @@ class SceneOps:
             sid_next = "S???"
         self.win.scene_combo.addItem(tr("— 새 Scene ({sid}) —").format(sid=sid_next), None)
         try:
+            # scene ID 가 불투명해서(S7QK3M2A) 그것만으로는 사람이 목록에서
+            # 자리를 못 잡는다. **만든 순서 번호를 앞에 붙인다** -- 색인
+            # (scenes.tsv) 의 ordinal 과 같은 규칙이고, 여기서는 이미 읽고
+            # 있는 metadata 의 created 로 그 자리에서 센다.
+            #
+            # 번호는 **표시용이다.** 고르면 넘어가는 값은 여전히 scene_id 라,
+            # 앞의 scene 을 지워 번호가 당겨져도 가리키는 파일은 안 바뀐다.
+            rows = []
             for p in iter_scene_files(root):
                 try:
-                    md = read_scene_metadata(p)
+                    rows.append((read_scene_metadata(p), None))
                 except Exception as e:  # noqa: BLE001
-                    self.win.scene_combo.addItem(f"{p.name} (읽기 실패: {type(e).__name__})", None)
+                    rows.append((None, f"{p.name} (읽기 실패: {type(e).__name__})"))
+            order = sorted(
+                (i for i, (md, _) in enumerate(rows) if md is not None),
+                key=lambda i: (not rows[i][0].created,
+                               str(rows[i][0].created or ""),
+                               str(rows[i][0].scene_id)))
+            seq = {i: n for n, i in enumerate(order, start=1)}
+            for i, (md, err) in enumerate(rows):
+                if md is None:
+                    self.win.scene_combo.addItem(err, None)
                     continue
-                label = f"{md.scene_id} · 물체 {len(md.objects)}개"
+                label = f"#{seq[i]}  {md.scene_id} · 물체 {len(md.objects)}개"
                 if md.description:
                     label += f" · {md.description[:28]}"
                 self.win.scene_combo.addItem(label, md.scene_id)

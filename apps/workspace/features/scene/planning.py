@@ -428,14 +428,18 @@ class ScenePlanningOps:
             return None, None, None, tr(
                 "{r} 에 scene 파일이 없습니다 — 첫 scene 은 '새 Scene 구성...' 으로 "
                 "사람이 정해야 합니다.").format(r=root)
-        # 파일명 번호가 곧 scene 번호다 (scene_NNN.hdf5). metadata 를 열어
-        # 확인하지 않는 이유: 여기서 알고 싶은 것은 "가장 최근 자리" 뿐이고,
-        # 파일 열기는 잠겨 있을 수 있다.
-        newest = max(files, key=lambda p: int(SCENE_FILE_RE.match(p.name).group(1)))
+        # **가장 최근 = 파일 수정 시각**이다. 예전에는 파일명 번호가 곧
+        # 순서라 max(번호) 였는데, scene ID 가 불투명해지면서(S7QK3M2A)
+        # 이름에 순서가 없어졌다 -- 그대로 두면 사전순 끝이 "최근"으로
+        # 뽑힌다. mtime 을 쓰는 이유는 metadata 의 created 와 달리 파일을
+        # 열지 않아도 되기 때문이다: 수집 중인 파일은 잠겨 있을 수 있고,
+        # 여기서 알고 싶은 것은 "마지막으로 찍던 자리" 라 오히려 mtime 이
+        # 정확하다 (created 는 만든 때이지 마지막으로 쓴 때가 아니다).
+        newest = max(files, key=lambda p: p.stat().st_mtime)
         try:
             sid = read_scene_metadata(newest).scene_id
         except Exception:  # noqa: BLE001 -- 잠겼거나 깨졌다: 파일명으로 되돌린다
-            sid = f"S{int(SCENE_FILE_RE.match(newest.name).group(1)):03d}"
+            sid = "S" + newest.stem.split("_", 1)[1]
 
         counts: dict = {}
         try:
