@@ -1598,6 +1598,8 @@ class CollectionWorker(QThread):
             cap_max = int(self.cfg.max_episode_seconds * 2
                           * max(60.0, float(self.cfg.fps) * 3))
             self._start_capture(cap_max)
+            # control 축 행의 목표 주기. 달성된 값은 기록기가 따로 잰다.
+            self._writer.set_control_hz(float(self.cfg.fps))
             t_next = time.monotonic()
             n = 0
             outcome = "save"

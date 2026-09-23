@@ -84,6 +84,26 @@ def _device_stamp(frame) -> dict:
         out["t_domain"] = str(frame.get_frame_timestamp_domain()).rsplit(".", 1)[-1]
     except Exception:  # noqa: BLE001
         pass
+    # 실측 노출 (µs). 되돌릴 수 없는 손실이라 비용이 0 인 지금 넣는다.
+    #
+    # 왜 필요한가: 자동 노출이 켜져 있고 손목 카메라(D405)의 실측 노출이
+    # 33 ms 로 프레임 주기(33.4 ms)와 거의 같다. 그 33 ms 동안 EE 가
+    # 0.136 m/s 로 움직이면 4.5 mm 가 한 장에 뭉갠다. 기록이 없으면
+    # (a) 그 뭉갬을 사후에 정량화할 수 없고 (b) t_device 의 기준점을 나중에
+    # 알아내도 보정할 수 없다.
+    #
+    # 기준점이 아직 미해결이다. 두 카메라의 노출이 200배 다른 것을 이용해
+    # "노출 시작은 아니다" 까지는 갈랐다 (노출이 33 ms 긴 wrist 의
+    # host-device 오프셋이 +32.8 ms 커야 하는데 실제로는 -6.43 ms 다).
+    # 프레임마다 노출을 남기면 노출을 바꿔가며 기울기를 재는 것으로
+    # 기준점을 확정할 수 있다 -- 지금은 그 실험 자체가 불가능하다.
+    try:
+        import pyrealsense2 as rs
+        key = rs.frame_metadata_value.actual_exposure
+        if frame.supports_frame_metadata(key):
+            out["exposure"] = int(frame.get_frame_metadata(key))
+    except Exception:  # noqa: BLE001 - 안 주는 드라이버/기종이 있다.
+        pass                                # 없는 값을 지어내지 않는다.
     return out
 
 
@@ -301,7 +321,11 @@ class FakeCameraWorker(CameraWorker):
             z16 = np.full((self.h, self.w), 800 + seq % 50, dtype=np.uint16)
             self.pub.send(f"{self.serial}/color",
                           {"ts": ts, "shape": rgb.shape,
-                           "dtype": "uint8", "seq": seq, "frame_no": seq},
+                           "dtype": "uint8", "seq": seq, "frame_no": seq,
+                           # 진짜 노드가 싣는 것과 같은 키들 -- 이것이 없으면
+                           # 축별 기록 경로가 가짜 노드로 검증되지 않는다.
+                           "t_device": ts - 0.015, "t_domain": "global_time",
+                           "exposure": 8000 + (seq % 5) * 100},
                           rgb.tobytes())
             self.pub.send(f"{self.serial}/depth",
                           {"ts": ts, "shape": (self.h, self.w, 1),

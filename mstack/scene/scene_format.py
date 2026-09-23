@@ -650,6 +650,10 @@ class SceneWriter:
     def discard_episode(self) -> None:
         self._buffer.clear()
 
+    def set_control_hz(self, hz: float) -> None:
+        """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
+        self._buffer.control_hz = float(hz)
+
     def set_capture(self, axis: str, frames: list) -> None:
         """카메라 한 대가 이 에피소드 동안 준 프레임 전부를 버퍼에 싣는다.
 

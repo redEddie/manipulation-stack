@@ -11,7 +11,12 @@ C6 의 나머지 절반이다. 앞 절반(`test_capture_all`)은 카메라 프�
    틀리고, 그 추정이 트림에서 실제로 카메라를 놓쳤다.
 3. **왕복.** 쓴 것을 `frame_table` 이 읽어 옛 표와 같은 규칙으로 짝지어야
    한다 -- 쓰는 쪽과 읽는 쪽이 갈리면 둘 다 맞아 보이면서 데이터가 틀어진다.
-4. **capture 가 없으면 옛 구조 그대로.** 모든 테스트와 연습 모드가 그 경로다.
+4. **목표 주기와 달성 주기가 나란히 남는다** (C2). 계열마다 시각이 있어 주기를
+   못 맞춰도 데이터는 안 상하지만, 남기지 않으면 "그때 몇 Hz 였지" 를 못 푼다.
+5. **노출이 프레임마다 남는다** (C7). 되돌릴 수 없는 손실이고 비용이 0 이다 --
+   손목 카메라의 실측 노출 33 ms 가 프레임 주기와 거의 같아, 기록이 없으면
+   그 뭉갬을 사후에 정량화할 수도 t_device 의 기준점을 보정할 수도 없다.
+6. **capture 가 없으면 옛 구조 그대로.** 모든 테스트와 연습 모드가 그 경로다.
 
 축 시각에 **장치 시각**을 쓰는 것이 여기서 드러난다: 같은 파일을
 ``align="arrival"`` 과 ``align="capture"`` 로 읽으면 **다른 프레임**이 골라진다.
@@ -68,13 +73,14 @@ def build(with_capture: bool):
             commanded_joint_positions=np.full(7, i, dtype=float),
             commanded_gripper=0.0,
             timing={TIMING_FRAME: t, TIMING_ACTION: t + 0.001})
+    buf.control_hz = HZ_CTRL
     if with_capture:
         # 값에 프레임 번호를 넣어 둔다 -- 어느 것이 골라졌는지 값만 보면 안다.
         for axis in ("agent", "wrist"):
             buf.set_capture(axis, [
                 (T0 + j / HZ_CAM + PIPE_MS, np.full((8, 8, 3), j, dtype="u1"),
                  {"t_device": T0 + j / HZ_CAM, "frame_no": 100 + j, "seq": j,
-                  "t_domain": "global_time"})
+                  "t_domain": "global_time", "exposure": 8000 + j})
                 for j in range(N_CAM)])
     p = os.path.join(TMP, f"cap{int(with_capture)}.h5")
     with h5py.File(p, "w") as f:
@@ -141,6 +147,18 @@ def main() -> None:
         assert ds.shape[0] == N_CAM and len(t) == N_CAM
         print(f"6. stream() 이 카메라 축 그대로 {N_CAM}장을 준다 OK")
 
+        # ---- 목표 주기와 달성 주기 (C2)
+        assert abs(e.attrs["control_hz"] - HZ_CTRL) < 1e-9, e.attrs["control_hz"]
+        got_hz = float(e.attrs["control_hz_actual"])
+        assert abs(got_hz - HZ_CTRL) < 0.5, got_hz
+        print(f"7. 목표 {e.attrs['control_hz']:.1f} Hz / 달성 {got_hz:.2f} Hz 가 "
+              "나란히 기록된다 OK (갈라지면 목표를 못 맞춘 것)")
+
+        # ---- 노출이 실린다 (C7)
+        assert "exposure" in e["meta/agent"], sorted(e["meta/agent"].keys())
+        assert len(e["meta/agent/exposure"]) == N_CAM
+        print(f"8. meta/<축>/exposure 가 {N_CAM}장 전부에 기록된다 OK")
+
     # ============================================ 7. capture 없으면 옛 구조
     p2 = build(with_capture=False)
     with h5py.File(p2, "r") as f:
@@ -151,7 +169,7 @@ def main() -> None:
         assert not has_axis_attr(e["actions"])
         ft = frame_table(e)
         assert len(ft) == N_CTRL and ft.version == "knu-1.x", (len(ft), ft.version)
-    print("7. capture 가 없으면 옛 한 행 = 한 프레임 그대로 OK")
+    print("9. capture 가 없으면 옛 한 행 = 한 프레임 그대로 OK")
 
     print("\n축별 기록 인수 통과")
 

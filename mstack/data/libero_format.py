@@ -277,9 +277,22 @@ class LiberoEpisodeBuffer:
         #: 카메라가 **자기 주기로** 준 것 전부. 20 Hz 루프가 집어간 것과
         #: 무관하며, 이것이 있으면 기록기가 축을 나눠 쓴다 (없으면 옛 경로).
         self.capture: dict[str, list] = {}
+        #: control 축 **행**의 목표 주기 (Hz). 달성된 주기는 기록기가
+        #: timing/frame 에서 직접 재고, 둘이 갈라지는 것이 목표를 못 맞췄다는
+        #: 유일한 단서다.
+        #:
+        #: 지금은 기록 주기(cfg.fps, 20 Hz)다. 명령은 그보다
+        #: teleop_substeps 배 자주 나가지만(100 Hz) 마지막 틱만 기록된다 --
+        #: 그 전부를 control 축에 남기는 것은 아직 안 한 일이고, 그때 이 값이
+        #: fps x substeps 가 된다.
+        self.control_hz: float = 0.0
 
     def __len__(self) -> int:
         return len(self.joint_states)
+
+    def set_control_hz(self, hz: float) -> None:
+        """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
+        self._buffer.control_hz = float(hz)
 
     def set_capture(self, axis: str, frames: list) -> None:
         """카메라 한 대가 이 에피소드 동안 준 프레임 전부를 싣는다.
@@ -513,7 +526,7 @@ def write_episode_payload(
     obs = grp.create_group("obs")
     if buf.per_axis:
         # knu-2.0.0: 카메라가 자기 주기로 준 것 전부를 자기 축에 쓴다.
-        _write_axes(grp, obs, buf, schema, pool)
+        _write_axes(grp, obs, buf, schema, pool, buf.control_hz)
     else:
         if schema.save_agentview_rgb:
             write_image_dataset(obs, OBS_AGENTVIEW_RGB,
@@ -628,7 +641,8 @@ def _tag_axis(grp: h5py.Group, name: str, axis: str = CONTROL_AXIS) -> None:
 
 
 def _write_axes(grp: h5py.Group, obs: h5py.Group, buf: "LiberoEpisodeBuffer",
-                schema: DatasetSchemaConfig, pool: Any) -> None:
+                schema: DatasetSchemaConfig, pool: Any,
+                schema_hz: float = 0.0) -> None:
     """knu-2.0.0 의 축별 기록: ``t/*``, 카메라 이미지, ``meta/*``.
 
     control 축(액션·상태)은 호출자가 옛 경로 그대로 쓴다 -- 20 Hz 루프가 한
@@ -656,6 +670,17 @@ def _write_axes(grp: h5py.Group, obs: h5py.Group, buf: "LiberoEpisodeBuffer",
             "축을 나눠 쓰려면 timing/frame 이 필요하다 -- 이 에피소드에는 없다")
     t0 = float(t_ctrl[0])
     grp.attrs["t0_wall"] = t0
+    # 목표 주기와 **실제로 달성된** 주기를 나란히 남긴다 (C2).
+    #
+    # 계열마다 시각이 있으므로 주기가 안 나와도 불규칙한 그대로 기록되고
+    # 데이터는 상하지 않는다. 그래서 120 Hz 실측을 선행 조건에서 뺄 수 있었다.
+    # 다만 남기지 않으면 나중에 "그때 몇 Hz 였지" 를 못 푼다.
+    if schema_hz:
+        grp.attrs["control_hz"] = float(schema_hz)
+    if t_ctrl.size > 1:
+        span = float(t_ctrl[-1] - t_ctrl[0])
+        if span > 0:
+            grp.attrs["control_hz_actual"] = (t_ctrl.size - 1) / span
     d = tg.create_dataset(CONTROL_AXIS, data=t_ctrl - t0)
     d.attrs["axis"] = CONTROL_AXIS
 
@@ -753,6 +778,10 @@ class NullTaskWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def set_control_hz(self, hz: float) -> None:
+        """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
+        self._buffer.control_hz = float(hz)
 
     def set_capture(self, axis: str, frames: list) -> None:
         """카메라 프레임 전부를 버퍼에 싣는다 (SceneWriter 와 같은 계약).
@@ -919,6 +948,10 @@ class LiberoTaskWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def set_control_hz(self, hz: float) -> None:
+        """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
+        self._buffer.control_hz = float(hz)
 
     def set_capture(self, axis: str, frames: list) -> None:
         """카메라 프레임 전부를 버퍼에 싣는다 (SceneWriter 와 같은 계약).
