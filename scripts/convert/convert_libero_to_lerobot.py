@@ -139,6 +139,7 @@ from lerobot.datasets.utils import DatasetInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from mstack.config.station import load_station  # noqa: E402
+from mstack.data.frame_table import frame_table  # noqa: E402
 from mstack.data.dataset_schema import (  # noqa: E402
     ACTION_SPACE_EE_DELTA,
     OBS_AGENTVIEW_RGB,
@@ -1012,13 +1013,26 @@ def main() -> None:
         wrist_crop = dict(zoom=wp.get("zoom", 1.0),
                           x_shift=wp.get("x", EYE_IN_HAND_CROP_X_SHIFT),
                           y_shift=wp.get("y", 0))
-        state_arrays = [obs[part][:] for part in state_parts]
-        cmd_arrays = [obs[part][:] for part in cmd_parts]
-        agent_rgb = obs[OBS_AGENTVIEW_RGB][:] if has_agent else None
-        wrist_rgb = obs[OBS_EYE_IN_HAND_RGB][:] if has_wrist else None
-        actions = grp["actions"][:]
-        actions_ee = grp["actions_ee"][:] if schema["has_actions_ee"] else None
-        n = actions.shape[0]
+        # 여섯 계열을 같은 t 로 인덱싱한다 -- 행이 필요하다. knu-2.0.0 은
+        # 계열마다 길이가 다르므로 frame_table 이 그 조인을 맡는다.
+        #
+        # rate=args.fps 를 주는 것이 요점이다: 변환기의 계약은
+        # "이 주파수로 내보낸다" 이고, 20 Hz 로 기록한 파일에서 30 Hz 를
+        # 요청하면 만들어낼 원본이 없다. frame_table 이 그 경우를 거부한다
+        # (옛 파일은 기록 주파수를 모르므로 통과한다 -- 오늘과 같다).
+        keys = list(state_parts) + list(cmd_parts)
+        if has_agent:
+            keys.append(OBS_AGENTVIEW_RGB)
+        if has_wrist:
+            keys.append(OBS_EYE_IN_HAND_RGB)
+        ft = frame_table(grp, rate=float(args.fps), keys=keys)
+        state_arrays = [ft.obs[part] for part in state_parts]
+        cmd_arrays = [ft.obs[part] for part in cmd_parts]
+        agent_rgb = ft.obs[OBS_AGENTVIEW_RGB] if has_agent else None
+        wrist_rgb = ft.obs[OBS_EYE_IN_HAND_RGB] if has_wrist else None
+        actions = ft.actions
+        actions_ee = ft.extra.get("actions_ee") if schema["has_actions_ee"] else None
+        n = len(ft)
         for t in range(n):
             frame = {"action": actions[t].astype("float32"), "task": task}
             if state_arrays:

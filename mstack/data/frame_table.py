@@ -83,6 +83,10 @@ class FrameTable:
     obs: dict
     #: (T, ...) 또는 None (anchor 가 control 이 아닐 때).
     actions: Optional[np.ndarray] = None
+    #: 에피소드 루트의 나머지 계열 -- ``actions_ee``, ``rewards``, ``dones``.
+    #: ``actions`` 와 같은 축(control)이라 같은 행으로 뽑힌다. 작아서(T x 7
+    #: float 수준) 항상 싣는다. anchor 가 control 이 아니면 비어 있다.
+    extra: dict = field(default_factory=dict)
     #: 축 이름 -> (T,) 행 시각과 그 이미지가 실제로 찍힌 시각의 차 (초).
     #: 항상 t_device 기준이다 -- align 과 무관하게 "내용이 얼마나 오래됐나" 다.
     image_age: dict = field(default_factory=dict)
@@ -141,6 +145,26 @@ def _collect_obs(grp: Any, keys: Optional[list] = None) -> dict:
     return out
 
 
+#: 루트 계열 중 ``actions`` 는 FrameTable.actions 로 따로 간다.
+_ROOT_SKIP = {"actions"}
+
+
+def _collect_root(ep: Any) -> dict:
+    """에피소드 루트의 계열들 (``actions_ee`` / ``rewards`` / ``dones``).
+
+    control 축에 실리므로 ``actions`` 와 같은 행으로 뽑으면 된다. 그룹
+    (``obs`` / ``t`` / ``meta`` / ``timing``) 은 건너뛴다.
+    """
+    out = {}
+    for k in ep.keys():
+        if k in _ROOT_SKIP:
+            continue
+        d = ep[k]
+        if hasattr(d, "shape") and not hasattr(d, "keys"):
+            out[k] = d
+    return out
+
+
 # ------------------------------------------------------------------ knu-1.3.0
 
 
@@ -195,7 +219,9 @@ def _table_v1(ep: Any, rate: Optional[float], align: str,
                 n_source[axis] = int(fn[-1] - fn[0]) + 1
     n_source[CONTROL_AXIS] = n_rows
 
-    return FrameTable(t=t, obs=obs, actions=actions, image_age=image_age,
+    extra = {k: d[:] for k, d in _collect_root(ep).items()}
+    return FrameTable(t=t, obs=obs, actions=actions, extra=extra,
+                      image_age=image_age,
                       n_source=n_source, rate=measured if rate is None else rate,
                       version=_episode_version(ep), align=align)
 
@@ -317,11 +343,15 @@ def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str,
         if axis in CAMERA_AXES:
             image_age[axis] = t_rows - ep["t"][axis][:][idx]
 
-    actions = None
-    if keep_actions and "actions" in ep:
-        actions = _read(ep["actions"], rows)
+    actions, extra = None, {}
+    if keep_actions:
+        if "actions" in ep:
+            actions = _read(ep["actions"], rows)
+        extra = {k: _read(d, rows) for k, d in _collect_root(ep).items()
+                 if axis_of(d) == CONTROL_AXIS}
 
-    ft = FrameTable(t=t_rows, obs=obs, actions=actions, image_age=image_age,
+    ft = FrameTable(t=t_rows, obs=obs, actions=actions, extra=extra,
+                    image_age=image_age,
                     n_source=n_source, rate=rate, version=_episode_version(ep),
                     align=align)
     _check_causal(ft, anchor)
