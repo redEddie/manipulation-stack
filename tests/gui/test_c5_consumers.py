@@ -106,14 +106,35 @@ def main() -> None:
         ep1 = f[EP]
         write_v2(ep1, p2, group=EP)
 
-        # ---- 1. load_series: state/commanded/action/n 이 두 레이아웃에서 같다
+        # ---- 1. load_series
+        #
+        # **두 레이아웃에서 행 수가 같지 않다, 그것이 설계다.** 이 함수는
+        # 사람이 보는 그래프를 만든다 (트림 뷰어와 통계 화면). knu-2.0.0 은
+        # 행을 카메라 축에 놓아 슬라이더 한 칸이 실제로 찍힌 사진 한 장이
+        # 되게 한다 (frame_table.viewer_plan). 1.3.0 은 축이 하나뿐이라
+        # 그대로다.
+        #
+        # 그래서 여기서 보는 것은 "같은 배열" 이 아니라 **같은 신호**다:
+        # 2.0.0 의 각 행은 1.3.0 의 어느 행과 값이 일치해야 한다 (영차 유지로
+        # 뽑았으므로 원본에 없던 값이 생기면 안 된다).
         s1 = load_series(str(DATASET), EP)
         s2 = load_series(p2, EP)
         for k in SERIES_KEYS:
             assert s1[k] is not None and s2[k] is not None, k
-            _assert_same(s1[k], s2[k], f"load_series[{k!r}]")
-        assert s1["n"] == s2["n"] == len(s1["action"]), (
-            s1["n"], s2["n"], len(s1["action"]))
+            assert s1[k].dtype == s2[k].dtype, (k, s1[k].dtype, s2[k].dtype)
+            assert s2[k].shape[1:] == s1[k].shape[1:], (k, s1[k].shape, s2[k].shape)
+            rows1 = {tuple(r) for r in np.asarray(s1[k])}
+            unseen = [i for i, r in enumerate(np.asarray(s2[k]))
+                      if tuple(r) not in rows1]
+            assert not unseen, (
+                f"load_series[{k!r}]: 2.0.0 행 {unseen[:3]} 이 1.3.0 에 없는 "
+                "값이다 -- 영차 유지가 아니라 보간이나 다른 계열을 집었다")
+        assert s1["n"] == len(s1["action"]) and s2["n"] == len(s2["action"]), (
+            s1["n"], s2["n"])
+        assert s2.get("anchor") in ("agent", "wrist"), s2.get("anchor")
+        assert s1.get("anchor") is None, s1.get("anchor")
+        print(f"   load_series: 1.3.0 {s1['n']}행(단일축) / "
+              f"2.0.0 {s2['n']}행({s2['anchor']} 축) -- 값은 전부 원본에 있다")
         # 1.3.0 에서의 결과가 예전 직접 읽기와 같다 (치환이 결과를 바꾸지 않음)
         raw = ep1["obs"]
         want_state = np.concatenate(
@@ -124,8 +145,8 @@ def main() -> None:
         _assert_same(s1["state"], want_state, "load_series[state] vs 직접 읽기")
         _assert_same(s1["commanded"], want_cmd, "load_series[commanded] vs 직접 읽기")
         _assert_same(s1["action"], ep1["actions"][:], "load_series[action] vs 직접 읽기")
-        print(f"1. load_series: state/commanded/action/n 이 두 레이아웃에서 "
-              f"같고 1.3.0 은 직접 읽기와 같다 ({s1['n']}행) OK")
+        print(f"1. load_series: 1.3.0 은 직접 읽기와 같고({s1['n']}행), "
+              f"2.0.0 은 카메라 축으로 옮겨도 값이 원본을 벗어나지 않는다 OK")
 
         # ---- 2. export_episode: VideoWriter 로 들어가는 프레임이 같다
         frames1 = _export_frames(ep1, Path(TMP) / "v1.mp4")

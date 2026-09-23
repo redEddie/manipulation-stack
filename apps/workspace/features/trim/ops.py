@@ -155,10 +155,40 @@ class TrimOps:
         self.trim_update()
         self.trim_seek(self.trim_keep() - 1)
 
+    def trim_axis(self) -> "str | None":
+        """화면이 행을 놓고 있는 축. knu-2.0.0 은 카메라, 그 전은 None.
+
+        슬라이더 한 칸이 그 축의 표본 하나이므로, 자를 개수도 그 축에서
+        세어 넘겨야 한다 -- 축마다 주파수가 달라 "몇 프레임" 은 축을 떠나면
+        뜻이 없다 (episode_trim.TrimPlan 참고).
+        """
+        s = getattr(self.win.trim, "series", None)
+        return (s or {}).get("anchor")
+
+    def trim_fps(self) -> float:
+        """화면 축의 실제 주파수. 재생 속도와 길이 표시가 이것을 따른다.
+
+        예전에는 20 으로 고정이었다. 화면이 control 축(20 Hz)에 있었으므로
+        맞았지만, knu-2.0.0 에서 행이 카메라 축(30 fps)으로 옮겨가면 재생이
+        1.5배 느려지고 "N프레임 = N/20 초" 표시도 틀린다.
+        """
+        s = getattr(self.win.trim, "series", None) or {}
+        t = s.get("t")
+        if t is not None and len(t) > 1 and t[-1] > t[0]:
+            return float((len(t) - 1) / (t[-1] - t[0]))
+        return float(PLAYBACK_FPS)
+
+    def trim_seconds(self) -> float:
+        s = getattr(self.win.trim, "series", None) or {}
+        t = s.get("t")
+        if t is not None and len(t) > 1:
+            return float(t[-1] - t[0])
+        return self.win.trim.n / float(PLAYBACK_FPS)
+
     def trim_suggest(self) -> None:
         if self.win.trim.key is None:
             return
-        n = suggest_trim(*self.win.trim.key)
+        n = suggest_trim(*self.win.trim.key, axis=self.trim_axis())
         self._trim_push()
         self.win.trim.n_pending = n
         self.win.log(f"[트림] 추천 {n}프레임" + ("" if n else " (이미 조용하게 끝납니다)"))
@@ -248,7 +278,7 @@ class TrimOps:
         없어, 빠르게 훑을 때도 놓치는 프레임이 없다 (Playback 탭과 같은 규약)."""
         t = self.win.trim.timer
         if t is not None:
-            t.setInterval(max(5, int(round(1000 / PLAYBACK_FPS / self.trim_speed()))))
+            t.setInterval(max(5, int(round(1000 / self.trim_fps() / self.trim_speed()))))
 
     def on_trim_speed_changed(self) -> None:
         self.apply_trim_speed()
@@ -306,10 +336,10 @@ class TrimOps:
             return
         path, demo = self.win.trim.key
         n_trim, keep = self.trim_pending(), self.trim_keep()
-        plan = plan_trim(path, [demo], max(n_trim, 1))[0]
+        plan = plan_trim(path, [demo], max(n_trim, 1), axis=self.trim_axis())[0]
         self.win.trim_summary.setText(
             tr("{d} · {n}프레임 ({s:.1f}s) · 마지막 그리퍼 동작 −{g}프레임").format(
-                d=demo, n=self.win.trim.n, s=self.win.trim.n / 20.0,
+                d=demo, n=self.win.trim.n, s=self.trim_seconds(),
                 g=plan.gripper_tail if plan.gripper_tail is not None else "?"))
         if count is not None:
             count.setText(
@@ -320,7 +350,8 @@ class TrimOps:
         # 재생바에도 같은 선을 긋는다. 자를 양을 바꿀 때 **눈에 보이는 것**이
         # 이것뿐이다 -- 위치 라벨은 그 프레임에 서 있을 때만 말해 준다.
         self.win.trim_slider.set_cut(keep - 1 if n_trim else None)
-        blocked = plan_trim(path, [demo], n_trim)[0].blocked if n_trim else None
+        blocked = (plan_trim(path, [demo], n_trim,
+                     axis=self.trim_axis())[0].blocked if n_trim else None)
         if apply_btn is not None:
             apply_btn.setEnabled(bool(n_trim) and not blocked)
         if warn is not None:
@@ -345,7 +376,7 @@ class TrimOps:
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         try:
-            new_n = trim_tail(path, demo, n_trim)
+            new_n = trim_tail(path, demo, n_trim, axis=self.trim_axis())
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self.win, tr("다듬기 실패"), f"{type(e).__name__}: {e}")
             self.win.log(f"[트림 실패] {Path(path).name} {demo}: {type(e).__name__}: {e}")

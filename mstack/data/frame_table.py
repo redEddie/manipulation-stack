@@ -299,9 +299,17 @@ class RowPlan:
     per_axis: dict
     #: 축 이름 -> 원본 표본 수.
     n_source: dict
+    #: 행이 놓인 축. 이 축은 ``per_axis`` 가 아니라 ``rows`` 가 인덱스다.
+    anchor: str = CONTROL_AXIS
 
     def __len__(self) -> int:
         return int(self.t.shape[0])
+
+    def index_of(self, axis: str) -> "np.ndarray | None":
+        """``axis`` 계열을 이 행들로 읽으려면 어느 표본을 집어야 하는가."""
+        if axis == self.anchor:
+            return self.rows
+        return self.per_axis.get(axis)
 
 
 def row_plan(ep: Any, rate: Optional[float] = None, *,
@@ -359,7 +367,8 @@ def _row_plan(ep: Any, rate: Optional[float], anchor: str, align: str,
     if first:
         rows, t_rows = rows[first:], t_rows[first:]
         per_axis = {a: i[first:] for a, i in per_axis.items()}
-    return RowPlan(rows=rows, t=t_rows, per_axis=per_axis, n_source=n_source)
+    return RowPlan(rows=rows, t=t_rows, per_axis=per_axis,
+                   n_source=n_source, anchor=anchor)
 
 
 def _table_v2(ep: Any, rate: Optional[float], anchor: str, align: str,
@@ -505,3 +514,34 @@ def is_v2(ep: Any) -> bool:
 def read_rows(ds: Any, idx: np.ndarray) -> np.ndarray:
     """``ds`` 에서 ``idx`` 행만 읽는다 (중복은 한 번만). RowPlan 과 짝이다."""
     return _read(ds, idx)
+
+
+#: 화면이 행을 놓는 축의 우선순위. scene view 를 먼저 본다.
+VIEWER_ANCHORS = ("agent", "wrist")
+
+
+def viewer_plan(ep: Any):
+    """**사람이 보는 화면**의 행 계획. ``(anchor, RowPlan)``, 1.3.0 이면 ``(None, None)``.
+
+    학습용 표와 기준 축이 다르다. 학습은 control 축에 행을 놓는다 -- 이미지가
+    액션보다 **먼저**여야 하기 때문이다 (모듈 문서). 화면은 반대로 카메라 축에
+    놓는다:
+
+    * 슬라이더 한 칸이 **실제로 찍힌 사진 한 장**이다. control 축에 놓으면
+      120 Hz 에서 같은 사진이 네 칸씩 반복되고, 20 Hz 에서는 30 fps 로 찍은
+      사진의 3분의 1에 닿지 못한다.
+    * 자르는 지점을 사진으로 고르게 된다. 그 사진의 시각이 곧 자르는 선이라,
+      ``episode_trim`` 에 ``axis="agent"`` 로 그대로 넘어간다.
+
+    누출 걱정은 여기에 해당하지 않는다 -- 사람이 눈으로 보는 것이지 학습
+    라벨을 만드는 것이 아니다. 그래서 ``frame_table`` 이 카메라 기준에서
+    액션을 돌려주지 않는 것과 달리, 이 계획을 받은 쪽은 액션을 같이 그린다.
+    """
+    if not _is_v2(ep):
+        return None, None
+    t = ep["t"]
+    anchor = next((a for a in VIEWER_ANCHORS if a in t), None)
+    if anchor is None:
+        return None, None
+    axes = {CONTROL_AXIS} | {a for a in CAMERA_AXES if a in t and a != anchor}
+    return anchor, _row_plan(ep, None, anchor, ALIGN_ARRIVAL, axes)

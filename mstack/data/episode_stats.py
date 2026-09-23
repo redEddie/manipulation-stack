@@ -46,7 +46,8 @@ from mstack.data.dataset_schema import (
     OBS_GRIPPER_STATES,
     OBS_JOINT_STATES,
 )
-from mstack.data.frame_table import frame_table
+from mstack.data.frame_table import (CONTROL_AXIS, frame_table, read_rows,
+                                      viewer_plan)
 
 # scene-v1 파일의 에피소드 그룹 이름 (scene_format.EPISODE_GROUP_RE 와 동일
 # 패턴 -- 무거운 모듈을 끌어오지 않으려고 여기서 다시 정의한다)
@@ -266,6 +267,35 @@ def load_series(path: str, demo: str) -> dict:
         # rate 는 주지 않는다. 주면 그 주파수로 기록된 파일만 읽히고 나머지는
         # 거부된다 -- 30 Hz 로 기록한 파일에서 ValueError 가 난다. 이 함수는
         # 행 시각을 쓰지 않고 계열 값만 쓰므로, 기록된 그대로 받으면 된다.
+        anchor, plan = viewer_plan(grp)
+        if plan is not None:
+            # knu-2.0.0: 화면은 카메라 축에 행을 놓는다 (viewer_plan 문서).
+            # 계열은 control 축에 있으므로 그 행이 쓰는 표본을 집어 온다 --
+            # 영상 로더와 **같은 계획**을 쓰므로 슬라이더 한 칸이 둘에서
+            # 같은 순간을 가리킨다.
+            idx = plan.index_of(CONTROL_AXIS)
+            obs_g = grp["obs"]
+
+            def series(name):
+                return (read_rows(obs_g[name], idx) if name in obs_g else None)
+
+            js, gs = series(OBS_JOINT_STATES), series(OBS_GRIPPER_STATES)
+            state = np.concatenate([js, gs], axis=1)
+            action = read_rows(grp["actions"], idx) if "actions" in grp else None
+            cj = series(OBS_COMMANDED_JOINT_STATES)
+            commanded = None
+            if cj is not None:
+                cg = series(OBS_COMMANDED_GRIPPER_STATES)
+                if cg is None:
+                    cg = np.zeros((len(cj), 1), dtype=np.float32)
+                commanded = np.concatenate([cj, cg], axis=1)
+            out = {"state": state, "commanded": commanded, "action": action,
+                   "n": int(len(plan)), "t": plan.t, "anchor": anchor}
+            if key is not None:
+                _SERIES_CACHE.clear()
+                _SERIES_CACHE[key] = out
+            return out
+
         ft = frame_table(grp, keys=[
             OBS_JOINT_STATES, OBS_GRIPPER_STATES,
             OBS_COMMANDED_JOINT_STATES, OBS_COMMANDED_GRIPPER_STATES])

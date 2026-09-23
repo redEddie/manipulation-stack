@@ -165,6 +165,49 @@ with h5py.File(src, "r") as f:
     assert "@" in g.attrs["trimmed"], g.attrs["trimmed"]
     print(f"   이력: {g.attrs['trimmed']}")
 
+# ---------------------------------------------- 7. 카메라 축에서 세기
+# 화면은 카메라를 보고 있으므로 사람이 고르는 단위가 카메라 프레임이다.
+# 그래도 자르는 기준은 시각 하나라, 다른 축이 함께 맞춰 잘려야 한다.
+cam = TMP / "scene_902.hdf5"
+build(cam, n_ctrl=99)
+with h5py.File(cam, "r") as f:
+    g = f["episode_000"]
+    n0 = {a: g["t"][a].shape[0] for a in g["t"]}
+    t_agent = g["t"]["agent"][:]
+
+N_CAM = 12
+p_cam = plan_trim(str(cam), ["episode_000"], N_CAM, axis="agent")[0]
+assert p_cam.axis == "agent" and p_cam.n_frames == n0["agent"], p_cam
+assert abs(p_cam.t_cut - t_agent[n0["agent"] - N_CAM - 1]) < 1e-9, p_cam.t_cut
+assert p_cam.blocked is None, p_cam.blocked
+new_ctrl = trim_tail(str(cam), "episode_000", N_CAM, axis="agent")
+
+with h5py.File(cam, "r") as f:
+    g = f["episode_000"]
+    n1 = {a: g["t"][a].shape[0] for a in g["t"]}
+    assert n1["agent"] == n0["agent"] - N_CAM, n1
+    # control 은 카메라와 **다른 수만큼** 줄어야 한다 (주파수가 다르므로)
+    d_cam, d_ctrl = n0["agent"] - n1["agent"], n0["control"] - n1["control"]
+    assert d_ctrl != d_cam, (
+        f"control 이 카메라와 같은 {d_ctrl} 행 줄었다 -- 시각이 아니라 "
+        "프레임 수로 잘렸다는 뜻이다")
+    assert int(g.attrs["num_samples"]) == n1["control"] == new_ctrl, (
+        g.attrs["num_samples"], n1["control"], new_ctrl)
+    for a, t in ((a, g["t"][a][:]) for a in g["t"]):
+        assert t[-1] <= p_cam.t_cut + 1e-9, (a, t[-1])
+print(f"7. agent 축에서 {N_CAM}장 자르기 -> " + ", ".join(
+    f"{a} {n0[a]}->{n1[a]}" for a in sorted(n0)) +
+    f" (num_samples={new_ctrl}) OK")
+
+# ---------------------------------------------- 8. 한계는 초 단위다
+# 같은 "20 프레임" 이라도 축과 주파수에 따라 길이가 다르다. 판정이 초라는 것을
+# 20 Hz control 과 30 fps agent 에서 같은 시각으로 막히는지로 본다.
+short = TMP / "scene_903.hdf5"
+build(short, n_ctrl=40)           # 1.95초
+deep = plan_trim(str(short), ["episode_000"], 30, axis="agent")[0]
+assert deep.too_short and "초" in (deep.blocked or ""), (deep.kept_seconds, deep.blocked)
+print(f"8. 너무 짧게 자르면 초로 막는다: {deep.blocked} OK")
+
 # ---------------------------------------------- 6. 1.3.0 은 예전 경로
 legacy = TMP / "scene_901.hdf5"
 build(legacy, n_ctrl=60)
