@@ -224,6 +224,42 @@ def _read_md_checked(meta: h5py.Group) -> SceneMetadata:
     return md
 
 
+def _axis_rates(path: Path) -> dict:
+    """에피소드 이름 -> 축마다 "이름 N행 xx.xxHz" 문자열 목록.
+
+    knu-2.0.0 은 계열마다 시간축이 따로다. 그래서 "857 프레임" 만으로는
+    무엇이 찍혔는지 알 수 없고, 실기에서 확인해야 하는 값은 **축마다의
+    행 수와 실측 주기**다 -- 기록이 설정한 주기로 돌았는가, 카메라가 자기
+    30 fps 를 유지했는가, 명령 축이 있는가(substeps > 1 일 때만 생긴다).
+
+    축이 없는 옛 파일은 빈 값이다 -- 그 파일들은 한 축뿐이라 프레임 수가
+    곧 전부고, 위의 줄이 이미 그것을 말하고 있다.
+    """
+    import h5py
+
+    out: dict = {}
+    try:
+        with h5py.File(path, "r") as f:
+            for name in f:
+                grp = f.get(name)
+                t = grp.get("t") if hasattr(grp, "get") else None
+                if t is None or not hasattr(t, "keys"):
+                    continue
+                cells = []
+                for axis in sorted(t.keys()):
+                    v = t[axis][:]
+                    if len(v) > 1 and v[-1] > v[0]:
+                        hz = (len(v) - 1) / (v[-1] - v[0])
+                        cells.append(f"{axis} {len(v)}행 {hz:.2f}Hz")
+                    else:
+                        cells.append(f"{axis} {len(v)}행 (주기 불명)")
+                if cells:
+                    out[name] = cells
+    except Exception:  # noqa: BLE001 -- 표시용이라 못 읽어도 나머지는 보여 준다
+        return {}
+    return out
+
+
 def print_scene_file(path: Path) -> None:
     md = read_scene_metadata(path)
     ref = read_reference_image(path)
@@ -233,9 +269,16 @@ def print_scene_file(path: Path) -> None:
     print(f"  reference_image : {'%dx%d' % (ref.shape[1], ref.shape[0]) if ref is not None else '(없음)'}")
     eps = list_scene_episodes(path)
     print(f"  episodes        : {len(eps)}개")
+    axes = _axis_rates(path)
     for ep in eps:
         print(f"    {ep['episode_uid']}  [{ep['quality_status']:>10}]  {ep['num_samples']:4d}f  "
               f"{ep['collector'] or '-':<10} {ep['instruction']}")
+        # 계열마다 시간축이 따로인 배치(knu-2.0.0)에서는 "몇 프레임" 만으로는
+        # 무엇이 찍혔는지 알 수 없다 -- 축마다 행 수와 주기가 다르기 때문이다.
+        # 실기 확인 때 눈으로 보는 값이 이것이라 여기서 같이 보여 준다.
+        row = axes.get(ep["name"])
+        if row:
+            print(f"      {'  '.join(row)}")
     counts = count_by_slot(path)
     if counts:
         print("  slot 현황       :", "  ".join(
