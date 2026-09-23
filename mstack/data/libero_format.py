@@ -286,13 +286,29 @@ class LiberoEpisodeBuffer:
         #: 그 전부를 control 축에 남기는 것은 아직 안 한 일이고, 그때 이 값이
         #: fps x substeps 가 된다.
         self.control_hz: float = 0.0
+        #: 명령 축: [(t_action, 관절7, 그리퍼), ...]  명령 주기 전부.
+        #: 지금 기록 루프는 substeps 개의 명령 중 **마지막 하나**만 control 축에
+        #: 남긴다 -- 20 Hz 기록에 100 Hz 명령이면 다섯 중 넷이 사라진다.
+        #: 여기 쌓으면 그 전부가 자기 축으로 남고, control 축은 그대로 둔다
+        #: (옛 소비자가 보던 actions 의 의미가 안 바뀐다).
+        self.commands: list = []
 
     def __len__(self) -> int:
         return len(self.joint_states)
 
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나 (버퍼만 만진다)."""
+        self._buffer.add_command(t, joints, gripper)
+
     def set_control_hz(self, hz: float) -> None:
         """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
         self._buffer.control_hz = float(hz)
+
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나. 기록 루프의 substep 마다 불린다 -- **추가 I/O 가 없다**
+        (이미 보낸 명령을 적어 둘 뿐이라 루프 예산이 안 변한다)."""
+        self.commands.append((float(t), np.asarray(joints, dtype=np.float32),
+                              float(gripper)))
 
     def set_capture(self, axis: str, frames: list) -> None:
         """카메라 한 대가 이 에피소드 동안 준 프레임 전부를 싣는다.
@@ -684,6 +700,23 @@ def _write_axes(grp: h5py.Group, obs: h5py.Group, buf: "LiberoEpisodeBuffer",
     d = tg.create_dataset(CONTROL_AXIS, data=t_ctrl - t0)
     d.attrs["axis"] = CONTROL_AXIS
 
+    if buf.commands:
+        # 명령 축. control 축과 **별개**다 -- 명령은 기록보다 substeps 배 자주
+        # 나가고, 그 전부가 조작자가 실제로 한 일이다. control 축의 actions 는
+        # 그대로 두어 옛 소비자가 보던 의미를 안 바꾼다.
+        t_cmd = np.asarray([t for t, _q, _g in buf.commands], dtype=np.float64)
+        tg.create_dataset("command", data=t_cmd - t0)
+        cg = grp.require_group("command")
+        d = cg.create_dataset("joint_positions",
+                              data=np.stack([q for _t, q, _g in buf.commands]))
+        d.attrs["axis"] = "command"
+        d = cg.create_dataset("gripper", data=np.asarray(
+            [g for _t, _q, g in buf.commands], dtype=np.float32).reshape(-1, 1))
+        d.attrs["axis"] = "command"
+        if t_cmd.size > 1 and t_cmd[-1] > t_cmd[0]:
+            grp.attrs["command_hz_actual"] = (t_cmd.size - 1) / float(
+                t_cmd[-1] - t_cmd[0])
+
     for axis, (ds_name, _pre, role) in AXIS_CAMERAS.items():
         frames = buf.capture.get(axis)
         if not frames:
@@ -778,6 +811,10 @@ class NullTaskWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나 (버퍼만 만진다)."""
+        self._buffer.add_command(t, joints, gripper)
 
     def set_control_hz(self, hz: float) -> None:
         """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
@@ -948,6 +985,10 @@ class LiberoTaskWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나 (버퍼만 만진다)."""
+        self._buffer.add_command(t, joints, gripper)
 
     def set_control_hz(self, hz: float) -> None:
         """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""

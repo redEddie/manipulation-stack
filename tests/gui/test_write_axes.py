@@ -54,6 +54,7 @@ from mstack.data.libero_format import (  # noqa: E402
 TMP = tempfile.mkdtemp(prefix="writeaxes-")
 T0 = 1.7e9
 N_CTRL, HZ_CTRL, HZ_CAM = 20, 20.0, 30.0
+SUBSTEPS = 6          # 20 x 6 = 120 Hz 명령
 N_CAM = int(N_CTRL / HZ_CTRL * HZ_CAM)
 #: 카메라 도착이 장치 시각보다 이만큼 늦다 (실측 D455 15.03 ms / D405 8.60 ms).
 PIPE_MS = 0.015
@@ -74,6 +75,10 @@ def build(with_capture: bool):
             commanded_gripper=0.0,
             timing={TIMING_FRAME: t, TIMING_ACTION: t + 0.001})
     buf.control_hz = HZ_CTRL
+    # 명령은 기록보다 SUBSTEPS 배 자주 나간다 -- 그 전부가 명령 축에 남아야 한다
+    for i in range(N_CTRL * SUBSTEPS):
+        buf.add_command(T0 + i / (HZ_CTRL * SUBSTEPS),
+                        np.full(7, i, dtype=np.float32), 0.0)
     if with_capture:
         # 값에 프레임 번호를 넣어 둔다 -- 어느 것이 골라졌는지 값만 보면 안다.
         for axis in ("agent", "wrist"):
@@ -94,12 +99,14 @@ def main() -> None:
     with h5py.File(p, "r") as f:
         e = f["e"]
         axes = {k: len(e[f"t/{k}"]) for k in e["t"]}
-        assert axes == {"control": N_CTRL, "agent": N_CAM, "wrist": N_CAM}, axes
+        assert axes == {"control": N_CTRL, "command": N_CTRL * SUBSTEPS,
+                        "agent": N_CAM, "wrist": N_CAM}, axes
         assert e["obs/agentview_rgb"].shape[0] == N_CAM, (
             f"카메라가 {e['obs/agentview_rgb'].shape[0]}장으로 눌렸다 -- "
             f"{N_CAM}장이 와야 C6 이 한 일이 있다")
         assert e["actions"].shape[0] == N_CTRL
-        print(f"1. 축이 갈렸다 {axes}, 이미지 {N_CAM}장 vs control {N_CTRL}행 OK")
+        print(f"1. 축이 갈렸다 {axes} -- 이미지 {N_CAM}장, 명령 "
+              f"{N_CTRL * SUBSTEPS}행, control {N_CTRL}행 OK")
 
         # ============================================ 2. 축이 명시된다
         assert axis_of(e["obs/agentview_rgb"]) == "agent"
@@ -147,6 +154,20 @@ def main() -> None:
         assert ds.shape[0] == N_CAM and len(t) == N_CAM
         print(f"6. stream() 이 카메라 축 그대로 {N_CAM}장을 준다 OK")
 
+        # ---- 명령 축: 기록보다 SUBSTEPS 배 많다
+        n_cmd = N_CTRL * SUBSTEPS
+        assert len(e["t/command"]) == n_cmd, len(e["t/command"])
+        assert e["command/joint_positions"].shape[0] == n_cmd
+        assert axis_of(e["command/joint_positions"]) == "command"
+        hz = float(e.attrs["command_hz_actual"])
+        assert abs(hz - HZ_CTRL * SUBSTEPS) < 1.0, hz
+        # control 축의 actions 는 **안 바뀐다** -- 옛 소비자가 보던 의미 그대로
+        assert e["actions"].shape[0] == N_CTRL
+        ds_c, t_c = stream(e, "command/joint_positions")
+        assert ds_c.shape[0] == n_cmd and len(t_c) == n_cmd
+        print(f"6b. 명령 축 {n_cmd}행 ({hz:.0f} Hz) vs control {N_CTRL}행 "
+              f"({N_CTRL / n_cmd:.0%} 만 기록됐었다) OK")
+
         # ---- 목표 주기와 달성 주기 (C2)
         assert abs(e.attrs["control_hz"] - HZ_CTRL) < 1e-9, e.attrs["control_hz"]
         got_hz = float(e.attrs["control_hz_actual"])
@@ -164,6 +185,7 @@ def main() -> None:
     with h5py.File(p2, "r") as f:
         e = f["e"]
         assert "t" not in e, "capture 가 없는데 축을 만들었다"
+        assert "command" not in e, "옛 경로인데 명령 축이 생겼다"
         assert "timing" in e, "옛 경로인데 timing/ 이 없다"
         assert e["obs/agentview_rgb"].shape[0] == N_CTRL
         assert not has_axis_attr(e["actions"])

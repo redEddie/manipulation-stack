@@ -1637,6 +1637,13 @@ class CollectionWorker(QThread):
                         break
                     self._robot.send_action(action)
                     t_action = time.time()
+                    # 보낸 명령을 명령 축에 적는다. 추가 I/O 가 없다 -- 이미
+                    # 손에 있는 값이라 루프 예산이 안 변한다. 기록 루프는
+                    # substeps 개 중 마지막 하나만 control 축에 남기므로,
+                    # 이것이 없으면 다섯 중 넷이 사라진다.
+                    self._writer.add_command(
+                        t_action, self._joint_vec(action)[:7],
+                        float(action["gripper.pos"]))
                     if k < substeps - 1:
                         t_next += cmd_budget
                         time.sleep(max(0.0, t_next - time.monotonic()))

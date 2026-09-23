@@ -650,6 +650,10 @@ class SceneWriter:
     def discard_episode(self) -> None:
         self._buffer.clear()
 
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나 (버퍼만 만진다)."""
+        self._buffer.add_command(t, joints, gripper)
+
     def set_control_hz(self, hz: float) -> None:
         """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
         self._buffer.control_hz = float(hz)
