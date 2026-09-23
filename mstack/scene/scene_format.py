@@ -322,7 +322,7 @@ class SceneMetadata:
     fr3_system_version: Optional[str] = None
     #: "live" (수집하며 적음) / "backfilled <날짜>" (나중에 채움).
     provenance_source: Optional[str] = None
-    #: 달려 있던 그리퍼 (knu-2.1.0). 그리퍼 열이 0~1 정규화값이라, 이것이
+    #: 달려 있던 그리퍼 (knu-2.0.0). 그리퍼 열이 0~1 정규화값이라, 이것이
     #: 없으면 그 값을 미터로 되돌릴 수 없다 (dataset_schema.META_GRIPPER).
     gripper: Optional[str] = None
     gripper_max_width: Optional[float] = None
@@ -843,7 +843,7 @@ class SceneWriter:
             known[META_RESET_QPOS] = json.dumps(
                 [float(x) for x in reset["qpos"]])
         # 그리퍼는 station 설정에서 언제나 풀린다 -- 로봇도 세션 값도 필요
-        # 없다. 그래서 이어찍기에서 2.1.0 으로 올리는 것이 막히지 않는다.
+        # 없다. 그래서 이어찍기에서 2.0.0 으로 올리는 것이 막히지 않는다.
         try:
             from mstack.config.station import load_station
 

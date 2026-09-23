@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory() as d:
         reset_pose="libero", reset_qpos=[0.0] * 7,
         collector_commit=sha, pylibfranka_version="0.21.2",
         fr3_system_version="5.10.0", provenance_source="live",
-        # knu-2.1.0 이 요구한다 -- 그리퍼 열이 0~1 정규화값이라 이것이 없으면
+        # knu-2.0.0 이 요구한다 -- 그리퍼 열이 0~1 정규화값이라 이것이 없으면
         # 미터로 되돌릴 수 없다 (dataset_schema.META_GRIPPER).
         gripper="franka_hand", gripper_max_width=0.08)
     SceneWriter(root, metadata=md, known_prop_ids=active_prop_ids()).close()
