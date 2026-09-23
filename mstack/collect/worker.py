@@ -195,6 +195,11 @@ _RECOVERY_LOG_PERIOD_S = 30.0
 #: 제어 루프가 죽었을 때 franka_fr3.get_observations 가 붙이는 접두어.
 #: 이 문자열이 보이면 "노드는 살아 있는데 팔이 죽었다" -- 기다려도 낫지
 #: 않으므로 안내가 달라진다 (한쪽만 바꾸면 안내가 조용히 틀려진다).
+#: 미리보기 화면 주기 (Hz). **기록 주기와 무관하다** -- 사람 눈에 필요한
+#: 값이고, 기록 주기는 데이터가 필요로 하는 값이다. 둘을 한 값으로 묶어 두면
+#: control 축을 120 Hz 로 올리는 순간 화면도 120 Hz 가 되어 Qt 큐가 밀린다.
+PREVIEW_HZ = 30.0
+
 CONTROL_DEAD_MARK = "control loop is dead"
 
 
@@ -593,6 +598,12 @@ class CollectionWorker(QThread):
         # GUI 스레드에서 시그널을 미리 connect할 수 있도록 여기서 생성;
         # writer 주입/start()는 run()에서 (h5py 접근 직렬화는 saver가 소유).
         self.saver = EpisodeSaver()
+        # 자기 축으로 프레임을 모으고 있는 카메라 역할 (_start_capture).
+        # 기록 루프가 이 카메라를 집어가는 것은 미리보기용일 뿐이라,
+        # 정지 판정에서 빼야 한다 (_get_obs).
+        self._armed_capture: set = set()
+        #: 마지막으로 미리보기를 보낸 시각 (_emit_frames).
+        self._preview_last = 0.0
         # Stale-frame bookkeeping, see _get_obs.
         self._cam_last_fp: dict = {}
         self._cam_stale: dict = {}
@@ -785,10 +796,27 @@ class CollectionWorker(QThread):
         return None
 
     def _emit_frames(self, obs: dict) -> None:
+        """미리보기 한 장. **화면 주기는 루프 주기와 끊어 둔다.**
+
+        부르는 자리가 셋이고 주기가 제각각이다 -- 기록 루프(cfg.fps), 램프
+        (ramp_hz=100), 정렬 게이지. 예전에는 부를 때마다 보냈는데, 기록
+        루프가 20 Hz 이던 동안은 그것이 곧 화면 주기였다. control 축이
+        120 Hz 로 올라가면 같은 코드가 초당 120장을 Qt 큐에 밀어 넣는다 --
+        화면은 그보다 빠를 수 없으므로 큐가 밀리고, 그 지연이 수집 루프로
+        되돌아온다.
+
+        tick 수가 아니라 **시각**으로 끊는 이유는 부르는 주기가 자리마다
+        다르기 때문이다. 이렇게 두면 램프의 100 Hz 도 같이 정리된다.
+        """
         agent = obs.get("agent")
         wrist = obs.get("wrist")
-        if agent is not None and wrist is not None:
-            self.frames_ready.emit(agent, wrist)
+        if agent is None or wrist is None:
+            return
+        now = time.monotonic()
+        if now - self._preview_last < 1.0 / PREVIEW_HZ:
+            return
+        self._preview_last = now
+        self.frames_ready.emit(agent, wrist)
 
     def _joint_vec(self, d: dict) -> np.ndarray:
         return np.array([d[k] for k in JOINT_KEYS], dtype=float)
@@ -856,7 +884,16 @@ class CollectionWorker(QThread):
             # identical consecutive frames are tallied per camera and
             # surfaced with the episode.
             out[cam_key] = frame
-            if not count_stale:
+            if not count_stale or cam_key in self._armed_capture:
+                # 같은 프레임이 연달아 나오는 것이 **문제인 경우에만** 센다.
+                # 이 판정은 기록 주기가 카메라보다 느리다는 전제 위에 있다:
+                # 20 Hz 로 집어가는데 30 fps 카메라가 같은 장을 세 tick 연속
+                # 주면 그건 정지다. 그런데 자기 축으로 모으는 카메라
+                # (_armed_capture) 는 여기서 집어가는 것이 미리보기용일 뿐이고,
+                # control 축이 120 Hz 가 되면 30 fps 프레임이 네 tick 연속
+                # 같은 것이 **정상**이다 -- 그대로 두면 정지 경고가 쉬지 않고
+                # 뜬다. 실제 프레임 손실은 _collect_capture 의 frame_no 구멍이
+                # 보므로, 그쪽이 이 자리를 대신한다.
                 continue
             # The node's receive counter identifies a frame exactly; the image
             # hash is the fallback for a camera without it.
@@ -1655,9 +1692,17 @@ class CollectionWorker(QThread):
                     # 손에 있는 값이라 루프 예산이 안 변한다. 기록 루프는
                     # substeps 개 중 마지막 하나만 control 축에 남기므로,
                     # 이것이 없으면 다섯 중 넷이 사라진다.
-                    self._writer.add_command(
-                        t_action, self._joint_vec(action)[:7],
-                        float(action["gripper.pos"]))
+                    #
+                    # **substeps == 1 이면 적지 않는다.** 그때는 명령 하나가
+                    # 곧 control 행 하나여서 ``command/*`` 가 ``actions`` 와
+                    # 글자 그대로 같은 값이 된다 (실측: 지금 구조에서도 ZOH
+                    # 로 맞춰 보면 최대차 0.0). 버릴 명령이 없으니 축을 따로
+                    # 둘 이유도 없다 -- ``command/`` 는 스키마 필수가 아니라
+                    # 안 쓰면 그냥 안 생긴다.
+                    if substeps > 1:
+                        self._writer.add_command(
+                            t_action, self._joint_vec(action)[:7],
+                            float(action["gripper.pos"]))
                     if k < substeps - 1:
                         t_next += cmd_budget
                         time.sleep(max(0.0, t_next - time.monotonic()))
