@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from mstack.config.station import load_station
-from mstack.data.dataset_schema import DEFAULT_EXPORT_FPS
+from mstack.data.dataset_schema import DEFAULT_EXPORT_FPS, EXPORT_FPS_CHOICES
 from mstack.data.libero_format import hdf5_repack_status
 from mstack.gui.dialogs.hf_account import HfAccountDialog, hf_account
 from mstack.gui.dialogs.parts import Hdf5FileTable, RepoIdEdit
@@ -121,8 +121,25 @@ class LerobotConvertDialog(QDialog):
         grid.addWidget(browse_root_btn, 1, 2)
 
         grid.addWidget(QLabel(tr("FPS:")), 2, 0)
-        # 정본은 스테이션 설정(recording.fps)이다 -- 칸도 argv 도 거기서 온다.
-        self.fps_edit = QLineEdit(str(DEFAULT_EXPORT_FPS))
+        # **내보낼 주기는 고르는 값이다.** 기록 주기(station 의 recording.fps)
+        # 와 같은 값이 아니다 -- 지금 control 축은 120 Hz 로 찍히지만, 학습에
+        # 내보낼 때는 사진이 실제로 다른 행만 있으면 된다. 120 으로 내보내면
+        # 30 fps 이미지가 네 번씩 중복된다.
+        #
+        # 목록이 둘뿐인 이유: frame_table 이 control_hz 를 **정수로 나누는**
+        # 주기만 받는다. 120 Hz 파일은 20(x6)·30(x4) 둘 다 되고, 20 Hz 로
+        # 찍힌 옛 파일은 20 만 된다 (30 은 거부된다). 직접 칠 수도 있게
+        # 편집 가능으로 둔다 -- 60 이나 40 이 필요한 날이 오면 막지 않는다.
+        self.fps_edit = QComboBox()
+        self.fps_edit.setEditable(True)
+        for v in EXPORT_FPS_CHOICES:
+            self.fps_edit.addItem(str(v))
+        self.fps_edit.setCurrentText(str(DEFAULT_EXPORT_FPS))
+        self.fps_edit.setToolTip(tr(
+            "LeRobot 데이터셋으로 내보낼 주기입니다.\n"
+            "20 = 지금 배포 정책이 학습된 주기 (기본값)\n"
+            "30 = 카메라가 실제로 찍은 주기 (사진마다 한 행)\n"
+            "파일의 control_hz 를 정수로 나누는 값이어야 합니다."))
         grid.addWidget(self.fps_edit, 2, 1)
         layout.addLayout(grid)
 
@@ -269,7 +286,7 @@ class LerobotConvertDialog(QDialog):
         args = list(paths) + [
             "--repo-id", repo_id,
             "--root", out_root,
-            "--fps", self.fps_edit.text().strip() or str(DEFAULT_EXPORT_FPS),
+            "--fps", self.fps_edit.currentText().strip() or str(DEFAULT_EXPORT_FPS),
         ]
         if self.only_success_check.isChecked():
             args.append("--only-success")

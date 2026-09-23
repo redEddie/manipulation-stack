@@ -62,6 +62,13 @@ DEFAULT_CONFIG_PATH = state_dir() / "dataset_schema.json"
 #: 데이터세트별 선택은 내보내기 프로파일(E3)이 맡는다.
 DEFAULT_EXPORT_FPS = 20
 
+#: 화면이 내미는 내보내기 주기 선택지. **파일의 control_hz 를 정수로 나누는
+#: 값만** 쓸 수 있다 (frame_table 이 그렇지 않으면 거부한다): 120 Hz 파일은
+#: 20(x6)·30(x4) 둘 다 되고, 20 Hz 로 찍힌 옛 파일은 20 만 된다.
+#: 30 은 "사진마다 한 행" 이고, 20 은 지금 배포 정책이 학습된 주기다.
+#: 목록일 뿐 제한은 아니다 -- 칸은 편집 가능이라 다른 값도 칠 수 있다.
+EXPORT_FPS_CHOICES = (20, 30)
+
 SCHEMA_VERSION = "knu-2.0.0"
 
 # --------------------------------------------------------- observation/dataset keys

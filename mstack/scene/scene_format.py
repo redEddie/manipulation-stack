@@ -302,10 +302,32 @@ def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _video_frames(grp: h5py.Group) -> "int | None":
+    """이 에피소드에 **사진이 몇 장** 있는가. 단일 축 파일이면 None.
+
+    ``num_samples`` 와 다른 값이다. knu-2.0.0 에서 그것은 control 축의 행
+    수이고, 120 Hz 로 찍으면 857 이 되는데 사진은 30 fps 로 214 장이다.
+    화면에서 사람이 넘기는 단위는 사진이므로 (트림 슬라이더 한 칸 = 한 장),
+    목록에 857 을 띄우면 슬라이더 끝 번호와 네 배 어긋나 보인다.
+
+    None 은 "이 파일은 축이 하나라 둘이 같은 값" 이라는 뜻이고, 그때는
+    부르는 쪽이 ``num_samples`` 를 그대로 쓰면 된다.
+    """
+    t = grp.get("t")
+    if t is None or not hasattr(t, "keys"):
+        return None
+    for axis in ("agent", "wrist"):
+        if axis in t:
+            return int(t[axis].shape[0])
+    return None
+
+
 def _episode_summary(name: str, grp: h5py.Group) -> dict:
     success = grp.attrs.get("success")
     return {
         "name": name,
+        #: 사진 장수 (knu-2.0.0). 단일 축 파일은 None -- num_samples 와 같다.
+        "video_frames": _video_frames(grp),
         "episode_id": int(grp.attrs["episode_id"]),
         "slot_episode_idx": int(grp.attrs.get("slot_episode_idx", -1)),
         "episode_uid": str(grp.attrs["episode_uid"]),

@@ -35,6 +35,20 @@ def soft_wrap(text: str) -> str:
     return text
 
 
+def _frames_text(ep: dict) -> str:
+    """"사진 N장 (control M행)" -- 둘이 다르면 둘 다, 같으면 하나만.
+
+    knu-2.0.0 은 계열마다 시간축이 따로라 "프레임" 이라는 한 낱말이 두 값을
+    가리킨다: 사람이 넘기는 사진(30 fps)과 기록 행(control, 120 Hz). 한쪽만
+    적으면 다른 화면의 숫자와 안 맞아 보이므로 여기서는 둘 다 적는다.
+    """
+    n_ctrl = ep.get("num_samples", "")
+    n_video = ep.get("video_frames")
+    if n_video is None or n_video == n_ctrl:
+        return str(n_ctrl)
+    return f"{n_video}장 (control {n_ctrl}행)"
+
+
 class DatasetOps:
     """Dataset tree, episode selection, verdict, proxies, and right-panel fills."""
 
@@ -112,9 +126,15 @@ class DatasetOps:
             uid = ep.get("episode_uid", "")
             # 표기는 격자 타일과 **같은 함수**에서 나온다 (2026-09-12 감사:
             # 두 곳에 복사돼 있었고 legacy 판정 처리가 서로 달랐다).
+            # Frames 열은 **사진 장수**다. knu-2.0.0 의 num_samples 는
+            # control 축 행 수라 120 Hz 에서 857 이 되는데, 트림 슬라이더는
+            # 사진 한 장이 한 칸이라 214 까지만 간다 -- 목록에 857 을 띄우면
+            # 같은 에피소드가 두 화면에서 다른 길이로 보인다 (조작자 지적,
+            # 2026-09-23). 축이 하나뿐인 옛 파일은 둘이 같은 값이다.
+            n_video = ep.get("video_frames")
             item = QTreeWidgetItem([
                 episode_label(ep), quality_mark(ep),
-                str(ep.get("num_samples", "")),
+                str(n_video if n_video is not None else ep.get("num_samples", "")),
             ])
             item.setData(0, Qt.ItemDataRole.UserRole, ep)
             item.setToolTip(0, f"{uid}\n{ep.get('instruction', '')}\n"
@@ -426,7 +446,9 @@ class DatasetOps:
             (tr("파일"), Path(path).name if path else ""),
             (tr("에피소드"), str(ep.get("name", ""))),
             (tr("uid"), str(ep.get("episode_uid", ""))),
-            (tr("프레임"), str(ep.get("num_samples", ""))),
+            # 사진 장수와 control 행 수는 다른 값이라 둘 다 적는다. 목록
+            # 열에는 사람이 넘기는 단위(사진)만 나가고, 여기서 나머지를 본다.
+            (tr("사진"), _frames_text(ep)),
             (tr("결과"), q),
             (tr("수집자"), str(ep.get("collector", ""))),
             (tr("지시문"), str(ep.get("instruction_id", ""))),

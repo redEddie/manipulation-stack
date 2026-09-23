@@ -48,7 +48,10 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 app = QApplication.instance() or QApplication([])
 
 from mstack.config.station import load_station
-from mstack.data.dataset_schema import DEFAULT_EXPORT_FPS  # noqa: E402
+from mstack.data.dataset_schema import (  # noqa: E402
+    DEFAULT_EXPORT_FPS,
+    EXPORT_FPS_CHOICES,
+)
 
 EXPORT_FPS = str(DEFAULT_EXPORT_FPS)
 
@@ -143,15 +146,18 @@ with tempfile.TemporaryDirectory() as d:
     root = Path(d)
     made = _make_hdf5(root)
     cv = convert_mod.LerobotConvertDialog(None, str(root))
-    assert cv.fps_edit.text() == EXPORT_FPS, \
-        f"FPS 칸이 기본 내보내기 값({EXPORT_FPS})이 아니다: {cv.fps_edit.text()!r}"
+    assert cv.fps_edit.currentText() == EXPORT_FPS, \
+        f"FPS 칸이 기본 내보내기 값({EXPORT_FPS})이 아니다: {cv.fps_edit.currentText()!r}"
+    # 20/30 을 고를 수 있어야 한다 -- 120 Hz 파일은 둘 다 정수로 나뉜다.
+    picks = [cv.fps_edit.itemText(i) for i in range(cv.fps_edit.count())]
+    assert picks == [str(v) for v in EXPORT_FPS_CHOICES], picks
     cv.repo_id_edit.set_text("org/x")
     cv.out_root_edit.setCurrentText(str(root / "out"))
     assert _fps_of(cv.build_args()) == EXPORT_FPS
     # 조작자가 칸을 지워도(공백) 같은 기본값이 나간다 -- 다른 값으로 안 샌다.
-    cv.fps_edit.setText("")
+    cv.fps_edit.setCurrentText("")
     assert _fps_of(cv.build_args()) == EXPORT_FPS
-print(f"3. 변환 대화상자 FPS 칸({EXPORT_FPS}) + 빈칸 폴백 OK")
+print(f"3. 변환 대화상자 FPS 선택({EXPORT_FPS_CHOICES}, 기본 {EXPORT_FPS}) + 빈칸 폴백 OK")
 assert EXPORT_FPS != str(load_station().fps), (
     "내보내기 기본값이 기록 주기와 같아졌다 -- 둘은 다른 질문이라 "
     "station 을 바꾸면 내보내기가 따라 움직이면 안 된다")

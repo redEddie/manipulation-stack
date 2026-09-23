@@ -131,8 +131,31 @@ class TrimPlan:
 
     @property
     def gripper_tail(self) -> int | None:
-        """놓는 프레임이 끝에서 몇 번째인가 (표시용, control 축)."""
-        return None if self.release_idx is None else self.n_frames - self.release_idx
+        """놓는 지점이 끝에서 몇 프레임째인가 -- **``axis`` 축의 프레임으로**.
+
+        ``release_idx`` 는 ``actions`` 에서 찾으므로 control 축의 행 번호다.
+        세는 축이 카메라면 그 번호를 그대로 빼면 안 된다: 실측
+        (scene_024/episode_000) 에서 사진 211장 − control 754행 = **−543**
+        이 화면에 찍혔다. 시각으로 옮긴 다음 그 축에서 센다.
+
+        시각을 모르는 옛 파일은 축이 하나뿐이라 예전 셈이 그대로 맞다.
+        """
+        if self.release_idx is None:
+            return None
+        if not self.timed or self.t_release is None or self.t_end is None:
+            return self.n_frames - self.release_idx
+        span = self._axis_span
+        if not span:
+            return None
+        return int(round((self.t_end - self.t_release) / span))
+
+    @property
+    def _axis_span(self) -> float | None:
+        """``axis`` 축의 표본 간격 (초)."""
+        if (self.t_end is None or self.t_start is None or self.n_frames < 2
+                or self.t_end <= self.t_start):
+            return None
+        return (self.t_end - self.t_start) / (self.n_frames - 1)
 
     @property
     def max_safe_seconds(self) -> float | None:
@@ -151,9 +174,7 @@ class TrimPlan:
         secs = self.max_safe_seconds
         if secs is None:
             return max(0, self.n_frames - 1 - self.release_idx - GRIPPER_MARGIN)
-        span = None
-        if self.t_end is not None and self.t_start is not None and self.n_frames > 1:
-            span = (self.t_end - self.t_start) / (self.n_frames - 1)
+        span = self._axis_span
         if not span:
             return None
         return int(max(0.0, secs) // span)
