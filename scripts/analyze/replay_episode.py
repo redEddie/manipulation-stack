@@ -38,6 +38,7 @@ from mstack.data.dataset_schema import (  # noqa: E402
     OBS_GRIPPER_STATES,
     OBS_JOINT_STATES,
 )
+from mstack.data.frame_table import frame_table  # noqa: E402
 
 STATION = load_station()
 RAMP_STEP = 0.05      # rad/tick 램프 (수집기·정책 클라이언트와 동일 상수)
@@ -71,18 +72,28 @@ def load_trajectory(path: Path, episode: str) -> dict:
                 f"[replay] {path.name} 에 {episode!r} 가 없습니다.\n"
                 f"  있는 에피소드({len(names)}개): {shown}")
         grp = f[episode] if episode in f else f["data"][episode]
-        obs = grp["obs"]
-        if OBS_COMMANDED_JOINT_STATES in obs:
-            q = obs[OBS_COMMANDED_JOINT_STATES][:]
+        # 이 경로는 실제 로봇을 움직인다 -- 두 레이아웃에서 같은 행이
+        # 나오는 게 안전 전제다. 명령 계열과 폴백 계열을 한 번에
+        # 물어봐, 표에 실린 것들 중에서 쓸 계열을 고른다
+        # (없는 obs 는 표에 안 실린다).
+        #
+        # rate 는 주지 않는다. 주면 그 주파수로 기록된 파일만 읽히고
+        # 나머지는 거부된다. 재생 주파수는 --fps 가 따로 정하고, 여기서
+        # 필요한 것은 기록된 명령 계열 그대로다.
+        ft = frame_table(grp, keys=[
+            OBS_COMMANDED_JOINT_STATES, OBS_COMMANDED_GRIPPER_STATES,
+            OBS_JOINT_STATES, OBS_GRIPPER_STATES])
+        if OBS_COMMANDED_JOINT_STATES in ft.obs:
+            q = ft.obs[OBS_COMMANDED_JOINT_STATES]
             src = "commanded_joint_states"
         else:
             # 아주 옛 파일 폴백 -- 측정치 재생은 명령 재생보다 부드럽지 않다
-            q = obs[OBS_JOINT_STATES][:]
+            q = ft.obs[OBS_JOINT_STATES]
             src = "joint_states (폴백)"
-        if OBS_COMMANDED_GRIPPER_STATES in obs:
-            g = obs[OBS_COMMANDED_GRIPPER_STATES][:, 0]
+        if OBS_COMMANDED_GRIPPER_STATES in ft.obs:
+            g = ft.obs[OBS_COMMANDED_GRIPPER_STATES][:, 0]
         else:
-            g = obs[OBS_GRIPPER_STATES][:, 0]
+            g = ft.obs[OBS_GRIPPER_STATES][:, 0]
         instr = grp.attrs.get("instruction")
         if instr is None:
             info = f["data"].attrs.get("problem_info") if "data" in f else None

@@ -23,11 +23,14 @@ from mstack.data.dataset_schema import (  # noqa: E402
     OBS_AGENTVIEW_RGB,
     OBS_EYE_IN_HAND_RGB,
 )
+from mstack.data.frame_table import frame_table  # noqa: E402
 
 
 def export_episode(grp: h5py.Group, out_path: Path, fps: int) -> None:
-    agent = grp["obs"][OBS_AGENTVIEW_RGB]
-    wrist = grp["obs"][OBS_EYE_IN_HAND_RGB]
+    # 두 카메라를 프레임마다 좌우로 붙이므로 행이 필요하다 -- 축마다 자기
+    # 시간축인 2.0.0 에서도 두 카메라 obs 만 물질화해 같은 프레임 순서로 나온다.
+    ft = frame_table(grp, keys=[OBS_AGENTVIEW_RGB, OBS_EYE_IN_HAND_RGB])
+    agent, wrist = ft.obs[OBS_AGENTVIEW_RGB], ft.obs[OBS_EYE_IN_HAND_RGB]
     n, h, w, _ = agent.shape
     writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w * 2, h))
     try:
