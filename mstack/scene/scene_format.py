@@ -530,7 +530,8 @@ class SceneWriter:
         이미 있는 에피소드가 새 버전의 필수 관측을 갖췄을 때만 올린다 -- 아니면
         도장이 파일 내용을 넘어서 약속하는 셈이라, 옛 도장을 두고 사유만 남긴다.
         """
-        from mstack.data.dataset_schema import schema_required_fields
+        from mstack.data.dataset_schema import (parse_schema_version,
+                                                schema_required_fields)
 
         cur = normalize_schema_version(self.metadata.dataset_version)
         want = normalize_schema_version(session_version or "")
@@ -540,6 +541,17 @@ class SceneWriter:
         if req is None:
             self.version_note = f"모르는 버전이라 도장을 두었습니다: {want}"
             return
+        # MAJOR 가 다르면 **이어찍지 않는다.** MINOR 올림과 성격이 다르다:
+        # 2.0.0 은 계열마다 시간축이 따로인 구조라, 1.x 에피소드와 2.x
+        # 에피소드가 한 파일에 섞이면 그 파일은 어느 도장을 찍어도 거짓이
+        # 된다 (1.3.0 이라 하면 2.x 에피소드가 옛 리더를 깨고, 2.0.0 이라
+        # 하면 1.x 에피소드에 t/control 이 없다).
+        a, b = parse_schema_version(want), parse_schema_version(cur)
+        if a and b and a[0] != b[0]:
+            raise ValueError(
+                f"이 scene 은 {cur} 로 기록됐고 이번 세션은 {want} 입니다 -- "
+                "MAJOR 가 다르면 한 파일에 섞을 수 없습니다. 새 scene 으로 "
+                "시작하세요 (옛 파일은 그대로 읽힙니다).")
         if schema_version_key(want) < schema_version_key(cur):
             self.version_note = (
                 f"이 파일은 {cur} 인데 이번 세션은 {want} 입니다 -- 버전은 "
@@ -649,6 +661,27 @@ class SceneWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
+
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나 (버퍼만 만진다)."""
+        self._buffer.add_command(t, joints, gripper)
+
+    def set_control_hz(self, hz: float) -> None:
+        """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
+        self._buffer.control_hz = float(hz)
+
+    def set_capture(self, axis: str, frames: list) -> None:
+        """카메라 한 대가 이 에피소드 동안 준 프레임 전부를 버퍼에 싣는다.
+
+        ``add_frame`` 과 같이 **버퍼만 만지는** 호출이라 저장 스레드를 거치지
+        않는다. 에피소드가 끝난 직후 detach_buffer 전에 불러야 한다.
+        """
+        self._buffer.set_capture(axis, frames)
 
     def detach_buffer(self) -> LiberoEpisodeBuffer:
         buf = self._buffer

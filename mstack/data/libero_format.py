@@ -120,7 +120,10 @@ from mstack.data.dataset_schema import (
     OBS_JOINT_VELOCITIES,
     REPACK_COUNT_ATTR,
     REPACK_MARKER_ATTR,
+    TIMING_ACTION,
+    TIMING_FRAME,
     TIMING_GROUP,
+    TIMING_ROBOT_STATE,
     DatasetSchemaConfig,
 )
 from mstack.config.station import load_station
@@ -270,9 +273,77 @@ class LiberoEpisodeBuffer:
         # from the caller (dataset_schema.TIMING_*); string values such as a
         # camera's clock domain are kept per frame and written as group attrs.
         self.timing: dict[str, list] = {}
+        #: 축 이름 -> [(t_host, 프레임, 노드 meta), ...]  (knu-2.0.0)
+        #: 카메라가 **자기 주기로** 준 것 전부. 20 Hz 루프가 집어간 것과
+        #: 무관하며, 이것이 있으면 기록기가 축을 나눠 쓴다 (없으면 옛 경로).
+        self.capture: dict[str, list] = {}
+        #: control 축 **행**의 목표 주기 (Hz). 달성된 주기는 기록기가
+        #: timing/frame 에서 직접 재고, 둘이 갈라지는 것이 목표를 못 맞췄다는
+        #: 유일한 단서다.
+        #:
+        #: 지금은 기록 주기(cfg.fps, 20 Hz)다. 명령은 그보다
+        #: teleop_substeps 배 자주 나가지만(100 Hz) 마지막 틱만 기록된다 --
+        #: 그 전부를 control 축에 남기는 것은 아직 안 한 일이고, 그때 이 값이
+        #: fps x substeps 가 된다.
+        self.control_hz: float = 0.0
+        #: 명령 축: [(t_action, 관절7, 그리퍼), ...]  명령 주기 전부.
+        #: 지금 기록 루프는 substeps 개의 명령 중 **마지막 하나**만 control 축에
+        #: 남긴다 -- 20 Hz 기록에 100 Hz 명령이면 다섯 중 넷이 사라진다.
+        #: 여기 쌓으면 그 전부가 자기 축으로 남고, control 축은 그대로 둔다
+        #: (옛 소비자가 보던 actions 의 의미가 안 바뀐다).
+        self.commands: list = []
+        #: 이 역할들의 이미지는 **capture 에서 온다** -- 20 Hz 루프가 집어간
+        #: 프레임을 버퍼에 쌓지 않는다.
+        #:
+        #: 쌓으면 같은 에피소드를 두 번 들고 있게 된다: capture 1.11 GB +
+        #: 폴링 0.74 GB 이고 뒤엣것은 아무도 안 읽는다 (기록기가 per_axis 면
+        #: capture 를 쓴다). 게다가 _process_image 의 .copy() 가 tick 마다
+        #: 도므로 20 Hz x 2대면 37 MB/s 가 **50 ms 예산 안에서** 돈다.
+        #:
+        #: 폴링 자체는 그대로 둔다 -- 미리보기·기준사진·정지감지가 그 프레임을
+        #: 쓴다. 버퍼에 쌓는 것만 멈춘다.
+        self.capture_roles: set = set()
 
     def __len__(self) -> int:
         return len(self.joint_states)
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
+
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나 (버퍼만 만진다)."""
+        self._buffer.add_command(t, joints, gripper)
+
+    def set_control_hz(self, hz: float) -> None:
+        """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
+        self._buffer.control_hz = float(hz)
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
+
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나. 기록 루프의 substep 마다 불린다 -- **추가 I/O 가 없다**
+        (이미 보낸 명령을 적어 둘 뿐이라 루프 예산이 안 변한다)."""
+        self.commands.append((float(t), np.asarray(joints, dtype=np.float32),
+                              float(gripper)))
+
+    def set_capture(self, axis: str, frames: list) -> None:
+        """카메라 한 대가 이 에피소드 동안 준 프레임 전부를 싣는다.
+
+        ``frames`` 는 ``NodeCamera.stop_capture()`` 가 준 그대로
+        ``[(t_host, arr, meta), ...]`` 다. 여기서 이미지를 가공하지 않는다 --
+        저장 스레드가 한 번에 처리하는 편이 20 Hz 루프에 붙는 일이 없다.
+        """
+        self.capture[axis] = frames
+
+    @property
+    def per_axis(self) -> bool:
+        """축을 나눠 쓸 재료가 있는가. 없으면 옛 한 행 = 한 프레임으로 쓴다."""
+        return bool(self.capture)
 
     def add_frame(
         self,
@@ -308,10 +379,12 @@ class LiberoEpisodeBuffer:
             if v is not None:
                 self.ft[key].append(np.asarray(v, dtype=np.float32))
         if self.schema.save_agentview_rgb:
-            self.agentview_rgb.append(self._process_image(agentview_rgb))
+            if "agent" not in self.capture_roles:
+                self.agentview_rgb.append(self._process_image(agentview_rgb))
         if self.schema.save_eye_in_hand_rgb:
-            self.eye_in_hand_rgb.append(self._process_image(
-                eye_in_hand_rgb, role="wrist"))
+            if "wrist" not in self.capture_roles:
+                self.eye_in_hand_rgb.append(self._process_image(
+                    eye_in_hand_rgb, role="wrist"))
         if self.schema.save_joint_velocities and joint_velocities is not None:
             self.joint_velocities.append(np.asarray(joint_velocities, dtype=np.float32))
         if self.schema.save_timestamp and timestamp is not None:
@@ -490,12 +563,16 @@ def write_episode_payload(
     grp.attrs["station"] = load_station().name
 
     obs = grp.create_group("obs")
-    if schema.save_agentview_rgb:
-        write_image_dataset(obs, OBS_AGENTVIEW_RGB,
-                            np.stack(buf.agentview_rgb), pool)
-    if schema.save_eye_in_hand_rgb:
-        write_image_dataset(obs, OBS_EYE_IN_HAND_RGB,
-                            np.stack(buf.eye_in_hand_rgb), pool)
+    if buf.per_axis:
+        # knu-2.0.0: 카메라가 자기 주기로 준 것 전부를 자기 축에 쓴다.
+        _write_axes(grp, obs, buf, schema, pool, buf.control_hz)
+    else:
+        if schema.save_agentview_rgb:
+            write_image_dataset(obs, OBS_AGENTVIEW_RGB,
+                                np.stack(buf.agentview_rgb), pool)
+        if schema.save_eye_in_hand_rgb:
+            write_image_dataset(obs, OBS_EYE_IN_HAND_RGB,
+                                np.stack(buf.eye_in_hand_rgb), pool)
     if schema.save_joint_states:
         obs.create_dataset(OBS_JOINT_STATES, data=np.stack(buf.joint_states))
     if schema.save_gripper_states:
@@ -552,14 +629,152 @@ def write_episode_payload(
     for key in FT_OBS_KEYS:
         if len(buf.ft[key]) == n:
             obs.create_dataset(key, data=np.stack(buf.ft[key]))
-    _write_timing(grp, buf.timing, n)
+    if buf.per_axis:
+        # timing/ 의 내용은 t/ 와 meta/ 로 갈라져 들어갔다 (_write_axes).
+        # 남은 control 축 부수값만 meta/control 에 둔다 -- 같은 값을 두 곳에
+        # 쓰면 언젠가 갈라진다.
+        mg = grp.require_group("meta").require_group(CONTROL_AXIS)
+        t0 = float(grp.attrs["t0_wall"])
+        for key in (TIMING_ACTION, TIMING_ROBOT_STATE):
+            v = buf.timing.get(key)
+            if v is not None and len(v) == n:
+                mg.create_dataset(key, data=np.asarray(v, dtype=np.float64) - t0)
+    else:
+        _write_timing(grp, buf.timing, n)
 
     grp.create_dataset("actions", data=actions)
     grp.create_dataset("rewards", data=np.zeros(n, dtype=np.float32))
     dones = np.zeros(n, dtype=np.float32)
     dones[-1] = 1.0
     grp.create_dataset("dones", data=dones)
+    if buf.per_axis:
+        # control 축의 모든 데이터셋에 축을 **명시한다** -- 마지막에 한다,
+        # 전부 만들어진 뒤여야 빠뜨리지 않는다. 카메라는 _write_axes 가 이미
+        # 붙였다. 안 붙이면 소비자(트림 등)가 길이로 추정하게 되고, 그 추정은
+        # 축이 갈린 순간부터 틀린다.
+        for name in ("actions", "actions_ee", "rewards", "dones"):
+            _tag_axis(grp, name)
+        for name in list(obs.keys()):
+            if "axis" not in obs[name].attrs:
+                _tag_axis(obs, name)
     return n
+
+
+#: 시간축 이름 -> (이미지 데이터셋 이름, 1.3.0 timing 접두사, 크롭 role)
+AXIS_CAMERAS = {
+    "agent": (OBS_AGENTVIEW_RGB, "agentview", "agent"),
+    "wrist": (OBS_EYE_IN_HAND_RGB, "eye_in_hand", "wrist"),
+}
+CONTROL_AXIS = "control"
+
+
+def _tag_axis(grp: h5py.Group, name: str, axis: str = CONTROL_AXIS) -> None:
+    """이 데이터셋이 어느 시간축에 실리는지 **명시한다**.
+
+    길이로 추정하면 안 된다 -- 축마다 길이가 다른 순간부터 "actions 와 길이가
+    같으면 프레임 축" 이라는 추정이 카메라를 조용히 놓친다 (episode_trim 에서
+    실제로 그랬다).
+    """
+    if name in grp:
+        grp[name].attrs["axis"] = axis
+
+
+def _write_axes(grp: h5py.Group, obs: h5py.Group, buf: "LiberoEpisodeBuffer",
+                schema: DatasetSchemaConfig, pool: Any,
+                schema_hz: float = 0.0) -> None:
+    """knu-2.0.0 의 축별 기록: ``t/*``, 카메라 이미지, ``meta/*``.
+
+    control 축(액션·상태)은 호출자가 옛 경로 그대로 쓴다 -- 20 Hz 루프가 한
+    tick 에 한 줄씩 모은 것이라 구조가 안 바뀐다. 여기서 하는 일은 **카메라를
+    그 격자에서 떼어내는 것**이다.
+
+    시각의 기준은 ``t0_wall`` (control 첫 tick 의 호스트 시각) 이고, 모든
+    ``t/`` 는 그로부터의 초다. 절대 epoch 를 float64 로 그대로 두면 유효숫자가
+    1 µs 언저리까지 떨어진다.
+
+    카메라 축에는 **장치 시각**(``t_device``, librealsense global_time)을 쓴다.
+    도착 시각을 쓰면 기종마다 다른 고정 전송 지연이 축에 섞인다 -- 실측으로
+    D455 15.03 ms, D405 8.60 ms 이고 표준편차는 0.1 ms 수준이라 지터가 아니라
+    상수다. 도착 시각은 ``meta/<축>/host`` 에 남겨 둔다 (배포는 도착 순서로
+    프레임을 고르므로 그 규칙을 재현하려면 필요하다).
+    """
+    tg = grp.require_group("t")
+    mg = grp.require_group("meta")
+
+    t_ctrl = np.asarray(buf.timing.get(TIMING_FRAME, []), dtype=np.float64)
+    if t_ctrl.size == 0:
+        # 프레임 시각이 없으면 축을 만들 수 없다. 카메라만 쌓고 control 축을
+        # 못 쓰는 파일을 만드느니 옛 구조로 떨어진다.
+        raise ValueError(
+            "축을 나눠 쓰려면 timing/frame 이 필요하다 -- 이 에피소드에는 없다")
+    t0 = float(t_ctrl[0])
+    grp.attrs["t0_wall"] = t0
+    # 목표 주기와 **실제로 달성된** 주기를 나란히 남긴다 (C2).
+    #
+    # 계열마다 시각이 있으므로 주기가 안 나와도 불규칙한 그대로 기록되고
+    # 데이터는 상하지 않는다. 그래서 120 Hz 실측을 선행 조건에서 뺄 수 있었다.
+    # 다만 남기지 않으면 나중에 "그때 몇 Hz 였지" 를 못 푼다.
+    if schema_hz:
+        grp.attrs["control_hz"] = float(schema_hz)
+    if t_ctrl.size > 1:
+        span = float(t_ctrl[-1] - t_ctrl[0])
+        if span > 0:
+            grp.attrs["control_hz_actual"] = (t_ctrl.size - 1) / span
+    d = tg.create_dataset(CONTROL_AXIS, data=t_ctrl - t0)
+    d.attrs["axis"] = CONTROL_AXIS
+
+    if buf.commands:
+        # 명령 축. control 축과 **별개**다 -- 명령은 기록보다 substeps 배 자주
+        # 나가고, 그 전부가 조작자가 실제로 한 일이다. control 축의 actions 는
+        # 그대로 두어 옛 소비자가 보던 의미를 안 바꾼다.
+        t_cmd = np.asarray([t for t, _q, _g in buf.commands], dtype=np.float64)
+        tg.create_dataset("command", data=t_cmd - t0)
+        cg = grp.require_group("command")
+        d = cg.create_dataset("joint_positions",
+                              data=np.stack([q for _t, q, _g in buf.commands]))
+        d.attrs["axis"] = "command"
+        d = cg.create_dataset("gripper", data=np.asarray(
+            [g for _t, _q, g in buf.commands], dtype=np.float32).reshape(-1, 1))
+        d.attrs["axis"] = "command"
+        if t_cmd.size > 1 and t_cmd[-1] > t_cmd[0]:
+            grp.attrs["command_hz_actual"] = (t_cmd.size - 1) / float(
+                t_cmd[-1] - t_cmd[0])
+
+    polled = {"agent": buf.agentview_rgb, "wrist": buf.eye_in_hand_rgb}
+    for axis, (ds_name, _pre, role) in AXIS_CAMERAS.items():
+        if axis == "agent" and not schema.save_agentview_rgb:
+            continue
+        if axis == "wrist" and not schema.save_eye_in_hand_rgb:
+            continue
+        frames = buf.capture.get(axis)
+        if not frames:
+            # 이 카메라는 capture 를 못 했다 (무장 실패 등). 20 Hz 루프가
+            # 집어둔 폴링본이 있으면 **control 축에** 쓴다 -- 한쪽만 실패했다고
+            # 그 카메라 이미지를 통째로 잃으면 안 된다. 축이 갈리는 것은
+            # 사실 그대로이고, frame_table 이 둘 다 읽는다.
+            if polled[axis]:
+                write_image_dataset(obs, ds_name, np.stack(polled[axis]), pool)
+                obs[ds_name].attrs["axis"] = CONTROL_AXIS
+            continue
+        imgs = np.stack([buf._process_image(a, role) for _t, a, _m in frames])
+        write_image_dataset(obs, ds_name, imgs, pool)
+        obs[ds_name].attrs["axis"] = axis
+
+        # 축 자체는 장치 시각. 노드가 안 주면(옛 노드) 도착 시각으로 떨어진다.
+        dev = [m.get("t_device", t) for t, _a, m in frames]
+        tg.create_dataset(axis, data=np.asarray(dev, dtype=np.float64) - t0)
+        ag = mg.require_group(axis)
+        ag.create_dataset("host", data=np.asarray(
+            [t for t, _a, _m in frames], dtype=np.float64) - t0)
+        for key, src in (("frame_no", "frame_no"), ("node_seq", "seq"),
+                         ("exposure", "exposure")):
+            vals = [m.get(src) for _t, _a, m in frames]
+            if any(v is None for v in vals):
+                continue          # 안 주는 노드가 있다 -- 없는 값을 지어내지 않는다
+            ag.create_dataset(key, data=np.asarray(vals, dtype=np.int64))
+        dom = frames[-1][2].get("t_domain")
+        if dom:
+            ag.attrs["clock"] = str(dom)
 
 
 def _write_timing(grp: h5py.Group, timing: dict, n: int) -> None:
@@ -627,6 +842,24 @@ class NullTaskWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
+
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나 (버퍼만 만진다)."""
+        self._buffer.add_command(t, joints, gripper)
+
+    def set_control_hz(self, hz: float) -> None:
+        """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
+        self._buffer.control_hz = float(hz)
+
+    def set_capture(self, axis: str, frames: list) -> None:
+        """카메라 프레임 전부를 버퍼에 싣는다 (SceneWriter 와 같은 계약).
+        버퍼만 만지므로 저장 스레드를 거치지 않는다."""
+        self._buffer.set_capture(axis, frames)
 
     def detach_buffer(self) -> LiberoEpisodeBuffer:
         buf = self._buffer
@@ -788,6 +1021,24 @@ class LiberoTaskWriter:
 
     def discard_episode(self) -> None:
         self._buffer.clear()
+
+    def expect_capture(self, roles) -> None:
+        """이 역할들의 이미지는 capture 에서 올 것이므로, 20 Hz 루프가 집어간
+        프레임을 버퍼에 쌓지 않는다 (버퍼만 만진다)."""
+        self._buffer.capture_roles = set(roles)
+
+    def add_command(self, t: float, joints, gripper: float) -> None:
+        """명령 틱 하나 (버퍼만 만진다)."""
+        self._buffer.add_command(t, joints, gripper)
+
+    def set_control_hz(self, hz: float) -> None:
+        """이 에피소드 control 축의 목표 주기. 버퍼만 만진다."""
+        self._buffer.control_hz = float(hz)
+
+    def set_capture(self, axis: str, frames: list) -> None:
+        """카메라 프레임 전부를 버퍼에 싣는다 (SceneWriter 와 같은 계약).
+        버퍼만 만지므로 저장 스레드를 거치지 않는다."""
+        self._buffer.set_capture(axis, frames)
 
     def detach_buffer(self) -> LiberoEpisodeBuffer:
         """Swap out the filled episode buffer and install a fresh one, so the

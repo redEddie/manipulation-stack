@@ -50,7 +50,7 @@ DEFAULT_CONFIG_PATH = state_dir() / "dataset_schema.json"
 # 정본이다 (문서와 어긋나면 검증기가 잡는다).
 #: 지금 쓰는(기록하는) 버전. 읽기는 같은 MAJOR 안에서 위아래 모두 된다
 #: (schema_is_readable 참조).
-SCHEMA_VERSION = "knu-1.3.0"
+SCHEMA_VERSION = "knu-2.0.0"
 
 # --------------------------------------------------------- observation/dataset keys
 # Robot observation keys (returned by Robot.get_observations / RobotEnv.get_obs).
@@ -334,6 +334,46 @@ SCHEMA_FIELDS["knu-1.3.0"] = {
         f"{TIMING_GROUP}/{k}" for k in TIMING_REQUIRED),
 }
 
+# --------------------------------------------------------- knu-2.0.0
+# **MAJOR 다.** 한 행 = 한 프레임이라는 전제를 버린다.
+#
+# 1.3.0 까지는 20 Hz 루프가 모든 계열을 한 tick 에 같이 긁어 한 줄로 썼다.
+# 그 대가가 컸다: 30 fps 카메라의 33% 와 명령의 5분의 4가 버려지고, 두 카메라가
+# 자유 구동인데도 같은 행에 있어 동시각인 척했다.
+#
+# 2.0.0 은 소스마다 자기 시간축에 쓴다:
+#
+#     t/control   기록 tick          actions, obs/*, rewards, dones
+#     t/command   명령 tick          command/joint_positions, command/gripper
+#     t/agent     D455 가 준 시각     obs/agentview_rgb
+#     t/wrist     D405 가 준 시각     obs/eye_in_hand_rgb
+#
+# 모든 데이터셋에 ``attrs["axis"]`` 가 붙어 **어느 축인지 명시된다** -- 길이로
+# 추정하면 축이 갈린 순간부터 틀린다. 카메라 축의 시각은 **장치 시각**이고
+# 도착 시각은 ``meta/<축>/host`` 에 있다 (기종마다 다른 고정 전송 지연을
+# 축에 섞지 않으려고. 실측 D455 15.03 ms, D405 8.60 ms, 표준편차 0.1 ms).
+#
+# ``timing/`` 은 없다 -- 그 내용이 ``t/`` 와 ``meta/`` 로 갈라져 들어갔고,
+# 같은 값을 두 곳에 두면 언젠가 갈라진다.
+#
+# 읽는 쪽은 ``mstack.data.frame_table.frame_table()`` 하나로 두 레이아웃을
+# 모두 표로 받는다 -- 소비자는 어느 버전인지 몰라도 된다.
+#: 축이 갈린 파일이 반드시 갖는 것. 카메라 축은 **필수가 아니다** --
+#: capture 에 실패한 카메라는 control 축에 남고, 그것도 정상이다.
+AXIS_GROUP = "t"
+META_GROUP = "meta"
+AXIS_CONTROL = "control"
+SCHEMA_FIELDS["knu-2.0.0"] = {
+    **SCHEMA_FIELDS["knu-1.3.0"],
+    # timing/* 는 빠지고 t/control 이 들어온다. 이 교체가 MAJOR 인 이유다.
+    # timing/* 는 빠지고 t/control 이 들어온다. 1.3.0 이 요구하던
+    # timing/robot_state 는 meta/control/robot_state 로 자리만 옮긴다 --
+    # "각 프레임의 로봇 상태를 언제 읽었나" 는 보장이 약해지면 안 된다.
+    "episode_datasets": SCHEMA_FIELDS["knu-1.2.2"]["episode_datasets"] + (
+        f"{AXIS_GROUP}/{AXIS_CONTROL}",
+        f"{META_GROUP}/{AXIS_CONTROL}/{TIMING_ROBOT_STATE}",),
+}
+
 
 #: A scene file's version lives in one attribute: ``metadata.attrs["dataset_version"]``.
 #:
@@ -386,16 +426,32 @@ def parse_schema_version(value) -> "tuple[int, int, int] | None":
         return None
 
 
-def schema_is_readable(value, reader: str = SCHEMA_VERSION) -> bool:
-    """이 리더가 그 파일을 읽을 수 있는가.
+#: 어느 MAJOR 리더가 어느 MAJOR 파일들을 읽는가.
+#:
+#: MINOR 는 언제나 위아래 모두 읽힌다 (필드 추가만 하기로 했으므로, 위 버전
+#: 파일에는 모르는 필드가 더 있을 뿐이고 아래 버전 파일에는 나중에 생긴
+#: 필드가 없을 뿐이다). MAJOR 는 명시해야 한다.
+#:
+#: **2 가 1 을 읽는다.** ``mstack.data.frame_table.frame_table()`` 이 두
+#: 레이아웃을 모두 표로 돌려주기 때문이다 -- 소비자는 어느 버전인지 몰라도
+#: 된다. 이 줄이 없으면 이미 모은 2,434 에피소드가 전부 "이 코드가 읽을 수
+#: 없는 버전" 으로 보고된다.
+#:
+#: 반대(1 이 2 를 읽는 것)는 **False 로 둔다.** 옛 체크아웃에는 shim 이
+#: 없고, 축이 갈린 파일을 한 행 = 한 프레임으로 읽으면 길이가 다른 계열을
+#: 같은 인덱스로 집게 된다. 못 읽는 것이 사실이다.
+READS_MAJORS = {
+    1: (1,),
+    2: (1, 2),
+}
 
-    같은 MAJOR 안에서는 MINOR 가 위든 아래든 읽을 수 있다: MINOR 는 필드
-    추가만 하기로 했으므로, 위 버전 파일에는 모르는 필드가 더 있을 뿐이고
-    아래 버전 파일에는 나중에 생긴 필드가 없을 뿐이다. MAJOR 가 다르면
-    필드의 의미가 달라졌을 수 있어 읽을 수 없다고 본다.
-    """
+
+def schema_is_readable(value, reader: str = SCHEMA_VERSION) -> bool:
+    """이 리더가 그 파일을 읽을 수 있는가 (READS_MAJORS 참조)."""
     a, b = parse_schema_version(value), parse_schema_version(reader)
-    return bool(a and b and a[0] == b[0])
+    if not (a and b):
+        return False
+    return a[0] in READS_MAJORS.get(b[0], (b[0],))
 
 
 def schema_required_fields(value) -> "dict | None":
@@ -539,7 +595,12 @@ def selftest() -> None:
     assert schema_is_readable("knu-1.0.0", reader="knu-1.0.0")
     assert schema_is_readable("knu-1.0.0", reader="knu-1.1.0")   # 후방 호환
     assert schema_is_readable("knu-1.1.0", reader="knu-1.0.0")   # 전방 호환
-    assert not schema_is_readable("knu-2.0.0", reader="knu-1.0.0")  # MAJOR 다름
+    assert not schema_is_readable("knu-2.0.0", reader="knu-1.0.0")  # 옛 리더엔 shim 이 없다
+    # 2.x 리더는 1.x 를 읽는다 -- frame_table 이 두 레이아웃을 모두 표로 준다.
+    # 이게 깨지면 이미 모은 2,434 에피소드가 "못 읽는 버전" 이 된다.
+    assert schema_is_readable("knu-1.3.0", reader="knu-2.0.0")
+    assert schema_is_readable("knu-1.0.0", reader="knu-2.0.0")
+    assert schema_is_readable("knu-2.0.0", reader="knu-2.0.0")
     assert not schema_is_readable("이상한거")
 
     # 현재 버전은 필드 목록을 갖고 있고, 그 목록이 문서와 같은 정본이다
@@ -572,14 +633,20 @@ def selftest() -> None:
     # 1.2.x 가 더한 것은 metadata attrs 뿐 -- obs 는 1.1.1 과 같아야 한다.
     prev = schema_required_fields("knu-1.1.1")
     assert cur["obs_datasets"] == prev["obs_datasets"]
-    added = set(cur["metadata_attrs"]) - set(prev["metadata_attrs"])
+    # 1.2.x 가 더한 metadata attrs. **SCHEMA_VERSION 이 아니라 1.2.1 을 본다** --
+    # 예전에는 cur(=그때의 최신)을 봤는데, 1.2.2 가 provenance_source 를 더하는
+    # 순간부터 이 단언이 깨진 채로 남아 있었다 (이 셀프테스트는 스위트에서
+    # 돌지 않아 아무도 몰랐다). 여기서 묻고 싶은 것은 "지금 최신이 무엇을
+    # 더했나" 가 아니라 "1.2.x 가 무엇을 더했나" 다.
+    v121 = schema_required_fields("knu-1.2.1")
+    added = set(v121["metadata_attrs"]) - set(prev["metadata_attrs"])
     assert added == {META_PAYLOAD_MASS, META_PAYLOAD_COM,
                      META_RESET_POSE, META_RESET_QPOS}, added
     # 1.2.0 은 부하 모델만, 1.2.1 이 리셋 자세를 더한다 (2026-09-07).
     v120 = schema_required_fields("knu-1.2.0")
     assert set(v120["metadata_attrs"]) - set(prev["metadata_attrs"]) == {
         META_PAYLOAD_MASS, META_PAYLOAD_COM}
-    assert set(cur["metadata_attrs"]) - set(v120["metadata_attrs"]) == {
+    assert set(v121["metadata_attrs"]) - set(v120["metadata_attrs"]) == {
         META_RESET_POSE, META_RESET_QPOS}
 
     # 모르는 버전은 필드 목록이 없다 -> 검증기가 "모르는 스키마 버전" 으로 잡는다

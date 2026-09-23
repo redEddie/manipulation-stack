@@ -135,6 +135,15 @@ class NodeCamera:
         self._lock = threading.Lock()
         self._drain_thread: threading.Thread | None = None
         self._stop = threading.Event()
+        #: 에피소드 동안 **모든** color 프레임을 모은다 (None = 안 모음).
+        #: 20 Hz 루프가 read_latest 로 집어가는 것과 **무관하게** 쌓인다 --
+        #: 루프는 미리보기와 제어에 최신 한 장만 쓰고, 기록은 이쪽을 쓴다.
+        #: 30 fps 를 20 Hz 로 뽑으면 프레임의 33% 가 버려지는데, 드레인
+        #: 스레드는 이미 그 전부를 소켓에서 꺼내고 있었다 -- 버리지 않는 것이
+        #: 곧 구현이다.
+        self._capture: list | None = None
+        self._capture_cap = 0
+        self._capture_dropped = 0
 
     def __repr__(self) -> str:
         return f"NodeCamera({self.serial})"
@@ -229,8 +238,48 @@ class NodeCamera:
                 .reshape(m["shape"])
             with self._lock:
                 self._latest[kind] = (m["ts"], arr, m)
+                # 수집 중이면 같은 프레임을 쌓는다. frombuffer 는 복사하지
+                # 않으므로 여기서 드는 비용은 리스트 append 하나다 (payload
+                # bytes 가 살아남을 뿐이고, 그건 복사본과 같은 크기다).
+                if self._capture is not None and kind == "color":
+                    if len(self._capture) < self._capture_cap:
+                        self._capture.append((m["ts"], arr, m))
+                    else:
+                        # 상한을 넘었다. **조용히 덮어쓰지 않는다** -- 세어서
+                        # 알린다. 여기서 무한정 쌓으면 멈춘 세션이 RAM 을 먹는다.
+                        self._capture_dropped += 1
             if kind == "depth" and "depth_scale" in m:
                 self.depth_scale = float(m["depth_scale"])
+
+    # ------------------------------------------------------------- capture
+    def start_capture(self, max_frames: int) -> None:
+        """이 순간부터 오는 color 프레임을 전부 모은다.
+
+        ``max_frames`` 는 상한이다 -- 넘으면 더 쌓지 않고 센다. 20초 상한에
+        30 fps 면 600장(0.55 GB)이므로, 여유를 얹어 부르는 쪽이 정한다.
+        """
+        with self._lock:
+            self._capture = []
+            self._capture_cap = int(max_frames)
+            self._capture_dropped = 0
+
+    def stop_capture(self) -> "tuple[list, int]":
+        """모은 프레임과 상한 때문에 버린 수를 돌려주고 수집을 끈다.
+
+        Returns:
+            ``([(ts, arr, meta), ...], 버린 수)``. ``ts`` 는 노드가 받은
+            호스트 시각, ``meta`` 에 ``t_device`` / ``frame_no`` / ``seq`` 가 있다.
+        """
+        with self._lock:
+            got, dropped = self._capture or [], self._capture_dropped
+            self._capture = None
+            self._capture_cap = 0
+            self._capture_dropped = 0
+        return got, dropped
+
+    @property
+    def capturing(self) -> bool:
+        return self._capture is not None
 
     def _read(self, kind: str, max_age_ms: int) -> np.ndarray:
         return self._read_entry(kind, max_age_ms)[1]

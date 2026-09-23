@@ -30,6 +30,7 @@ from pathlib import Path
 import h5py
 
 from mstack.data.dataset_schema import (
+    parse_schema_version,
     META_RESET_POSE,
     META_RESET_QPOS,
     SCHEMA_FIELDS,
@@ -116,8 +117,17 @@ def diagnose(path: Path) -> Diagnosis:
             missing = _missing_for(f, stamped) if stamped in SCHEMA_FIELDS else {}
             # 내용이 만족하는 **가장 높은** 버전. 높은 것부터 보고 처음
             # 통과하는 것을 쓴다.
+            #
+            # **같은 MAJOR 안에서만 본다.** 다른 MAJOR 의 필드 목록을 만족한다는
+            # 것은 그 구조라는 뜻이 아니다 -- 에피소드가 없는 scene 은 어느
+            # 버전의 에피소드 요구사항도 공허하게 만족하므로, 빈 1.2.1 파일이
+            # "2.0.0 을 만족한다" 로 나와 도장을 올리자는 제안까지 이어진다.
+            # MAJOR 를 올리려면 그 구조로 다시 기록해야 하고 그건 새 scene 이다.
+            cur_major = (parse_schema_version(stamped) or (0,))[0]
             satisfied = ""
             for v in reversed(_versions()):
+                if (parse_schema_version(v) or (0,))[0] != cur_major:
+                    continue
                 if not _missing_for(f, v):
                     satisfied = v
                     break
@@ -130,6 +140,20 @@ def diagnose(path: Path) -> Diagnosis:
     if stamped not in SCHEMA_FIELDS:
         missing = {f"(모르는 버전 {stamped})": -1}
     return Diagnosis(md.scene_id, stamped, satisfied, eps, missing)
+
+
+def _raise_within_major(path: Path) -> str:
+    """만족하는 가장 높은 버전으로 도장을 올린다.
+
+    MAJOR 를 넘지 않는 것은 ``diagnose`` 가 보장한다 -- ``satisfied`` 를 같은
+    MAJOR 안에서만 고르기 때문이다. 여기서 다시 막으면 같은 규칙이 두 곳에
+    적히고, 언젠가 한쪽만 바뀐다.
+    """
+    after = diagnose(path)
+    if not (after.satisfied and after.satisfied != after.stamped):
+        return after.stamped
+    restamp(path, after.satisfied)
+    return after.satisfied
 
 
 def restamp(path: Path, version: str) -> None:
@@ -274,11 +298,7 @@ def fill_versions(path: Path, values: dict, source: str = "") -> str:
             if values.get(k):
                 meta.attrs[attr] = str(values[k])
         meta.attrs[META_PROVENANCE_SOURCE] = stamp
-    after = diagnose(Path(path))
-    if after.satisfied and after.satisfied != after.stamped:
-        restamp(Path(path), after.satisfied)
-        return after.satisfied
-    return after.stamped
+    return _raise_within_major(Path(path))
 
 
 def fill_reset_pose(path: Path, name: str, qpos: list) -> str:
@@ -293,11 +313,7 @@ def fill_reset_pose(path: Path, name: str, qpos: list) -> str:
         f["metadata"].attrs[META_RESET_POSE] = str(name)
         f["metadata"].attrs[META_RESET_QPOS] = _json.dumps(
             [float(x) for x in qpos])
-    after = diagnose(Path(path))
-    if after.satisfied and after.satisfied != after.stamped:
-        restamp(Path(path), after.satisfied)
-        return after.satisfied
-    return after.stamped
+    return _raise_within_major(Path(path))
 
 
 def fill_payload(path: Path, mass: float, com: list) -> str:
@@ -318,11 +334,7 @@ def fill_payload(path: Path, mass: float, com: list) -> str:
         f["metadata"].attrs[META_PAYLOAD_MASS] = float(mass)
         f["metadata"].attrs[META_PAYLOAD_COM] = _json.dumps(
             [float(x) for x in com])
-    after = diagnose(Path(path))
-    if after.satisfied and after.satisfied != after.stamped:
-        restamp(Path(path), after.satisfied)
-        return after.satisfied
-    return after.stamped
+    return _raise_within_major(Path(path))
 
 
 #: 리셋 자세에서 이만큼 벗어나면 짚어 본다.
@@ -394,6 +406,13 @@ def reachable_version(path: Path, *, payload=None, reset=None,
     )
 
     with h5py.File(Path(path), "r") as f:
+        # **MAJOR 는 넘지 않는다.** 여기서 묻는 것은 "값을 채우면 어디까지
+        # 가나" 인데, MAJOR 차이는 값이 아니라 구조의 차이다 -- 채워서 넘을 수
+        # 있는 것이 아니고, 에피소드가 없는 파일은 그 요구를 공허하게 만족해
+        # 빈 1.2.1 파일에 2.0.0 을 제안하게 된다.
+        cur_major = (parse_schema_version(
+            normalize_schema_version(
+                f["metadata"].attrs.get("dataset_version", ""))) or (0,))[0]
         have = set(f["metadata"].attrs)
         if payload:
             have |= {META_PAYLOAD_MASS, META_PAYLOAD_COM}
@@ -405,6 +424,8 @@ def reachable_version(path: Path, *, payload=None, reset=None,
             have |= {META_PROVENANCE_SOURCE}
         best = ""
         for v in _versions():
+            if (parse_schema_version(v) or (0,))[0] != cur_major:
+                continue
             need = SCHEMA_FIELDS[v]
             if any(a not in have for a in need.get("metadata_attrs", ())):
                 continue
@@ -473,8 +494,4 @@ def fill_and_raise(path: Path, *, payload=None, reset=None,
             stamp = f"backfilled {_time.strftime('%Y-%m-%d')}"
             meta.attrs[META_PROVENANCE_SOURCE] = (
                 f"{stamp} ({source})" if source else stamp)
-    after = diagnose(Path(path))
-    if after.satisfied and after.satisfied != after.stamped:
-        restamp(Path(path), after.satisfied)
-        return after.satisfied
-    return after.stamped
+    return _raise_within_major(Path(path))
