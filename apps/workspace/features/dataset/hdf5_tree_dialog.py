@@ -30,7 +30,7 @@ class Hdf5TreeDialog(QDialog):
     """HDF5 내, by构造 구조 뷰어 — myHDF5(h5web)처럼 트리 + attrs + 미리보기.
 
     구조(이름·shape·dtype·압축·attrs)는 열 때 한 번 읽고 파일을 바로
-    닫는다 — 뷰어가 파일을 쥔 채로 있으면 수집/재압축과 부딪힌다. 값·이미지
+    닫는다 — 뷰어가 파일을 쥔 채로 있으면 수집/공간 회수와 부딪힌다. 값·이미지
     미리보기만 항목을 클릭할 때 잠깐 다시 연다.
     """
 
@@ -70,7 +70,7 @@ class Hdf5TreeDialog(QDialog):
                 self._populate(f, self.tree.invisibleRootItem())
         except BlockingIOError:
             self.detail.setPlainText(tr(
-                "파일이 사용 중입니다 (수집 세션/재압축). 끝난 뒤 다시 여세요."))
+                "파일이 사용 중입니다 (수집 세션/공간 회수). 끝난 뒤 다시 여세요."))
         except OSError as e:
             self.detail.setPlainText(tr("파일을 열지 못했습니다: {e}").format(e=e))
         self.tree.expandToDepth(0)

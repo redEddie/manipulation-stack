@@ -1,13 +1,13 @@
 """긴 작업 하나를 **한 곳에서** 말한다 -- 무엇이 도는가, 얼마나 남았는가.
 
-재압축·LeRobot 변환·업로드·프록시 굽기는 몇 분에서 몇십 분이 걸리고, 그동안
+공간 회수·LeRobot 변환·업로드·프록시 굽기는 몇 분에서 몇십 분이 걸리고, 그동안
 데이터셋 파일을 쥐고 있다. 그 사실을 화면 세 곳이 알아야 한다:
 
 1. **상태바** -- 지금 무엇이 도는지와 남은 시간 (안 그러면 조작자는 멈춘
    건지 도는 건지 알 수 없다).
 2. **잠금** -- 그 파일을 건드리는 버튼(판정·삭제·트림 확정·프록시)은 도는
    동안 눌리면 안 된다. 잠그지 않으면 h5py 가 반쯤 쓴 파일을 열게 된다.
-3. **닫기 확인** -- 창을 닫으면 그 작업이 죽는다. 15분짜리 재압축이 조용히
+3. **닫기 확인** -- 창을 닫으면 그 작업이 죽는다. 15분짜리 공간 회수가 조용히
    사라지는 일을 막는다.
 
 셋이 같은 답을 보게 하려고 여기 하나로 모은다 (조작자 요청, 2026-09-13:
@@ -51,7 +51,7 @@ def running_job(win) -> str:
     procs = win.procs
     if procs.job_name:
         return procs.job_name
-    for proc, label in ((procs.repack_process, tr("재압축")),
+    for proc, label in ((procs.repack_process, tr("공간 회수")),
                         (procs.convert_process, tr("LeRobot 변환")),
                         (procs.upload_process, tr("HDF5 업로드")),
                         (getattr(procs, "pipeline_proc", None), tr("전체 처리"))):

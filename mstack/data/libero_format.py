@@ -1095,7 +1095,7 @@ class LiberoTaskWriter:
 
 
 # ---------------------------------------------------------------- repack state
-# 재압축 직후 파일도 메타데이터 오버헤드로 0.3~0.4%는 남는다(실측). 3%를 넘으면
+# 공간 회수를 막 끝낸 파일도 메타데이터 오버헤드로 0.3~0.4%는 남는다(실측). 3%를 넘으면
 # 지운 에피소드가 차지하던 자리로 보는 게 안전하다 -- 실측에서 삭제가 있었던
 # 파일들은 4.1 / 8.3 / 17.3% 였다.
 DEAD_SPACE_RATIO = 0.03
@@ -1204,7 +1204,7 @@ def hdf5_repack_status(path) -> dict:
                 out["compression"] = "+".join(sorted(c or "없음" for c in comps))
         fully_gzip = comps == {"gzip"}
         marked = bool(out["marker"]) and not out["mixed"]
-        # 죽은 공간이 크면 압축 방식과 무관하게 재압축 대상이다.
+        # 죽은 공간이 크면 압축 방식과 무관하게 공간 회수 대상이다.
         out["repacked"] = (fully_gzip or marked) and out["dead_ratio"] < DEAD_SPACE_RATIO
     except Exception as e:  # noqa: BLE001
         out["error"] = f"{type(e).__name__}: {e}"

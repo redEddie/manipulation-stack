@@ -321,7 +321,7 @@ def test_repack_status():
         assert not st["mixed"], st
         assert st["compression"] in (None, "없음"), st
 
-        # gzip 으로 재압축된 파일
+        # gzip 으로 압축된 파일
         path_compressed = Path(d) / "compressed.hdf5"
         with h5py.File(path_compressed, "w") as f:
             data = f.create_group("data")

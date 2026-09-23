@@ -53,14 +53,14 @@ def _episode_names(f: h5py.File) -> list:
 def load_trajectory(path: Path, episode: str) -> dict:
     """(T,7) 관절 명령 + (T,) 그리퍼 명령 + 부가정보. 두 포맷 공통.
 
-    파일 잠금(수집/재압축 중)과 없는 에피소드 이름은 traceback 대신
+    파일 잠금(수집/공간 회수 중)과 없는 에피소드 이름은 traceback 대신
     원인과 다음 행동이 보이는 SystemExit 로 끝낸다.
     """
     try:
         h = h5py.File(path, "r")
     except BlockingIOError:
         raise SystemExit(
-            f"[replay] {path.name} 이 사용 중입니다 (수집 세션이나 재압축이 "
+            f"[replay] {path.name} 이 사용 중입니다 (수집 세션이나 공간 회수가 "
             "잠그고 있음). 끝난 뒤 다시 시도하세요.") from None
     except OSError as e:
         raise SystemExit(f"[replay] 파일을 열지 못했습니다: {path} ({e})") from None

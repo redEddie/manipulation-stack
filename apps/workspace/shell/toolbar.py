@@ -130,7 +130,7 @@ def toolbar_context(win, key: str) -> list:
         ],
         "upload": [
             (tr("전체 처리"), win.upload.on_pipeline,
-             tr("재압축 → 변환 → 업로드를 한 번에")),
+             tr("공간 회수 → 변환 → 업로드를 한 번에")),
         ],
         "stats": [
             (tr("다시 분석"), lambda: win.stats_ops.refresh_analysis(force=True), ""),
@@ -332,10 +332,10 @@ def build_menu(win) -> None:
     # 업로드는 Dataset 에서 떼어낸다 -- 되돌릴 수 없는 바깥 동작이라
     # 고르다가 잘못 누르는 자리에 두지 않는다.
     m = mb.addMenu(tr("Upload"))
-    m.addAction(tr("전체 처리 (재압축 → 변환 → 업로드)"), win.upload.on_pipeline)
+    m.addAction(tr("전체 처리 (공간 회수 → 변환 → 업로드)"), win.upload.on_pipeline)
     m.addSeparator()
-    m.addAction(tr("재압축 + 업로드 (자동)"), win.upload.on_hdf5_auto)
-    m.addAction(tr("용량 최적화 (재압축)"), win.upload.on_repack)
+    m.addAction(tr("공간 회수 + 업로드 (자동)"), win.upload.on_hdf5_auto)
+    m.addAction(tr("용량 최적화 (공간 회수)"), win.upload.on_repack)
     m.addAction(tr("원본 업로드..."), win.upload.on_hdf5_upload)
     m.addSeparator()
     m.addAction(tr("변환 + 업로드 (자동)"), win.upload.on_lerobot_auto)
@@ -418,7 +418,7 @@ def build_statusbar(win) -> None:
     # 저장하는 순간 실패하는데 그때는 이미 한 판을 찍은 뒤다. Statistics 의
     # '디스크' 상자에 있던 것을 여기로 옮겼다 (2026-09-06 사용자 요청) --
     # 화면을 옮겨야 보이는 값이라 정작 수집 중에는 아무도 안 봤다.
-    # 긴 작업(재압축·변환·업로드·프록시)이 도는 동안만 보인다. 몇십 분짜리가
+    # 긴 작업(공간 회수·변환·업로드·프록시)이 도는 동안만 보인다. 몇십 분짜리가
     # 있는데 화면 어디에도 그 사실이 없으면, 멈춘 건지 도는 건지 알 수 없어
     # 조작자가 창을 닫아 버린다 (2026-09-13 요청).
     win.sb_job = QLabel("")

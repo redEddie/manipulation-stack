@@ -247,7 +247,7 @@ def build_right(win) -> None:
                      ("ds_episodes", "에피소드"), ("ds_schema", "스키마"),
                      ("ds_action", "액션 공간"),
                      ("ds_gripper", "그리퍼 규약"), ("ds_image", "이미지"),
-                     ("ds_fps", "FPS"), ("ds_repack", "재압축"))),
+                     ("ds_fps", "FPS"), ("ds_repack", "공간 회수"))),
     ):
         box = QGroupBox(tr(title))
         form = QFormLayout(box)

@@ -988,7 +988,7 @@ class WorkspaceWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         # 닫으면 죽는 것이 있으면 **한 번 묻는다** (조작자 요청 2026-09-13).
-        # 아래 정리 코드는 긴 작업을 terminate 로 죽인다 -- 15분짜리 재압축이
+        # 아래 정리 코드는 긴 작업을 terminate 로 죽인다 -- 15분짜리 공간 회수가
         # 그렇게 조용히 사라지는 것이 실제로 비쌌다.
         blockers = jobs.close_blockers(self)
         if blockers and QMessageBox.question(

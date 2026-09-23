@@ -49,7 +49,7 @@ class PipelineDialog(QDialog):
                  lerobot_repo: str, hdf5_repo: str, lerobot_root: str,
                  scripts: dict) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("전체 처리 (재압축 → 변환 → 업로드)"))
+        self.setWindowTitle(tr("전체 처리 (공간 회수 → 변환 → 업로드)"))
         self.setMinimumWidth(820)
         self.plan = plan
         self.data_root = data_root
@@ -111,7 +111,7 @@ class PipelineDialog(QDialog):
 
         if plan["ambiguous"]:
             warn = QLabel(tr(
-                "개수는 같지만 재압축 이후 편집된 흔적이 있는 task가 있습니다: {t}\n"
+                "개수는 같지만 공간 회수 이후 편집된 흔적이 있는 task가 있습니다: {t}\n"
                 "지우고 다시 찍었다면 이어붙이기로는 옛 에피소드가 Hub에 남습니다. "
                 "확실하지 않으면 '전체 재빌드'를 고르세요.").format(
                     t=", ".join(x[:40] for x in plan["ambiguous"])))
@@ -143,14 +143,14 @@ class PipelineDialog(QDialog):
 
         opts = QGroupBox(tr("함께 할 일"))
         ocol = QVBoxLayout(opts)
-        # 다이얼로그를 연 시점의 판정으로 고정한다 -- steps() 는 재압축 단계가
+        # 다이얼로그를 연 시점의 판정으로 고정한다 -- steps() 는 공간 회수 단계가
         # 돌기 *전에* 호출되므로 그때 다시 판정해도 같지만, 두 곳이 따로 계산
         # 하면 언젠가 어긋난다.
         self._repack_todo = [p for p in plan["paths"]
                              if not hdf5_repack_status(p)["repacked"]]
         n_repack = len(self._repack_todo)
         self.repack_check = QCheckBox(
-            tr("재압축 — 필요한 파일 {n}개").format(n=n_repack))
+            tr("공간 회수 — 필요한 파일 {n}개").format(n=n_repack))
         self.repack_check.setChecked(n_repack > 0)
         self.repack_check.setEnabled(n_repack > 0)
         ocol.addWidget(self.repack_check)
@@ -158,7 +158,7 @@ class PipelineDialog(QDialog):
         ocol.addWidget(self.hdf5_check)
         # 업로드 대상은 업로드 장부(mstack/data/hub_upload_state.py)가 고른다:
         # 지난 업로드 성공 이후 (크기, mtime)이 바뀐 파일 + 기록 없는 파일
-        # + 이번에 재압축될 파일. 예전의 "재압축한 파일만" 방식은 attr 만
+        # + 이번에 공간 회수가 도는 파일. 예전의 "재압축한 파일만" 방식은 attr 만
         # 고친 파일(라벨 교정, 삭제·재번호)을 빠뜨렸다 -- 실제로 문법 교정분
         # 5개가 Hub에 안 올라간 사고가 있었다 (2026-08-25 교체). 변경 없는
         # 파일을 올려도 Hub이 해시로 전송은 건너뛰지만 그 판정에 파일 전체를
@@ -259,13 +259,13 @@ class PipelineDialog(QDialog):
 
     def _hdf5_upload_selection(self, repo: str) -> list:
         """업로드 대상 [(경로 str, 사유 str)] -- 장부 기준 변경/신규 파일에
-        이번 실행에서 재압축될 파일을 합친다 (재압축은 mtime 을 바꾸므로
+        이번 실행에서 공간 회수가 도는 파일을 합친다 (회수는 mtime 을 바꾸므로
         다음 판정에는 어차피 걸리지만, 같은 실행 안에서 놓치지 않게)."""
         sel = {str(x): r for x, r in changed_files(repo, self.plan["paths"])}
         if getattr(self, "repack_check", None) is None or \
                 self.repack_check.isChecked():
             for x in self._repack_todo:
-                sel.setdefault(str(x), tr("재압축 — 이번 실행에서 다시 압축됨"))
+                sel.setdefault(str(x), tr("공간 회수 — 이번 실행에서 다시 쓰임"))
         return [(x, sel[x]) for x in map(str, self.plan["paths"]) if x in sel]
     def steps(self) -> list:
         """The ordered subprocess steps this run will execute."""
@@ -280,7 +280,7 @@ class PipelineDialog(QDialog):
 
         steps = []
         if self.repack_check.isChecked() and self._repack_todo:
-            steps.append({"name": tr("재압축"), "program": sys.executable,
+            steps.append({"name": tr("공간 회수"), "program": sys.executable,
                           "args": [self._scripts['repack'], *self._repack_todo]})
         convert = [self._scripts['convert'], *paths, "--repo-id", lerobot_repo, "--root", root,
                    "--fps", str(DEFAULT_EXPORT_FPS)]

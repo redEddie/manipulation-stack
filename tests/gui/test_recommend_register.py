@@ -140,15 +140,24 @@ plan = json.loads((_live if _live.is_file() else Path(
     f"{WT}/configs/collection/plans/example.json")).read_text())
 n_warn = 0
 total = 0
+skipped = 0
 for sc in plan["scenes"]:
     for sl in sc["slots"]:
+        # 통일 문법은 **작업 문장에만** 적용한다. reset 슬롯의 이름("reset")은
+        # 지칭할 물체도 관계도 없는 동작 이름이라 문법 대상이 아니다 --
+        # collection_plan.load_plan 이 쓰는 것과 같은 규칙이고, 여기서만
+        # 빠뜨리면 reset 을 둔 계획이 전부 경고로 잡힌다.
+        if str(sl.get("kind", "task")) != "task":
+            skipped += 1
+            continue
         total += 1
         if lint(sl["instruction"], strict_relation=False):
             n_warn += 1
 # 2026-08-24 정본 문법 확정 + 전 데이터 교정 이후로는 계획 전체가 통과해야
 # 한다 -- 경고가 생기면 새 문장이 정본 밖이라는 뜻 (문법 확장 또는 문장 수정).
 assert n_warn == 0, f"정본 문법 밖 문장 {n_warn}개 -- lint 경고 확인"
-print(f"6 통과: 생성 문장 자기일관성 + 계획 {total}개 문장 전부 정본 문법 통과")
+print(f"6 통과: 생성 문장 자기일관성 + 계획 {total}개 문장 전부 정본 문법 통과"
+      + (f" (reset 슬롯 {skipped}개 제외)" if skipped else ""))
 
 print("\nRecommendDialog 문장/등록 + SceneComposer lint 검증 통과")
 import os  # noqa: E402

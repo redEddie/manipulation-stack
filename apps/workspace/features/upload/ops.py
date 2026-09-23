@@ -153,7 +153,7 @@ class UploadOps:
         self.run_next_pipeline_step()
 
     def on_hdf5_auto(self) -> None:
-        """재압축 -> 원본 HDF5 업로드."""
+        """공간 회수 -> 원본 HDF5 업로드."""
         if not self.pipeline_guard(tr("HDF5 자동 처리")):
             return
         data_root = self.win.root_edit.text().strip()
@@ -162,7 +162,7 @@ class UploadOps:
             QMessageBox.warning(self.win, tr("파일 없음"),
                                 tr("{r} 에 *_demo.hdf5 / scene_*.hdf5 가 없습니다.").format(r=data_root))
             return
-        repo = self.check_repo("hdf5_repo_id", tr("HDF5 재압축 + 업로드"))
+        repo = self.check_repo("hdf5_repo_id", tr("HDF5 공간 회수 + 업로드"))
         if repo is None:
             return
         # 고르는 화면은 셋과 같은 표다 (2026-09-13). 예전에는 확인창 하나에
@@ -176,7 +176,7 @@ class UploadOps:
         picked = dlg.upload_paths()
         steps = []
         if todo:
-            steps.append({"name": tr("재압축 {n}개").format(n=len(todo)),
+            steps.append({"name": tr("공간 회수 {n}개").format(n=len(todo)),
                           "program": sys.executable,
                           "args": [REPACK_SCRIPT, *todo]})
         if picked:
@@ -502,7 +502,7 @@ class UploadOps:
         self.win.procs.pipeline_proc = proc
         self.win.procs.pipeline_step_t0 = time.monotonic()
         # 단계마다 새 작업이다 -- 남은 시간은 단계 안에서만 뜻이 있다
-        # (재압축의 진행률로 업로드가 얼마 남았는지는 알 수 없다).
+        # (공간 회수의 진행률로 업로드가 얼마 남았는지는 알 수 없다).
         jobs.start_job(self.win, tr("전체 처리: {n}").format(n=step["name"]))
         self.win.log(f"\n[전체 처리] ▶ {step['name']} 시작", "upload")
         self.win.statusBar().showMessage(tr("전체 처리: {n}").format(n=step["name"]))
@@ -557,11 +557,11 @@ class UploadOps:
     def on_repack(self) -> None:
         if self.win.worker is not None:
             QMessageBox.warning(self.win, tr("수집 중"),
-                                tr("수집 중에는 재압축할 수 없습니다. 먼저 세션을 종료하세요."))
+                                tr("수집 중에는 공간을 회수할 수 없습니다. 먼저 세션을 종료하세요."))
             return
         paths = self.hdf5_candidates()
         if not paths:
-            QMessageBox.warning(self.win, tr("파일 없음"), tr("재압축할 .hdf5 파일이 없습니다."))
+            QMessageBox.warning(self.win, tr("파일 없음"), tr("공간을 회수할 .hdf5 파일이 없습니다."))
             return
         dlg = RepackDialog(self.win, paths)
         if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -574,14 +574,14 @@ class UploadOps:
         proc.setArguments([REPACK_SCRIPT, *selected])
         proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         proc.readyReadStandardOutput.connect(
-            lambda: self.win._pipe(proc, "[재압축]", "upload"))
-        proc.finished.connect(lambda c, _s: (self.win.log(f"[재압축] 종료 (exit={c})", "upload"),
+            lambda: self.win._pipe(proc, "[공간 회수]", "upload"))
+        proc.finished.connect(lambda c, _s: (self.win.log(f"[공간 회수] 종료 (exit={c})", "upload"),
                                              jobs.end_job(self.win),
                                              self.win.dataset_ops.refresh_dataset_tree()))
         self.win.procs.repack_process = proc
         self.win.bottom_tabs.setCurrentWidget(self.win.upload_view)
-        self.win.log(f"[재압축] 시작: {len(selected)}개 파일", "upload")
-        jobs.start_job(self.win, tr("재압축 {n}개").format(n=len(selected)))
+        self.win.log(f"[공간 회수] 시작: {len(selected)}개 파일", "upload")
+        jobs.start_job(self.win, tr("공간 회수 {n}개").format(n=len(selected)))
         proc.start()
 
     def on_lerobot(self) -> None:

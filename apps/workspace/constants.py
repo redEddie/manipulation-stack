@@ -41,7 +41,7 @@ ACTIVITIES = (
     # 큐레이션 다음인 것은 "찍은 것을 고른 뒤 바로잡는다" 는 순서다.
     ("doctor", "🩺", "Doctor", "기록·지시문의 어긋남을 찾아 고친다"),
     ("stats", "📊", "Statistics", "세션 통계·수집 이력"),
-    ("upload", "☁", "Upload", "재압축·LeRobot 변환·업로드"),
+    ("upload", "☁", "Upload", "공간 회수·LeRobot 변환·업로드"),
     ("settings", "🛠", "Settings", "스키마·레이아웃"),
 )
 

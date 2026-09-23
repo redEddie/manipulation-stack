@@ -35,7 +35,7 @@ def build_upload(win) -> QWidget:
 
     # Repo ID 를 패널 밖으로 꺼내둔다. 다이얼로그 안에만 있을 때는 오타가
     # Recents 에 저장돼도 아무데도 보이지 않고, 자동 버튼이 그걸 그대로 다시
-    # 쓴다 -- 실제로 'r/lerobot' 이 저장된 채 재압축 15.6분을 돌고 마지막
+    # 쓴다 -- 실제로 'r/lerobot' 이 저장된 채 공간 회수 15.6분을 돌고 마지막
     # 업로드에서 403 으로 죽었다. 여기 있으면 누르기 전에 눈에 띈다.
     win.repo_edits = {}
     form = QFormLayout()
@@ -84,9 +84,9 @@ def build_upload(win) -> QWidget:
     # 그 아래가 같은 일을 쪼갠 수동 단계라, 어느 버튼이 어느 버튼을 포함하는지
     # 위치만 봐도 읽힌다.
     pipe_btn = win._upload_button(
-        col, tr("전체 처리 (재압축 → 변환 → 업로드)"),
+        col, tr("전체 처리 (공간 회수 → 변환 → 업로드)"),
         tr("Hub과 로컬을 대조해 필요한 것만 순서대로 실행합니다.\n"
-           "재압축 → LeRobot 변환 → LeRobot 업로드까지 한 번에.\n"
+           "공간 회수 → LeRobot 변환 → LeRobot 업로드까지 한 번에.\n"
            "확인 창에서 시작을 누르면 끝까지 무인으로 진행합니다."),
         win.upload.on_pipeline, primary=True, color="#2ecc71")
 
@@ -95,14 +95,14 @@ def build_upload(win) -> QWidget:
     hcol = QVBoxLayout(hdf5_box)
     hcol.setSpacing(6)
     win._upload_button(
-        hcol, tr("재압축 + 업로드 (자동)"),
+        hcol, tr("공간 회수 + 업로드 (자동)"),
         tr("아래 두 단계를 순서대로 실행합니다.\n"
-           "재압축이 필요한 파일만 골라 줄인 뒤, 원본 .hdf5 를 Hub에 올립니다."),
+           "공간을 회수할 파일만 골라 줄인 뒤, 원본 .hdf5 를 Hub에 올립니다."),
         win.upload.on_hdf5_auto, primary=True, color="#9b59b6")
     win._upload_button(
-        hcol, tr("용량 최적화 (재압축)"),
+        hcol, tr("용량 회수 (repack)"),
         tr("lzf 압축으로 .hdf5 크기를 줄입니다. 내용은 그대로입니다.\n"
-           "이미 재압축된 파일은 건너뜁니다."),
+           "회수할 공간이 없는 파일은 건너뜁니다."),
         win.upload.on_repack)
     win._upload_button(
         hcol, tr("원본 업로드..."),

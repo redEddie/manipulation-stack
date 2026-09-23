@@ -571,7 +571,7 @@ class TrimOps:
         lines = [f"{path.name}",
                  f"  에피소드 {st['episodes']}개, {st['size'] / 1e6:.1f} MB",
                  f"  이미지 압축: {st['compression']} (혼합={st['mixed']})",
-                 f"  재압축 이력: {st['marker'] or '-'}"]
+                 f"  공간 회수 이력: {st['marker'] or '-'}"]
         try:
             with h5py.File(path, "r") as f:
                 names = sorted(f["data"], key=lambda s: int(s.split("_")[1]))

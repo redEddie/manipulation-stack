@@ -67,7 +67,7 @@ class LerobotConvertDialog(QDialog):
             b.toggled.connect(self._on_mode_changed)
         layout.addWidget(mode_box)
 
-        # 파일은 **재압축·업로드와 같은 표**로 고른다 (2026-09-13). 셋이 하는
+        # 파일은 **공간 회수·업로드와 같은 표**로 고른다 (2026-09-13). 셋이 하는
         # 일은 "어느 .hdf5 를 고를 것인가" 로 같은데 화면만 달랐다.
         self.files_label = QLabel(tr(
             "변환할 .hdf5 파일 (이미 큐레이션 끝난 파일). 데이터 경로의 것을 "
@@ -226,7 +226,7 @@ class LerobotConvertDialog(QDialog):
     def _fill_table(self, default_root: str) -> None:
         """데이터 경로의 .hdf5 를 전부 싣고 **전부 체크**한다.
 
-        변환은 파일의 상태와 무관하다 -- 재압축처럼 "이미 했나" 를 파일이
+        변환은 파일의 상태와 무관하다 -- 공간 회수처럼 "이미 했나" 를 파일이
         말해 주지도 않고(변환 결과는 다른 폴더에 있다), 보통은 데이터셋 전체를
         한 번에 만든다. 그래서 기본이 전체 선택이고, 빼고 싶은 것만 푼다.
         """

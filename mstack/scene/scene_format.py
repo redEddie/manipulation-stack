@@ -903,7 +903,7 @@ class SceneWriter:
         보존할 것이 없다 (2026-08-14 결정: 큐레이션은 보존 대상이 아니다).
         지운 것이 이미 Hub 에 있으면 다음 전체 처리가 '삭제됨' 으로 잡아
         재빌드를 요구한다 -- 그때 사이드카도 새 uid 로 다시 만들어진다.
-        파일 크기는 재압축 전까지 줄지 않는다 (HDF5 특성).
+        파일 크기는 공간 회수 전까지 줄지 않는다 (HDF5 특성).
         """
         if name not in self._file or not EPISODE_GROUP_RE.match(name):
             raise KeyError(f"{name!r} not found in {self.path}")

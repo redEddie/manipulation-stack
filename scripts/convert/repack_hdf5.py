@@ -9,10 +9,13 @@ Rewriting the file into a fresh one is the only way to actually reclaim it,
 which is what ``h5repack`` does; that tool is not installed here, so this is
 the same operation in h5py (no external dependency).
 
-It also re-applies compression, which is where most of the win is: the image
-datasets dominate the file, and the collector writes them with ``lzf`` (fast,
-chosen so the background save never stalls the operator). Once collection is
-over that trade-off no longer applies, so gzip can be spent instead.
+It also re-applies compression: the image datasets dominate the file, and
+until 2026-09-22 the collector wrote them with ``lzf`` (fast, chosen so the
+background save never stalls the operator). Once collection is over that
+trade-off no longer applies, so gzip can be spent instead. Since that date
+the collector writes gzip-4 from birth, so for files collected wholly after
+the switch this half is already done and the remaining job is only the
+dead-space reclamation above -- old ``lzf`` files still need both.
 
 Safety
 ------
@@ -315,7 +318,7 @@ def _log_run(path: Path, entry: dict) -> None:
         with (path.parent / REPACK_LOG_NAME).open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError as e:
-        print(f"  (경고) 재압축 기록 실패: {e}", flush=True)
+        print(f"  (경고) 공간 회수 기록 실패: {e}", flush=True)
 
 
 def process(path: Path, compression: str, level: int, dry_run: bool,
@@ -360,7 +363,7 @@ def process(path: Path, compression: str, level: int, dry_run: bool,
                   "seconds_verify": round(elapsed - t_written, 3),
                   "seconds_total": round(elapsed, 3)})
     saved = before - after
-    print(f"  재압축 후 : {after/1e6:>9.1f} MB  "
+    print(f"  회수 후   : {after/1e6:>9.1f} MB  "
           f"({100*after/before:.1f}%, {saved/1e6:+.1f} MB)  소요 {elapsed:.1f}s", flush=True)
     if dry_run:
         tmp.unlink(missing_ok=True)
@@ -421,7 +424,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("files", nargs="+", type=Path)
     ap.add_argument("--compression", default="gzip", choices=["gzip", "lzf", "none"],
-                    help="이미지 재압축 방식 (기본 gzip -- 수집 후엔 속도보다 용량)")
+                    help="이미지 압축 방식 (기본 gzip -- 옛 lzf 파일은 이 방식으로 다시 압축)")
     ap.add_argument("--level", type=int, default=4,
                     help="gzip 레벨 1-9 (기본 4; 높을수록 느리고 조금 더 작음)")
     ap.add_argument("--dry-run", action="store_true",
@@ -431,7 +434,7 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=_default_jobs(),
                     help="gzip 인코딩에 쓸 프로세스 수 (기본: 코어 수 - 2, 1 이면 병렬 끔)")
     ap.add_argument("--skip-repacked", action="store_true",
-                    help="이미 재압축된 파일은 건너뜀 (repacked 표시 또는 이미지가 gzip)")
+                    help="회수할 것이 없는 파일은 건너뜀 (repacked 표시 + 죽은 공간이 적음)")
     args = ap.parse_args()
 
     total_before = total_after = 0
@@ -443,7 +446,7 @@ def main() -> int:
 
             st = hdf5_repack_status(p)
             if st["repacked"]:
-                print(f"\n=== {p.name}\n  [건너뜀] 이미 재압축됨 "
+                print(f"\n=== {p.name}\n  [건너뜀] 회수할 것이 없음 "
                       f"(압축={st['compression']}"
                       + (f", {st['marker']}" if st["marker"] else "") + ")", flush=True)
                 continue

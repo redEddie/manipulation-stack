@@ -166,7 +166,7 @@ def main() -> int:
                 n_syn += 1
         print(f"  [합성] {p.name}")
     print(f"\n완료: {len(drop)}개 삭제, {n_syn}개 합성.")
-    print("HDF5 는 지운 공간을 반환하지 않습니다 -- GUI 의 '용량 최적화(재압축)' 로 회수하세요.")
+    print("HDF5 는 지운 공간을 반환하지 않습니다 -- GUI 의 '용량 최적화 (공간 회수)' 로 회수하세요.")
     return 0
 
 

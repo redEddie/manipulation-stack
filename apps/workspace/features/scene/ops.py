@@ -101,7 +101,7 @@ class SceneOps:
             self.win.scene_info.set_scene(md, counts=counts or None, extra=extra)
         except BlockingIOError:
             self.win.scene_info.setText(tr(
-                "(다른 프로세스가 파일을 사용 중입니다 — 재압축/변환이 끝난 "
+                "(다른 프로세스가 파일을 사용 중입니다 — 공간 회수/변환이 끝난 "
                 "뒤 새로고침하세요)"))
         except Exception as e:  # noqa: BLE001
             self.win.scene_info.setText(f"(scene 정보 읽기 실패: {type(e).__name__}: {e})")

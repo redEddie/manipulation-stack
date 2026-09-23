@@ -136,8 +136,8 @@ dlg.hdf5_only_new_check.setChecked(True)
 dlg.repack_check.setChecked(True)     # repack_todo == 전체 (마커 없음)
 hus.record_uploaded(repo2, a2)        # 장부상 변경 없어도
 up = [s_ for s_ in dlg.steps() if "HDF5" in s_["name"]]
-assert str(a2) in up[0]["args"] and "재압축" in up[0]["detail"]
-print("11. 재압축 대상 합집합 OK")
+assert str(a2) in up[0]["args"] and "공간 회수" in up[0]["detail"]
+print("11. 공간 회수 대상 합집합 OK")
 
 # ---- 12. 장부 자리는 환경 변수로 옮길 수 있다 ----
 # 이 장부는 **데이터셋과 Hub 사이의 사실**이지 GUI 세션의 것이 아니다.

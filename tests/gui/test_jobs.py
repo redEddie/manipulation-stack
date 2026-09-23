@@ -1,6 +1,6 @@
 """긴 작업 하나를 세 곳이 같은 답으로 본다 (2026-09-13 조작자 요청).
 
-재압축·변환·업로드·프록시 굽기는 몇 분~몇십 분이고 그동안 데이터셋 파일을
+공간 회수·변환·업로드·프록시 굽기는 몇 분~몇십 분이고 그동안 데이터셋 파일을
 쥔다. 그 사실을 (1) 상태바가 말하고, (2) 파일을 바꾸는 버튼이 잠기고,
 (3) 창을 닫을 때 한 번 묻는다. 셋이 `shared/jobs.py` 하나를 본다.
 
@@ -90,18 +90,18 @@ class _Win:
 win = _Win()
 assert jobs.running_job(win) == "", jobs.running_job(win)
 win.procs.repack_process = _FakeProc(True)
-assert jobs.running_job(win) == "재압축", jobs.running_job(win)
+assert jobs.running_job(win) == "공간 회수", jobs.running_job(win)
 win.procs.repack_process = _FakeProc(False)
 assert jobs.running_job(win) == ""
 # 파이프라인(전체 처리)도 센다 -- 예전 busy_reason 은 이것을 못 봤다.
 win.procs.pipeline_proc = _FakeProc(True)
 assert jobs.running_job(win) == "전체 처리"
 win.procs.pipeline_proc = None
-print("2. running_job OK (재압축·전체 처리·한가함)")
+print("2. running_job OK (공간 회수·전체 처리·한가함)")
 
 # ------------------------------------------------------- 3. 잠금과 풀기
-jobs.start_job(win, "재압축 3개")
-assert jobs.running_job(win) == "재압축 3개"
+jobs.start_job(win, "공간 회수 3개")
+assert jobs.running_job(win) == "공간 회수 3개"
 for name in jobs.LOCKED_BUTTONS:
     assert not getattr(win, name).isEnabled(), name
 assert win.procs.job_locked is True

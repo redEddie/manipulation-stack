@@ -19,6 +19,13 @@ from mstack.gui.i18n import tr
 class RepackDialog(QDialog):
     """Pick which .hdf5 files to repack, pre-checking only the un-repacked ones.
 
+    Repacking does two jobs: it reclaims the space deleted episodes still
+    occupy (HDF5 never returns those bytes to the file), and it re-compresses
+    images from ``lzf`` to ``gzip``. Since 2026-09-22 the collector writes
+    gzip from birth, so for files collected wholly after that switch only the
+    reclamation remains -- an ``lzf`` image still means an old file needs the
+    recompression half too.
+
     Repacking is minutes of CPU per GB and gains nothing the second time, so
     running it over a directory that already contains finished files is pure
     waste -- but "which of these did I already do?" is not something the
@@ -28,15 +35,15 @@ class RepackDialog(QDialog):
 
     def __init__(self, parent: QWidget, paths: list) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("용량 최적화 (재압축)"))
+        self.setWindowTitle(tr("용량 최적화 (공간 회수)"))
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(tr(
-            "재압축할 파일을 선택하세요. 이미 재압축된 파일은 기본으로 해제되어 있습니다."
+            "공간을 회수할 파일을 선택하세요. 이미 회수된 파일은 기본으로 해제되어 있습니다."
         )))
 
         # 표는 셋이 함께 쓰는 조각이다 (mstack/gui/dialogs/parts.py) -- 업로드와
         # 변환도 같은 모양이라야 "같은 일" 로 읽힌다 (조작자, 2026-09-13).
-        self.table = Hdf5FileTable([tr("에피소드"), tr("이미지 압축"), tr("재압축 이력")])
+        self.table = Hdf5FileTable([tr("에피소드"), tr("이미지 압축"), tr("공간 회수 이력")])
         n_todo = 0
         for path in paths:
             st = hdf5_repack_status(path)
@@ -72,12 +79,13 @@ class RepackDialog(QDialog):
             n_todo += bool(todo)
         self.table.fit_columns()
         layout.addWidget(self.table)
-        todo_label = QLabel(tr("재압축 안 된 파일: {n}개").format(n=n_todo))
+        todo_label = QLabel(tr("공간 회수 안 된 파일: {n}개").format(n=n_todo))
         todo_label.setStyleSheet("color:#888;")
         layout.addWidget(todo_label)
 
         note = QLabel(tr(
-            "재압축은 삭제된 에피소드가 차지하던 공간을 회수하고 이미지를 gzip으로 다시 "
+            "공간 회수는 삭제·트림된 자리가 차지하던 바이트를 되돌려받고, 옛 lzf "
+            "파일이면 이미지를 gzip 으로 다시 "
             "압축합니다. 내용 검증 후 원본을 교체하며, 실패하면 원본은 그대로 남습니다.\n"
             "수집 세션이 파일을 열고 있으면 실패합니다 -- 세션을 먼저 종료하세요."
         ))
@@ -88,7 +96,7 @@ class RepackDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("재압축 시작"))
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("공간 회수 시작"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)

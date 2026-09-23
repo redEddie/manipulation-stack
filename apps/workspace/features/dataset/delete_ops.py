@@ -195,7 +195,7 @@ class DeleteOps:
         notes = [tr("삭제 후 남은 에피소드는 번호가 다시 매겨집니다 (scene 은 지시문별 E번호·uid 도).")]
         if hub_note:
             notes.append(hub_note)
-        notes.append(tr("파일 크기는 줄지 않습니다 (재압축 필요). 되돌릴 수 없습니다."))
+        notes.append(tr("파일 크기는 줄지 않습니다 (공간 회수 필요). 되돌릴 수 없습니다."))
         title = tr("에피소드 삭제")
         body = tr("에피소드 {n}개를 삭제합니다.\n\n{d}\n\n{notes}").format(
             n=total, d=detail, notes="\n".join(notes))

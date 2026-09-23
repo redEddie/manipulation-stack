@@ -21,7 +21,7 @@ same count is the one case counting misses -- flagged separately, see
 Hub 메타 parquet 의 ``length``). 순수 append 이력이라면 Hub 의 길이 시퀀스는
 로컬 시퀀스의 접두(prefix)와 정확히 일치한다 -- 20Hz 텔레옵에서 에피소드
 길이가 우연히 같기는 어려우므로, 지우고 다시 찍었다면 어긋난다. 접두가
-일치하면 "재압축 마커가 낡았을 뿐 손실 없음"으로 자동 판정하고, 어긋나면
+일치하면 "repack 마커가 낡았을 뿐 손실 없음"으로 자동 판정하고, 어긋나면
 개수만 볼 때보다 더 강하게(추가처럼 보이는 경우까지) 재빌드를 요구한다.
 
 한계: 같은 위치에 우연히 같은 길이로 다시 찍힌 교체는 못 잡는다. 그리고
@@ -252,9 +252,9 @@ def plan_sync(data_root: str | Path, repo_id: str) -> dict:
             added += l
             row["note"] = "새 task"
         else:
-            # 개수는 같다. 재압축 시점 개수와 다르면 '지우고 다시 찍은' 경우일
+            # 개수는 같다. repack 시점 개수와 다르면 '지우고 다시 찍은' 경우일
             # 수 있다 -- 길이 지문으로 한 번 더 가린다. 지문까지 일치하면
-            # 마커가 낡았을 뿐이고(재압축 없이 수집->푸시를 반복한 흐름),
+            # 마커가 낡았을 뿐이고(repack 없이 수집->푸시를 반복한 흐름),
             # 어긋나면 진짜 편집이다.
             at = local.get(task, {}).get("at_repack")
             if at is not None and at != l:
