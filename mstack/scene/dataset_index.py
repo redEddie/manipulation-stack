@@ -4,9 +4,14 @@ scene_010.hdf5 는 13.9 GB 인데 그 안의 메타데이터를 읽는 데 필�
 0.47 MB (0.0034%) 다. 그런데 읽기 요청이 865회라 원격(HTTP range)에서는
 파일 하나에 70초가 걸린다. HDF5 를 페이지 정렬하면 요청이 6회로 줄지만
 용량이 9~19% 늘어 못 쓴다. 그래서 **텍스트 색인**을 만든다 — 받기 전에
-내용을 알고, 필요한 파일만 고르기 위한 것이다. 여기 적히는 값은 전부
+내용을 알고, 필요한 파일만 고르기 위한 것이다. 여기 적히는 값은 거의 전부
 HDF5 (metadata 그룹 attrs · 에피소드 그룹 attrs · actions shape) 에서 온다.
-손으로 쓰는 값이 없어야 한다.
+유일한 예외는 ``kind`` 열이다 — 그것은 파일이 아니라 **계획 파일**
+(instructions.json) 에서 온다. HDF5 에피소드 attrs 에는 kind 가 없고
+앞으로도 없을 수 있다: kind 는 "이 슬롯이 무엇을 모으는 자리인가"를
+말하는 계획 개념이라 파일 단위로 얽매이지 않는다. 계획이 없거나 읽기
+실패하면 전부 ``task`` (기존 계획 파일의 기본값) 로 두고 색인은 끝까지
+만든다 — 아래 견고성 규칙과 같은 취지다.
 
 3종 TSV:
 
@@ -42,6 +47,8 @@ from typing import Optional
 
 import h5py
 
+from mstack.scene.collection_plan import KIND_TASK, load_plan
+from mstack.scene.dataset_meta import plan_path
 from mstack.scene.instruction_grammar import (
     _DRAG_RE,
     _PICK_RE,
@@ -61,10 +68,10 @@ from mstack.scene.scene_format import (
 
 SCENES_HEADER = ("ordinal", "scene_id", "created", "n_episodes", "bytes",
                  "schema_version", "objects")
-CELLS_HEADER = ("scene_id", "instruction_id", "skill", "object", "target",
-                "n_episodes", "n_ok")
-EPISODES_HEADER = ("episode_uid", "scene_id", "instruction_id", "n_frames",
-                   "ok", "collector", "timestamp")
+CELLS_HEADER = ("scene_id", "instruction_id", "kind", "skill", "object",
+                "target", "n_episodes", "n_ok")
+EPISODES_HEADER = ("episode_uid", "scene_id", "instruction_id", "kind",
+                   "n_frames", "ok", "collector", "timestamp")
 
 
 @dataclass
@@ -136,6 +143,51 @@ def _instruction_roles(sentence: str, md: Optional[SceneMetadata],
     return None, None
 
 
+def _as_text(value) -> str:
+    """HDF5 attr 값 -> 비교용 문자열. 고정 길이 문자열 attr 은 bytes 로
+    돌아오는데 계획의 scene_id/instruction_id 는 str 이라, 그대로 비교하면
+    같은 값도 영원히 매칭이 안 된다."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value)
+
+
+def _plan_kind_map(root: Path) -> dict:
+    """계획 파일 -> {(scene_id, instruction_id): kind}.
+
+    kind 는 파일에서 오는 게 아니라 계획에서 온다 — HDF5 에피소드 attrs 에
+    kind 필드가 없고 앞으로도 없을 수 있다(수집 시점에는 전부 task 였고,
+    종류는 나중에 계획에 붙은 개념이라 파일에 얽매이지 않는다). 계획 파일이
+    없거나 읽기/검증에 실패하면 빈 사상을 돌려 전부 ``task`` 가 되게 한다 —
+    색인은 계획 없이도 만들어져야 하고(옛 데이터셋), 깨진 계획이 색인까지
+    죽이면 안 된다.
+    """
+    path = plan_path(root)
+    if not path.is_file():
+        return {}
+    try:
+        plan = load_plan(path)
+    except Exception as e:  # noqa: BLE001 -- 깨진 계획은 kind 만 task 로 폰백
+        print(f"[색인] 계획 읽기 실패 — kind 는 전부 task 로 둔다: "
+              f"{path.name}: {e}", file=sys.stderr)
+        return {}
+    out = {}
+    for sp in plan.scenes:
+        for slot in sp.slots:
+            out[(sp.scene_id, slot.instruction_id)] = slot.kind
+    return out
+
+
+def _kind_of(kind_map: dict, scene_id, instruction_id) -> str:
+    """(scene_id, instruction_id) 의 kind. 사상에 없으면 ``task`` — 계획에
+    없는 slot 의 옛 에피소드라도 색인 행 자체는 남아야 하므로, 기본값으로
+    돌아간다."""
+    if scene_id is None or instruction_id is None:
+        return KIND_TASK
+    return kind_map.get((_as_text(scene_id), _as_text(instruction_id)),
+                        KIND_TASK)
+
+
 def _scan_file(path: Path) -> tuple:
     """한 scene 파일 -> (scenes 행, episodes 행, metadata|None).
 
@@ -199,6 +251,7 @@ def build_dataset_index(root: Path,
     있으면) TSV 로 쓴다. 깨진 파일은 건어너뛰고 errors 에 남긴다."""
     root = Path(root)
     props = props_by_id()
+    kind_map = _plan_kind_map(root)
     scenes, episodes, errors = [], [], []
     cells_acc: dict = {}
     for path in iter_scene_files(root):
@@ -210,6 +263,9 @@ def build_dataset_index(root: Path,
             errors.append((path.name, msg))
             continue
         scenes.append(scene_row)
+        for r in ep_rows:
+            # kind 는 파일에서 오지 않는다 — 스캔 후 계획 사상으로 붙인다.
+            r["kind"] = _kind_of(kind_map, r["scene_id"], r["instruction_id"])
         episodes.extend(ep_rows)
         for r in ep_rows:
             key = (r["scene_id"], r["instruction_id"])
@@ -237,6 +293,7 @@ def build_dataset_index(root: Path,
         cells.append({
             "scene_id": cell["scene_id"],
             "instruction_id": cell["instruction_id"],
+            "kind": _kind_of(kind_map, cell["scene_id"], cell["instruction_id"]),
             "skill": skill,
             "object": obj,
             "target": tgt,

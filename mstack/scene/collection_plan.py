@@ -51,11 +51,30 @@ PLANS_DIR = Path(__file__).resolve().parents[2] / "configs" / "collection" / "pl
 # 여전히 경고일 뿐 로드를 막지 않는다.
 
 
+#: 슬롯이 무엇을 모으는 자리인가. 없으면 ``KIND_TASK`` -- 이미 있는 계획
+#: 파일 전부가 그 뜻이고, 필드를 안 적어도 읽혀야 한다.
+KIND_TASK = "task"
+#: 팔이 집으로 돌아가는 구간. 사람이 모는 것이 아니라 자동 homing 이고,
+#: 문장이 아니라 동작이라 통일 문법 검사를 받지 않는다.
+KIND_RESET = "reset"
+KINDS = (KIND_TASK, KIND_RESET)
+
+
 @dataclass(frozen=True)
 class PlanSlot:
     instruction_id: str
     instruction: str
     target: int
+    #: **번호가 아니라 이 필드가 reset 을 표시한다.** "각 scene 의 0번을
+    #: reset 으로 예약" 은 두 가지 이유로 안 된다: 지금 25개 scene 전부가
+    #: I000 을 실제 작업에 쓰고 있어 같은 ID 가 만든 시점에 따라 다른 뜻이
+    #: 되고(2,434 에피소드에 걸친 조용한 충돌), 불투명 scene/instruction ID
+    #: 로 가면 "0번" 이라는 위치 자체가 사라진다.
+    kind: str = KIND_TASK
+
+    @property
+    def is_reset(self) -> bool:
+        return self.kind == KIND_RESET
 
 
 @dataclass(frozen=True)
@@ -117,6 +136,10 @@ def load_plan(path: Path) -> CollectionPlan:
             iid = str(sl.get("instruction_id", ""))
             instr = str(sl.get("instruction", "")).strip()
             target = int(sl.get("target", 0))
+            kind = str(sl.get("kind", KIND_TASK)) or KIND_TASK
+            if kind not in KINDS:
+                raise ValueError(
+                    f"{path.name}: {sid}/{iid} kind 는 {KINDS} 중 하나여야 한다: {kind!r}")
             if not INSTRUCTION_ID_RE.match(iid):
                 raise ValueError(f"{path.name}: 잘못된 instruction_id {iid!r} ({sid})")
             if not instr or (instr.startswith('"') and instr.endswith('"')):
@@ -134,11 +157,15 @@ def load_plan(path: Path) -> CollectionPlan:
             # 쓰인 계획 문장("place it on the {그릇}")이 경고 폭탄이 되지
             # 않게 한다. 이 자리는 기존 파일을 '읽어 검증'하는 곳이라 완화
             # 모드 -- 새 문장 작성 자리(편집 폼 등)는 strict 기본값을 쓴다.
-            gerr = _grammar_lint(instr, strict_relation=False)
-            if gerr:
-                warnings.append(
-                    f"{sid}/{iid}: 통일 문법(§4 동사 집합 포함) 경고 -- {gerr}: {instr!r}")
-            slots.append(PlanSlot(iid, instr, target))
+            # 통일 문법은 **작업 문장에만** 적용한다. reset 은 사람이 읽는
+            # 이름일 뿐이고 (팔이 집으로 가는 동작을 지칭할 물체도 관계도
+            # 없다), 여기에 문법을 요구하면 "reset" 이 매번 경고로 뜬다.
+            if kind == KIND_TASK:
+                gerr = _grammar_lint(instr, strict_relation=False)
+                if gerr:
+                    warnings.append(
+                        f"{sid}/{iid}: 통일 문법(§4 동사 집합 포함) 경고 -- {gerr}: {instr!r}")
+            slots.append(PlanSlot(iid, instr, target, kind))
         scenes.append(ScenePlan(scene_id=sid, note=str(s.get("note", "")),
                                 slots=tuple(slots)))
     return CollectionPlan(path=path, version=1, scenes=tuple(scenes),

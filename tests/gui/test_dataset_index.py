@@ -8,6 +8,7 @@
 
 Qt 없이 돈다 — 로봇/카메라 불필요.
 """
+import json
 import shutil
 import subprocess
 import sys
@@ -105,32 +106,37 @@ assert scene_lines[2].split("\t")[1] == "S001"
 print("2 통과: scenes.tsv 2행 + n_episodes/bytes/objects (쉼표 연결)")
 
 # ---- 3. cells.tsv: 칸 집계 + 스킬/역할 해석 ----
+# 이 데이터셋엔 instructions.json 이 없다 — kind 는 전부 기본값 task 다.
 cell_lines = (out / "cells.tsv").read_text(encoding="utf-8").splitlines()
 assert len(cell_lines) == 4, cell_lines            # 헤더 + 칸 3
 cells = {l.split("\t")[1]: l.split("\t") for l in cell_lines[1:]}
 row = cells["I000"]
 assert row[0] == "S000", row
-assert row[2] == "pick-inside", row                # skill_of 정본 분류
-assert row[3] == "OBJ-CUP-BLU-01", row             # 조작 물체 oid
-assert row[4] == "OBJ-BOWLL-YEL-01", row           # 목적지 oid
-assert row[5] == "2" and row[6] == "1", row        # success 뺀 에피소드는 n_ok 에 안 센다
+assert row[2] == "task", row                       # 계획 없음 -> 기본값 task
+assert row[3] == "pick-inside", row                # skill_of 정본 분류
+assert row[4] == "OBJ-CUP-BLU-01", row             # 조작 물체 oid
+assert row[5] == "OBJ-BOWLL-YEL-01", row           # 목적지 oid
+assert row[6] == "2" and row[7] == "1", row        # success 뺀 에피소드는 n_ok 에 안 센다
 row = cells["I001"]
-assert row[2] == "drag-next_to" and row[3] == "OBJ-CUP-BLU-01", row
-assert row[4] == "OBJ-BOWLL-YEL-01" and row[6] == "1", row
+assert row[2] == "task", row
+assert row[3] == "drag-next_to" and row[4] == "OBJ-CUP-BLU-01", row
+assert row[5] == "OBJ-BOWLL-YEL-01" and row[7] == "1", row
 row = cells["I002"]
-assert row[2] == "drawer-open" and row[3] == "OBJ-DRAWER-01", row
-assert row[4] == "-", row                          # 목적지 없는 지시문은 -
-assert row[5] == "2" and row[6] == "2", row
-print("3 통과: cells.tsv 칸 단위 집계 + 스킬/물체/목적지 (없으면 -)")
+assert row[2] == "task", row
+assert row[3] == "drawer-open" and row[4] == "OBJ-DRAWER-01", row
+assert row[5] == "-", row                          # 목적지 없는 지시문은 -
+assert row[6] == "2" and row[7] == "2", row
+print("3 통과: cells.tsv 칸 단위 집계 + kind(계획 없음=task) + 스킬/물체/목적지")
 
 # ---- 4. episodes.tsv: attr 빠진 에피소드는 - 로 남고 죽지 않는다 ----
 ep_lines = (out / "episodes.tsv").read_text(encoding="utf-8").splitlines()
 assert len(ep_lines) == 6, ep_lines                # 헤더 + 에피소드 5
 ep1 = ep_lines[2].split("\t")                      # episode_001 (attr 뺀 것)
-assert ep1[3] == "3", ep1                          # n_frames = actions.shape[0]
-assert ep1[4] == "-" and ep1[5] == "-" and ep1[6] == "-", ep1
+assert ep1[4] == "3", ep1                          # n_frames = actions.shape[0]
+assert ep1[3] == "task", ep1                       # 계획 없음 -> 기본값 task
+assert ep1[5] == "-" and ep1[6] == "-" and ep1[7] == "-", ep1
 ep0 = ep_lines[1].split("\t")
-assert ep0[4] == "1" and ep0[5] == "test", ep0     # 정상 에피소드는 그대로
+assert ep0[5] == "1" and ep0[6] == "test", ep0     # 정상 에피소드는 그대로
 print("4 통과: attr 이 빠진 에피소드는 - 로 남고 나머지는 정상")
 
 # ---- 5. 진입점 스크립트: --out 이 같아야 한다 ----
@@ -154,6 +160,52 @@ assert len(result2.errors) == 1 and result2.errors[0][0] == "scene_002.hdf5", \
 assert len(result2.scenes) == 2 and len(result2.episodes) == 5, \
     (len(result2.scenes), len(result2.episodes))
 print("6 통과: 깨진 scene 파일 건어너뛰기 + errors 기록")
+
+# ---- 7. 계획의 reset 슬롯이 kind 에 반영된다 ----
+# kind 는 HDF5 에서 오지 않는다 — 에피소드 attrs 에 kind 필드가 없고 앞으로도
+# 없을 수 있다. 값은 계획(instructions.json)의 슬롯에서만 온다는 것을 본다.
+ds2 = TMP / "fr3-reset"
+ds2.mkdir()
+_make_scene(
+    ds2, "S010",
+    ["OBJ-CUP-BLU-01", "OBJ-BOWLL-YEL-01"],
+    {"OBJ-CUP-BLU-01": {"zone": [0, 0]}, "OBJ-BOWLL-YEL-01": {"zone": [0, 1]}},
+    [("I000", "pick up the blue cup and place it inside the large yellow bowl",
+      [True]),
+     ("I001", "reset", [True])])
+(ds2 / "instructions.json").write_text(json.dumps({
+    "plan_version": 1,
+    "scenes": [{
+        "scene_id": "S010",
+        "slots": [
+            {"instruction_id": "I000",
+             "instruction": "pick up the blue cup and place it inside the "
+                            "large yellow bowl",
+             "target": 1},
+            {"instruction_id": "I001", "instruction": "reset",
+             "target": 1, "kind": "reset"},
+        ],
+    }],
+}, ensure_ascii=False) + "\n", encoding="utf-8")
+out2 = TMP / "out_reset"
+result3 = build_dataset_index(ds2, out_dir=out2)
+assert not result3.errors, result3.errors
+cells2 = {l.split("\t")[1]: l.split("\t") for l in
+          (out2 / "cells.tsv").read_text(encoding="utf-8").splitlines()[1:]}
+assert cells2["I000"][2] == "task", cells2["I000"]
+assert cells2["I001"][2] == "reset", cells2["I001"]
+eps2 = (out2 / "episodes.tsv").read_text(encoding="utf-8").splitlines()[1:]
+kinds2 = sorted(l.split("\t")[3] for l in eps2)
+assert kinds2 == ["reset", "task"], kinds2
+print("7 통과: 계획의 reset 슬롯이 kind=reset 으로 색인에 반영")
+
+# ---- 8. 깨진 계획 파일이 색인을 죽이지 않고 kind 는 전부 task ----
+(ds2 / "instructions.json").write_text("{ broken json", encoding="utf-8")
+result4 = build_dataset_index(ds2)
+assert not result4.errors, result4.errors          # scene 파일 자체는 정상
+kinds4 = {c["kind"] for c in result4.cells} | {e["kind"] for e in result4.episodes}
+assert kinds4 == {"task"}, kinds4
+print("8 통과: 깨진 계획은 kind 전부 task 로 폰백 + 색인 완료")
 
 print("\ndataset_index 검증 통과")
 _cleanup()

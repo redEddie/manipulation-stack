@@ -604,6 +604,8 @@ class CollectionWorker(QThread):
         self._armed_capture: set = set()
         #: 마지막으로 미리보기를 보낸 시각 (_emit_frames).
         self._preview_last = 0.0
+        #: 다음 홈 복귀를 에피소드로 찍을 것인가 (cmd_record_reset).
+        self._reset_armed = False
         # Stale-frame bookkeeping, see _get_obs.
         self._cam_last_fp: dict = {}
         self._cam_stale: dict = {}
@@ -638,6 +640,16 @@ class CollectionWorker(QThread):
     def cmd_set_episode_success(self, name: str, success: bool) -> None:
         self.saver.enqueue_set_success(name, success)
 
+    def cmd_record_reset(self) -> None:
+        """다음 홈 복귀를 **에피소드로 찍는다**. 한 번만 걸리고 소모된다.
+
+        지금 고른 slot 이 그 에피소드에 찍히므로, 조작자는 reset slot 을
+        고른 뒤 이것을 누른다. 예약제인 이유는 양 때문이다 -- 홈 복귀는 매
+        에피소드마다 도는데 그것을 전부 찍으면 reset 이 데이터의 절반이 된다.
+        가장 잘 된 테이크 뒤에 한 번 거는 것이 쓰임에 맞는다.
+        """
+        self._cmds.put(("record_reset",))
+
     def cmd_set_slot(self, instruction: str, instruction_id: str) -> None:
         """scene 모드: 현재 slot(수행할 instruction)을 바꾼다.
 
@@ -665,6 +677,12 @@ class CollectionWorker(QThread):
         thread-safe); pending saves queued before this delete commit first."""
         self.saver.enqueue_delete(name)
 
+    def _arm_reset(self) -> None:
+        self._reset_armed = True
+        self.log_message.emit(
+            f"[reset] 다음 홈 복귀를 {self._slot_instruction_id or '(slot 미선택)'} "
+            "로 기록합니다")
+
     def _handle_set_slot(self, instruction: str, instruction_id: str) -> None:
         """delete_episode 처럼 상태와 무관한 인라인 커맨드 -- 모든 드레인
         지점에서 처리한다. 파일을 만지지 않으므로 워커 스레드에서 안전하다."""
@@ -688,6 +706,9 @@ class CollectionWorker(QThread):
                     continue
                 if cmd[0] == "set_slot":
                     self._handle_set_slot(cmd[1], cmd[2])
+                    continue
+                if cmd[0] == "record_reset":
+                    self._arm_reset()
                     continue
                 result = cmd  # last one wins if several piled up
         except queue.Empty:
@@ -749,6 +770,8 @@ class CollectionWorker(QThread):
                     self._handle_delete_episode(cmd[1])
                 elif cmd[0] == "set_slot":
                     self._handle_set_slot(cmd[1], cmd[2])
+                elif cmd[0] == "record_reset":
+                    self._arm_reset()
                 elif cmd[0] == "quit":
                     quit_seen = True
                 elif cmd[0] == "go_home":
@@ -779,6 +802,8 @@ class CollectionWorker(QThread):
                     self._handle_delete_episode(cmd[1])
                 elif cmd[0] == "set_slot":
                     self._handle_set_slot(cmd[1], cmd[2])
+                elif cmd[0] == "record_reset":
+                    self._arm_reset()
                 elif cmd[0] == "quit":
                     quit_seen = True
                 elif cmd[0] == "go_home":
@@ -1618,9 +1643,55 @@ class CollectionWorker(QThread):
                 self.log_message.emit(
                     f"[수집] {role} 상한을 넘어 {dropped}장을 못 받았습니다")
 
-    def _record_episode(self) -> tuple[str, int]:
-        """Returns (outcome, n_frames); outcome is "save", "discard", "quit", or "go_home"."""
-        self._teleop.set_teleop_mode(True)
+    def _record_reset(self) -> str:
+        """홈 복귀를 에피소드 하나로 찍고 저장한다. "ok" 또는 "quit".
+
+        실패는 수집을 막지 않는다 -- reset 은 부가 기록이고, 여기서 멈추면
+        조작자가 다음 테이크를 못 찍는다. 못 찍었으면 이유를 남기고 넘어간다.
+        """
+        try:
+            q_now = self._joint_vec(self._get_obs(with_cameras=False))[:7]
+            traj = self._home_trajectory(q_now)
+        except Exception as e:  # noqa: BLE001
+            self.log_message.emit(f"[reset] 궤적을 만들지 못했습니다: {e}")
+            return "ok"
+        if not traj:
+            self.log_message.emit(
+                "[reset] 홈까지의 EE 경로를 못 풀어 이번에는 안 찍습니다 "
+                "(관절 램프로 그냥 돌아갑니다)")
+            return "ok"
+        self.log_message.emit(f"[reset] {len(traj)} tick 기록 시작")
+        outcome, n = self._record_episode(home_traj=traj)
+        if outcome == "quit":
+            return "quit"
+        if outcome != "save" or n < 2:
+            self._writer.discard_episode()
+            self.log_message.emit(f"[reset] 기록하지 않았습니다 ({outcome}, {n}프레임)")
+            return "ok"
+        instr, iid = self._episode_slot
+        self.saver.enqueue_save(self._writer.detach_buffer(), True,
+                                instruction=instr, instruction_id=iid)
+        self._episode_count += 1
+        self.log_message.emit(f"[reset] {iid} 로 {n}프레임 저장")
+        return "ok"
+
+    def _action_from_q(self, q, gripper: float) -> dict:
+        """7관절 + 그리퍼를 리더가 내는 것과 **같은 모양**의 액션으로."""
+        return dict(zip(JOINT_KEYS, [float(x) for x in q[:7]] + [float(gripper)]))
+
+    def _record_episode(self, home_traj: "list | None" = None) -> tuple[str, int]:
+        """Returns (outcome, n_frames); outcome is "save", "discard", "quit", or "go_home".
+
+        ``home_traj`` 를 주면 **리더 대신 그 궤적이 팔을 몬다** -- reset 을
+        하나의 에피소드로 찍는 경로다 (PlanSlot.kind == "reset").
+
+        새 루프를 만들지 않고 이 루프를 그대로 쓰는 이유: reset 도 다른
+        에피소드와 **완전히 같은 파일**이어야 한다. 같은 주기, 같은 시간축,
+        같은 카메라 수집, 같은 저장 경로를 지나야 색인·트림·변환이 reset 을
+        특별 취급하지 않는다. 바뀌는 것은 액션이 어디서 오는가 하나뿐이고,
+        그래서 ``actions`` 에는 팔을 실제로 움직인 명령이 그대로 남는다.
+        """
+        self._teleop.set_teleop_mode(home_traj is None)
         try:
             self._set_state("recording")
             self._writer.start_episode()
@@ -1658,6 +1729,15 @@ class CollectionWorker(QThread):
             # 리더 놓침 감시. 에피소드마다 새로 만든다 -- 직전 에피소드의
             # 홈 복귀·정렬 이동이 첫 판정에 섞이면 안 된다.
             drop_guard = LeaderDropGuard()
+            # reset 궤적의 커서와, 그 동안 유지할 그리퍼 상태. 집으로 가는
+            # 동안 그리퍼를 여닫을 이유가 없으므로 시작 값을 그대로 쥔다.
+            traj_i = 0
+            home_grip = 0.0
+            if home_traj is not None:
+                try:
+                    home_grip = float(self._get_obs(with_cameras=False)["gripper.pos"])
+                except Exception:  # noqa: BLE001 -- 못 읽으면 열린 채로 간다
+                    home_grip = 0.0
             for i in range(max_frames):
                 for k in range(substeps):
                     # 버튼은 명령 주기로 본다 -- 기록 주기로만 보면 반응이
@@ -1677,15 +1757,26 @@ class CollectionWorker(QThread):
                         if stop:
                             break
 
-                    action = self._teleop.get_action()
-                    # **보내기 전에** 본다. 이 명령이 곧 떨어진 리더의 자세다.
-                    speed = drop_guard.update(
-                        self._joint_vec(action)[:7], time.monotonic())
-                    if drop_guard.tripped(speed):
-                        self._emergency_hold(speed, drop_guard.limit)
-                        outcome = "discard"
-                        stop = True
-                        break
+                    if home_traj is not None:
+                        # 궤적이 끝나면 그것이 에피소드의 끝이다. 리더 낙하
+                        # 감시는 걸지 않는다 -- 리더가 팔을 몰고 있지 않으므로
+                        # 그 판정의 전제(명령 = 리더 자세)가 성립하지 않는다.
+                        if traj_i >= len(home_traj):
+                            outcome = "save"
+                            stop = True
+                            break
+                        action = self._action_from_q(home_traj[traj_i], home_grip)
+                        traj_i += 1
+                    else:
+                        action = self._teleop.get_action()
+                        # **보내기 전에** 본다. 이 명령이 곧 떨어진 리더의 자세다.
+                        speed = drop_guard.update(
+                            self._joint_vec(action)[:7], time.monotonic())
+                        if drop_guard.tripped(speed):
+                            self._emergency_hold(speed, drop_guard.limit)
+                            outcome = "discard"
+                            stop = True
+                            break
                     self._robot.send_action(action)
                     t_action = time.time()
                     # 보낸 명령을 명령 축에 적는다. 추가 I/O 가 없다 -- 이미
@@ -1944,6 +2035,17 @@ class CollectionWorker(QThread):
         try:
             while self._running:
                 try:
+                    # **예약돼 있으면 이 홈 복귀를 에피소드로 찍는다.**
+                    # 직전 테이크가 끝난 자리에서 출발하므로 (물체는 놓였고
+                    # 팔은 뻗어 있다) 그것이 실제로 배우게 하고 싶은 reset
+                    # 조건이다. 찍고 나서도 아래 램프는 그대로 돈다 -- 이미
+                    # 집 근처라 금방 끝나고, 남은 잔차를 그쪽이 정리한다.
+                    if self._reset_armed:
+                        self._reset_armed = False
+                        r = self._record_reset()
+                        if r == "quit":
+                            break
+
                     # react_to_go_home=False: this ramp already IS "go home",
                     # so a go_home click here is a no-op, not an abort.
                     self._set_state("homing")
