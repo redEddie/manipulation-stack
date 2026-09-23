@@ -650,6 +650,14 @@ class SceneWriter:
     def discard_episode(self) -> None:
         self._buffer.clear()
 
+    def set_capture(self, axis: str, frames: list) -> None:
+        """카메라 한 대가 이 에피소드 동안 준 프레임 전부를 버퍼에 싣는다.
+
+        ``add_frame`` 과 같이 **버퍼만 만지는** 호출이라 저장 스레드를 거치지
+        않는다. 에피소드가 끝난 직후 detach_buffer 전에 불러야 한다.
+        """
+        self._buffer.set_capture(axis, frames)
+
     def detach_buffer(self) -> LiberoEpisodeBuffer:
         buf = self._buffer
         self._buffer = LiberoEpisodeBuffer(self.schema, self.crop_params)

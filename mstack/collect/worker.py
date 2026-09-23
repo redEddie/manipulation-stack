@@ -1523,6 +1523,50 @@ class CollectionWorker(QThread):
                 return
             time.sleep(0.02)
 
+    def _start_capture(self, max_frames: int) -> None:
+        """이 에피소드 동안 모든 카메라 프레임을 모으게 한다.
+
+        모으지 못하는 카메라(옛 드라이버, 더미)가 있으면 그냥 안 모은다 --
+        그 세션은 옛 한 행 = 한 프레임 구조로 기록된다. 카메라 한 대가
+        capture 를 지원하지 않는다고 수집을 막을 이유는 없다.
+        """
+        for cam in self._robot.cameras.values():
+            if hasattr(cam, "start_capture"):
+                try:
+                    cam.start_capture(max_frames)
+                except Exception as e:  # noqa: BLE001
+                    self.log_message.emit(f"[수집] 카메라 프레임 모으기 실패: {e}")
+
+    def _collect_capture(self) -> None:
+        """모은 프레임을 버퍼에 싣고 수집을 끈다. **반드시 불러야 한다** --
+        안 끄면 다음 에피소드까지 계속 쌓여 메모리가 자란다.
+
+        ``frame_no`` 에 구멍이 있으면 보고한다. 최신만 쓰던 시절에는 무해했지만
+        이제는 잃어버린 프레임이고, 드레인이 막혔거나 RCVHWM(30 fps 에서
+        0.4 초치)에서 버려졌다는 뜻이다.
+        """
+        for role, cam in self._robot.cameras.items():
+            if not hasattr(cam, "stop_capture"):
+                continue
+            try:
+                frames, dropped = cam.stop_capture()
+            except Exception as e:  # noqa: BLE001
+                self.log_message.emit(f"[수집] 카메라 프레임 회수 실패: {e}")
+                continue
+            if not frames:
+                continue
+            self._writer.set_capture(role, frames)
+            fn = [m.get("frame_no") for _t, _a, m in frames]
+            if all(x is not None for x in fn):
+                gaps = sum(1 for a, b in zip(fn, fn[1:]) if b - a != 1)
+                if gaps:
+                    self.log_message.emit(
+                        f"[수집] {role} 프레임 {gaps}곳이 끊겼습니다 "
+                        f"({len(frames)}장 중) -- 드레인이 밀렸거나 큐에서 버려졌습니다")
+            if dropped:
+                self.log_message.emit(
+                    f"[수집] {role} 상한을 넘어 {dropped}장을 못 받았습니다")
+
     def _record_episode(self) -> tuple[str, int]:
         """Returns (outcome, n_frames); outcome is "save", "discard", "quit", or "go_home"."""
         self._teleop.set_teleop_mode(True)
@@ -1544,6 +1588,16 @@ class CollectionWorker(QThread):
             substeps = self.cfg.teleop_substeps
             cmd_budget = budget / substeps
             max_frames = int(self.cfg.max_episode_seconds * self.cfg.fps)
+            # 카메라가 자기 주기로 주는 것을 **전부** 모은다 (knu-2.0.0).
+            # 20 Hz 루프는 미리보기·제어에 최신 한 장만 계속 쓰고, 기록은
+            # 이 버퍼를 쓴다 -- 30 fps 를 20 Hz 로 뽑으면 33% 가 버려진다.
+            #
+            # 상한은 에피소드 상한의 두 배 여유로 둔다: 카메라가 명목 fps 보다
+            # 빠를 수 있고, 여기서 막히면 그만큼이 조용히 사라진다. 20초 30 fps
+            # 두 대면 1.1 GB 이므로 두 배여도 메모리가 문제 되지 않는다.
+            cap_max = int(self.cfg.max_episode_seconds * 2
+                          * max(60.0, float(self.cfg.fps) * 3))
+            self._start_capture(cap_max)
             t_next = time.monotonic()
             n = 0
             outcome = "save"
@@ -1653,6 +1707,7 @@ class CollectionWorker(QThread):
             self._log_phase(
                 time.time(), event="episode_end", outcome=outcome, frames=n,
                 success=(self._pending_success if outcome == "save" else None))
+            self._collect_capture()
             return outcome, n
         finally:
             self._teleop.set_teleop_mode(False)
