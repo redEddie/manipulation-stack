@@ -320,9 +320,25 @@ def _episode_summary(name: str, grp: h5py.Group) -> dict:
 
 
 # ------------------------------------------------------------------- writer
-def _stampable_version(want: str, has_payload: bool,
-                       has_reset: bool = False,
-                       has_provenance: bool = False) -> str:
+def _meta_gaps(metadata) -> list:
+    """도장을 막는 세션 메타 중 아직 없는 것들, 사람이 읽는 이름으로.
+
+    세 갈래를 두 자리(새 파일·pending)에서 같은 말로 부르기 위한 것이다 --
+    한쪽만 고치면 같은 결함이 다른 이름으로 보고된다.
+    """
+    gaps = []
+    if metadata.payload_mass is None:
+        gaps.append("부하 모델")
+    if not (metadata.reset_pose and metadata.reset_qpos):
+        gaps.append("리셋 자세")
+    if not metadata.provenance_source:
+        gaps.append("판번호 출처")
+    return gaps
+
+
+def stampable_version(want: str, has_payload: bool,
+                      has_reset: bool = False,
+                      has_provenance: bool = False) -> str:
     """찍어도 되는 가장 높은 버전. 못 채우는 요구가 있으면 내린다.
 
     생성 시점에 모를 수 있는 것은 세션이 밖에서 받아 오는 값들이다 -- 부하
@@ -392,6 +408,7 @@ class SceneWriter:
         session_payload: Optional[dict] = None,
         session_reset: Optional[dict] = None,
         session_provenance: Optional[dict] = None,
+        metadata_pending: bool = False,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -449,26 +466,35 @@ class SceneWriter:
             # S017~S019 가 payload 없이 knu-1.2.0 으로 찍혀 57 에피소드가
             # 검증 불가가 됐다. _resume_version 은 이 검사를 하고 있었는데,
             # **새 파일 경로에는 없었다.**
+            #
+            # ``metadata_pending`` 는 그 판단을 **미룬다** -- 구성기가 로봇에
+            # 붙기 전에 만드는 빈 scene 이다. 거기서 빠진 값은 "물어봤는데
+            # 없다"가 아니라 "아직 안 물어봤다"라서, 내려 찍으면 2.0.0 에서
+            # MAJOR 를 넘어가 그 파일에 영영 녹화할 수 없게 된다 (S024).
+            # #47 방어는 없어지지 않고 **Connect 로 옮겨간다**: 에피소드가
+            # 하나라도 쓰이기 전에 _settle_pending 이 채우거나 거절한다.
             asked = normalize_schema_version(metadata.dataset_version)
-            metadata.dataset_version = _stampable_version(
-                asked, metadata.payload_mass is not None,
-                bool(metadata.reset_pose and metadata.reset_qpos),
-                bool(metadata.provenance_source))
+            if metadata_pending:
+                metadata.dataset_version = asked
+                gaps = _meta_gaps(metadata)
+                if gaps:
+                    self.version_note = (
+                        f"{asked} 로 만들었습니다. {' · '.join(gaps)} 는 아직 "
+                        f"모르므로 Connect 할 때 채웁니다 -- 그때도 모르면 "
+                        f"녹화를 시작하지 않습니다.")
+            else:
+                metadata.dataset_version = stampable_version(
+                    asked, metadata.payload_mass is not None,
+                    bool(metadata.reset_pose and metadata.reset_qpos),
+                    bool(metadata.provenance_source))
             if metadata.dataset_version != asked:
                 # **말없이 내리지 않는다.** _resume_version 이 못 올릴 때
                 # 이유를 남기는 것과 같은 이유다 -- 마법사에서 고른 버전과
                 # 파일에 찍힌 버전이 다른데 아무도 말해 주지 않으면, 그것을
                 # 아는 방법이 나중에 검증기를 돌리는 것뿐이 된다.
-                lack = []
-                if metadata.payload_mass is None:
-                    lack.append("부하 모델")
-                if not (metadata.reset_pose and metadata.reset_qpos):
-                    lack.append("리셋 자세")
-                if not metadata.provenance_source:
-                    lack.append("판번호 출처")
                 self.version_note = (
-                    f"{asked} 로 만들려 했는데 {' · '.join(lack)} 를 몰라 "
-                    f"{metadata.dataset_version} 로 찍었습니다. 나중에 "
+                    f"{asked} 로 만들려 했는데 {' · '.join(_meta_gaps(metadata))} 를 "
+                    f"몰라 {metadata.dataset_version} 로 찍었습니다. 나중에 "
                     f"Doctor 에서 채워 올릴 수 있습니다.")
             self._meta.attrs["scene_id"] = metadata.scene_id
             self._meta.attrs["objects"] = json.dumps(metadata.objects, ensure_ascii=False)
@@ -535,7 +561,15 @@ class SceneWriter:
 
         cur = normalize_schema_version(self.metadata.dataset_version)
         want = normalize_schema_version(session_version or "")
-        if not want or want == cur:
+        if not want:
+            return
+        if want == cur:
+            # 도장은 같아도 **요구하는 값이 아직 없을 수 있다** -- 구성기가
+            # metadata_pending 으로 만든 빈 scene 이 그렇다. 여기서 채우지
+            # 않으면 그 파일은 자기가 갖지 않은 필드를 가졌다고 주장한 채로
+            # 에피소드를 받는다 (#47 과 똑같은 모양).
+            self._settle_pending(want, session_payload, session_reset,
+                                 session_provenance)
             return
         req = schema_required_fields(want)
         if req is None:
@@ -580,6 +614,55 @@ class SceneWriter:
         self.metadata.dataset_version = want
         self._meta.attrs["dataset_version"] = want
         self.version_note = f"버전 도장을 {cur} -> {want} 로 올렸습니다."
+
+    def _settle_pending(self, want: str, payload: "dict | None",
+                        reset: "dict | None",
+                        provenance: "dict | None") -> None:
+        """도장과 세션 버전이 같을 때, 아직 빈 필수 metadata 를 이번 세션 값으로
+        채운다. 못 채우고 **빈 scene** 이면 거절한다.
+
+        구성기의 [✚ 새 Scene 만들기] 는 로봇에 붙기 전에 파일을 만든다
+        (2026-09-06 결정: 미리 여러 개 짜 둘 수 있어야 한다). 그때 부하 모델은
+        알 수 없는데, 그것을 이유로 도장을 내리면 2.0.0 에서는 MAJOR 를 넘어가
+        **그 파일에 영영 녹화할 수 없게 된다** (2026-09-23 S024). 그래서 도장은
+        요청한 버전으로 두고, 판단을 이 자리로 미룬다.
+
+        여기서 거절하는 편이 구성기에서 거절하는 것보다 낫다: 로봇이 이미
+        붙어 있으므로 남는 사유가 "이 로봇이 부하 모델을 주지 않는다" 하나뿐이고,
+        그건 조작자가 알아야 하는 진짜 문제다.
+
+        이미 에피소드가 있는 파일은 건드리지 않는다 -- 옛 파일은 자기 도장대로
+        검사받으면 되고, 여기서 값을 넣으면 그 에피소드들이 찍힌 때의 값이
+        아닌 것이 섞인다.
+        """
+        from mstack.data.dataset_schema import schema_required_fields
+
+        req = schema_required_fields(want)
+        if req is None:
+            return
+        need = [k for k in req["metadata_attrs"] if k not in self._meta.attrs]
+        if not need:
+            return
+        if self._fill_meta(need, payload, reset, provenance):
+            self.version_note = (
+                f"{want} 가 요구하는 {', '.join(need)} 를 이번 세션 값으로 "
+                f"채웠습니다.")
+            return
+        if self._episode_names():
+            self.version_note = (
+                f"{want} 가 요구하는 {', '.join(need)} 가 이 파일에 없는데 "
+                f"이번 세션도 모릅니다. 이미 에피소드가 있어 도장을 그대로 둡니다.")
+            return
+        raise ValueError(
+            f"이 scene 은 {want} 로 만들어졌는데 그 버전이 요구하는 "
+            f"{', '.join(need)} 가 아직 비어 있고, 이번 세션도 그 값을 "
+            "알지 못합니다 (로봇이 부하 모델을 주지 않으면 이렇게 됩니다). "
+            "그대로 녹화하면 파일이 갖지 않은 필드를 가졌다고 주장하게 되어 "
+            "시작하지 않습니다.")
+
+    def _episode_names(self) -> list:
+        """이 파일의 에피소드 그룹 이름들."""
+        return [n for n in self._file if EPISODE_GROUP_RE.match(n)]
 
     def _fill_meta(self, need: list, payload: "dict | None",
                    reset: "dict | None" = None,

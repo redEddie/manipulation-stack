@@ -240,6 +240,26 @@ def probe_observation(host: str = "127.0.0.1", port: int = DEFAULT_ROBOT_PORT,
 
     노드가 없으면 예외를 던진다. 부르는 쪽이 안내로 바꿔 보여준다.
     """
+    return _probe_once("get_observations", host, port, timeout_ms)
+
+
+def probe_payload(host: str = "127.0.0.1", port: int = DEFAULT_ROBOT_PORT,
+                  timeout_ms: int = 3000) -> dict:
+    """로봇 노드에 부하 모델을 한 번만 물어보고 소켓을 닫는다.
+
+    ``probe_observation`` 과 같은 이유로 있다: 파일을 만들기 **전에** 그 값을
+    갖고 있어야 하는 자리가 수집 워커 말고도 하나 더 있다 -- Scene 구성기의
+    [✚ 새 Scene 만들기] 다. 부하 모델은 knu-1.2.0 부터 metadata 필수인데
+    station 설정에 없고 오직 노드만 알려주므로, 구성기가 노드 없이 만든
+    파일은 그 요구를 못 채워 옛 버전으로 내려 찍혔다.
+
+    노드가 없으면 예외를 던진다. 부르는 쪽이 안내로 바꿔 보여준다.
+    """
+    return _probe_once("payload", host, port, timeout_ms) or {}
+
+
+def _probe_once(method: str, host: str, port: int, timeout_ms: int):
+    """노드에 한 가지를 묻고 소켓을 닫는다. 오래 사는 클라이언트가 아니다."""
     ctx = zmq.Context()
     s = ctx.socket(zmq.REQ)
     s.setsockopt(zmq.RCVTIMEO, timeout_ms)
@@ -247,8 +267,11 @@ def probe_observation(host: str = "127.0.0.1", port: int = DEFAULT_ROBOT_PORT,
     s.setsockopt(zmq.LINGER, 0)
     try:
         s.connect(f"tcp://{host}:{port}")
-        s.send(pickle.dumps({"method": "get_observations"}))
-        return pickle.loads(s.recv())
+        s.send(pickle.dumps({"method": method}))
+        out = pickle.loads(s.recv())
+        if isinstance(out, dict) and "error" in out:
+            raise RuntimeError(out["error"])
+        return out
     finally:
         s.close(linger=0)
         ctx.term()

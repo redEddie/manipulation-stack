@@ -12,6 +12,12 @@ from mstack.scene.dataset_meta import plan_path as dataset_plan_path
 from apps.workspace.shared.tabs import show_center_tab
 from mstack.gui.i18n import tr
 from mstack.scene.props import active_prop_ids
+from mstack.collect.session_meta import (
+    apply_to_metadata,
+    offline_provenance,
+    payload_from_node,
+    reset_pose_from_station,
+)
 from mstack.scene.scene_format import (
     INSTRUCTION_ID_RE,
     SceneWriter,
@@ -182,13 +188,35 @@ class SceneOps:
             md.scene_id = next_scene_id(root)
         except Exception:  # noqa: BLE001 -- 경로가 이상하면 아래에서 잡힌다
             pass
+        # **세션 메타를 만들기 전에 채운다.** 부하 모델·리셋 자세·판번호는
+        # 스키마가 metadata attrs 로 요구하고(knu-1.2.0/1.2.1/1.2.2), 없으면
+        # SceneWriter 가 도장을 내려 찍는다. 예전에는 여기서 아무것도 안
+        # 채워 knu-1.1.1 로 찍혔고, 1.x 시절엔 Connect 가 도장을 올려 주어
+        # 무해했다. 2.0.0 부터는 MAJOR 가 달라 이어찍기가 거부되므로, 그
+        # 파일은 **영원히 녹화할 수 없는 빈 scene** 이 된다 (2026-09-23 S024).
+        #
+        # 셋 중 리셋 자세(station 설정)와 판번호(git)는 로봇 없이 채워진다.
+        # 부하 모델만 노드를 거치는데, 노드가 안 떠 있어도 여기서 막지는
+        # 않는다 -- "로봇 없이 scene 을 미리 짜 둔다"가 이 버튼의 기능이다
+        # (2026-09-06). 대신 도장은 요청한 버전으로 찍고(metadata_pending),
+        # 부하 모델은 Connect 가 채운다. 못 채우면 **그때** 녹화를 거절한다:
+        # 로봇이 붙은 뒤의 거절이라야 "이 로봇이 부하를 안 준다"는 진짜
+        # 문제만 남는다.
+        want = self.win.schema_version
+        payload = payload_from_node(timeout_ms=1500)
+        apply_to_metadata(md, payload, reset_pose_from_station(),
+                          offline_provenance())
+        md.dataset_version = want
         try:
             # metadata 만 있는 파일. SceneWriter 는 생성 시점에 파일을 쓰므로
             # 여기서 닫으면 그대로 빈 scene 이 된다 -- Connect 는 resume 으로
             # 이어 쓴다 (기존 scene 을 고르는 것과 완전히 같은 경로).
             writer = SceneWriter(root, metadata=md,
                                  known_prop_ids=active_prop_ids(),
-                                 session_version=self.win.schema_version)
+                                 session_version=want,
+                                 metadata_pending=True)
+            if writer.version_note:
+                self.win.log(f"[스키마] {writer.version_note}")
             writer.close()
         except FileExistsError:
             QMessageBox.warning(self.win, tr("이미 있음"), tr(
