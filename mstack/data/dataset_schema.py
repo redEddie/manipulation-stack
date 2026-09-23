@@ -69,7 +69,7 @@ DEFAULT_EXPORT_FPS = 20
 #: 목록일 뿐 제한은 아니다 -- 칸은 편집 가능이라 다른 값도 칠 수 있다.
 EXPORT_FPS_CHOICES = (20, 30)
 
-SCHEMA_VERSION = "knu-2.0.0"
+SCHEMA_VERSION = "knu-2.1.0"
 
 # --------------------------------------------------------- observation/dataset keys
 # Robot observation keys (returned by Robot.get_observations / RobotEnv.get_obs).
@@ -310,6 +310,15 @@ META_FR3_SYSTEM_VERSION = "fr3_system_version"  # FR3 시스템 이미지, 예: 
 #: 채워 넣은 값은 **그 시점의 사실이 아닐 수 있다** -- 그것을 구분하지 않으면
 #: 나중에 이 필드 전체를 믿을 수 없게 된다.
 META_PROVENANCE_SOURCE = "provenance_source"
+#: 달려 있던 그리퍼 (knu-2.1.0). 이름과, 그 최대 벌림 (m).
+#:
+#: **그리퍼 열은 0~1 정규화값이다** -- 실측으로 obs/gripper_states 가
+#: 0.0026~0.9624 이고 actions 의 8번째 열도 0/1 이다. 그 값을 미터로 되돌릴
+#: 방법이 파일 안에 없으면, 다른 그리퍼로 찍은 데이터와 섞는 순간 같은 0.5
+#: 가 다른 폭을 뜻하게 된다. 부하 모델(무게)·리셋 자세(출발점)와 같은
+#: 부류다: 팔 밖의 물리 조건이라 관측이 아니라 파일 메타에 한 번 적는다.
+META_GRIPPER = "gripper"
+META_GRIPPER_MAX_WIDTH = "gripper_max_width"
 
 #: 버전이 **요구하는 것은 하나뿐**이다: 이 값들이 어디서 왔는지.
 #:
@@ -391,6 +400,19 @@ SCHEMA_FIELDS["knu-2.0.0"] = {
     "episode_datasets": SCHEMA_FIELDS["knu-1.2.2"]["episode_datasets"] + (
         f"{AXIS_GROUP}/{AXIS_CONTROL}",
         f"{META_GROUP}/{AXIS_CONTROL}/{TIMING_ROBOT_STATE}",),
+}
+
+
+#: knu-2.1.0 = knu-2.0.0 + 그리퍼 (2026-09-23).
+#:
+#: MINOR: metadata attr 두 개가 더해질 뿐 기존 필드는 그대로라, 2.0.0 리더가
+#: 2.1.0 파일을 읽고 2.1.0 리더가 2.0.0 파일을 읽는다. 요구하는 것은
+#: ``gripper`` 하나다 -- 최대 벌림은 그 이름에서 파생되는 값이라 있으면
+#: 적고, 없어도 표(config.station.GRIPPERS)로 풀 수 있다.
+SCHEMA_FIELDS["knu-2.1.0"] = {
+    **SCHEMA_FIELDS["knu-2.0.0"],
+    "metadata_attrs": SCHEMA_FIELDS["knu-2.0.0"]["metadata_attrs"] + (
+        META_GRIPPER,),
 }
 
 

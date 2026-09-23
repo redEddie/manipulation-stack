@@ -28,7 +28,7 @@ IMAGE_OF_CAM = {"agentview": "agentview_rgb", "eye_in_hand": "eye_in_hand_rgb"}
 
 
 def write_v2(ep1: h5py.Group, path: str, *, group: str = "e",
-             control_hz: float = 20.0) -> str:
+             control_hz: float = 20.0, n: "int | None" = None) -> str:
     """``ep1`` (knu-1.3.0 에피소드) 를 ``path`` 에 2.0.0 으로 쓴다.
 
     Args:
@@ -37,13 +37,30 @@ def write_v2(ep1: h5py.Group, path: str, *, group: str = "e",
         path: 만들 파일 경로.
         group: 에피소드 그룹 이름.
         control_hz: ``control_hz`` attr 로 찍을 값.
+        n: 앞에서 몇 행만 옮길지 (None = 전부). **검사의 주장을 줄이지
+            않는다** -- "같은 내용의 2.0.0 이 같은 표를 준다" 는 비교하는
+            구간에서 성립하면 되고, 부르는 쪽이 원본도 같은 구간으로
+            자르면 된다. 이 함수의 값은 이미지를 gzip 으로 다시 쓰는 것이라
+            (에피소드 하나에 228 MB) 전부 옮기면 그것이 곧 스위트 시간이다.
 
     Returns:
         ``path`` 그대로.
     """
     tim = ep1["timing"]
-    t_row = tim["frame"][:]
+    t_row = tim["frame"][:] if n is None else tim["frame"][:n]
     t0 = float(t_row[0])
+    # 카메라 축은 control 보다 빠르므로 같은 시간 구간을 덮으려면 더 길다.
+    # 행 수로 자르지 않고 **시각으로** 자른다 -- 모달리티마다 주기가 다르면
+    # "앞에서 n 개" 는 축을 떠나는 순간 뜻이 달라진다 (episode_trim 과 같은 규칙).
+    t_end = float(t_row[-1])
+
+    def _cut(arr):
+        return arr if n is None else arr[:len(t_row)]
+
+    def _cut_cam(t_abs, arr):
+        if n is None:
+            return arr
+        return arr[:int(np.searchsorted(t_abs, t_end, side="right"))]
 
     with h5py.File(path, "w") as g:
         e = g.create_group(group)
@@ -67,15 +84,18 @@ def write_v2(ep1: h5py.Group, path: str, *, group: str = "e",
                 continue
             # t/ 는 **장치 시각** 이다 (DESIGN_knu_2_0_0 §1.3) -- 도착 시각을
             # 쓰면 기종마다 다른 고정 전송 지연이 축에 섞여 들어간다.
-            tg.create_dataset(axis, data=dev[:] - t0)
-            mg.create_dataset(f"{axis}/host", data=host[:] - t0)
+            dv, hv = dev[:], host[:]
+            keep = (len(dv) if n is None
+                    else int(np.searchsorted(dv, t_end, side="right")))
+            tg.create_dataset(axis, data=dv[:keep] - t0)
+            mg.create_dataset(f"{axis}/host", data=hv[:keep] - t0)
             for extra in ("frame_no", "node_seq"):
                 src = tim.get(f"{cam}_{extra}")
                 if src is not None:
-                    mg.create_dataset(f"{axis}/{extra}", data=src[:])
+                    mg.create_dataset(f"{axis}/{extra}", data=src[:keep])
         rs = tim.get("robot_state")
         if rs is not None:
-            mg.create_dataset("control/robot_state", data=rs[:] - t0)
+            mg.create_dataset("control/robot_state", data=_cut(rs[:]) - t0)
 
         # obs: 카메라는 자기 축, 나머지는 control 축
         img_axis = {IMAGE_OF_CAM[c]: a for c, a in AXIS_OF_CAM.items()
@@ -83,11 +103,20 @@ def write_v2(ep1: h5py.Group, path: str, *, group: str = "e",
         o = e.create_group("obs")
         for name in ep1["obs"].keys():
             src = ep1[f"obs/{name}"]
-            d = o.create_dataset(name, data=src[:])
-            d.attrs["axis"] = img_axis.get(name, "control")
+            axis = img_axis.get(name, "control")
+            if n is None:
+                data = src[:]
+            elif axis == "control":
+                data = src[:len(t_row)]
+            else:
+                cam = next(c for c, a in AXIS_OF_CAM.items() if a == axis)
+                data = src[:int(np.searchsorted(
+                    tim[f"{cam}_device"][:], t_end, side="right"))]
+            d = o.create_dataset(name, data=data)
+            d.attrs["axis"] = axis
         for name in ("actions", "actions_ee", "rewards", "dones"):
             if name in ep1:
-                d = e.create_dataset(name, data=ep1[name][:])
+                d = e.create_dataset(name, data=_cut(ep1[name][:]))
                 d.attrs["axis"] = "control"
     return path
 

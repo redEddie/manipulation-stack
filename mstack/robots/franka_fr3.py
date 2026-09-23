@@ -117,7 +117,18 @@ FT_STATE_ATTRS = (
 )
 
 # FR3 gripper stroke (m).  Franka Hand opens to ~0.08 m.
-MAX_GRIPPER_WIDTH = 0.08
+def _station_gripper_width() -> float:
+    try:
+        from mstack.config.station import load_station
+
+        return float(load_station().robot.gripper_max_width)
+    except Exception:  # noqa: BLE001 -- 설정을 못 읽어도 로봇은 떠야 한다
+        return 0.08
+
+
+# 값은 station 설정이 정본이다 (config.station.GRIPPERS) -- 리그마다 다를 수
+# 있고, 기록된 0~1 열을 미터로 되돌리는 것이 이 값이라 파일에도 적힌다.
+MAX_GRIPPER_WIDTH = _station_gripper_width()
 
 # Normalized leader-trigger value (0=open .. 1=closed) at which the binary
 # gripper closes.  The GELLO leader's trigger spring (JointLimitWall) starts its

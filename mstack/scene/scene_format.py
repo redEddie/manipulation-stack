@@ -84,6 +84,8 @@ from mstack.data.dataset_schema import (
     META_COLLECTOR_COMMIT,
     META_FR3_SYSTEM_VERSION,
     META_PAYLOAD_MASS,
+    META_GRIPPER,
+    META_GRIPPER_MAX_WIDTH,
     META_PROVENANCE_SOURCE,
     META_PYLIBFRANKA_VERSION,
     META_RESET_POSE,
@@ -320,6 +322,10 @@ class SceneMetadata:
     fr3_system_version: Optional[str] = None
     #: "live" (수집하며 적음) / "backfilled <날짜>" (나중에 채움).
     provenance_source: Optional[str] = None
+    #: 달려 있던 그리퍼 (knu-2.1.0). 그리퍼 열이 0~1 정규화값이라, 이것이
+    #: 없으면 그 값을 미터로 되돌릴 수 없다 (dataset_schema.META_GRIPPER).
+    gripper: Optional[str] = None
+    gripper_max_width: Optional[float] = None
 
     def validate(self, known_prop_ids: Optional[set[str]] = None) -> None:
         """구조가 틀린 metadata 로 파일을 만드는 것을 생성 시점에 막는다.
@@ -407,6 +413,9 @@ def _read_metadata(meta: h5py.Group) -> SceneMetadata:
         pylibfranka_version=_opt_str(meta, META_PYLIBFRANKA_VERSION),
         fr3_system_version=_opt_str(meta, META_FR3_SYSTEM_VERSION),
         provenance_source=_opt_str(meta, META_PROVENANCE_SOURCE),
+        gripper=_opt_str(meta, META_GRIPPER),
+        gripper_max_width=(float(meta.attrs[META_GRIPPER_MAX_WIDTH])
+                           if META_GRIPPER_MAX_WIDTH in meta.attrs else None),
     )
 
 
@@ -467,12 +476,15 @@ def _meta_gaps(metadata) -> list:
         gaps.append("리셋 자세")
     if not metadata.provenance_source:
         gaps.append("판번호 출처")
+    if not metadata.gripper:
+        gaps.append("그리퍼")
     return gaps
 
 
 def stampable_version(want: str, has_payload: bool,
                       has_reset: bool = False,
-                      has_provenance: bool = False) -> str:
+                      has_provenance: bool = False,
+                      has_gripper: bool = False) -> str:
     """찍어도 되는 가장 높은 버전. 못 채우는 요구가 있으면 내린다.
 
     생성 시점에 모를 수 있는 것은 세션이 밖에서 받아 오는 값들이다 -- 부하
@@ -489,10 +501,10 @@ def stampable_version(want: str, has_payload: bool,
     want = normalize_schema_version(want)
     if want not in SCHEMA_FIELDS:
         return want
-    from mstack.data.dataset_schema import META_PROVENANCE_SOURCE
+    from mstack.data.dataset_schema import META_GRIPPER, META_PROVENANCE_SOURCE
 
     have = {META_PAYLOAD_MASS: has_payload, META_RESET_POSE: has_reset,
-            META_PROVENANCE_SOURCE: has_provenance}
+            META_PROVENANCE_SOURCE: has_provenance, META_GRIPPER: has_gripper}
 
     def _ok(version: str) -> bool:
         need = SCHEMA_FIELDS[version].get("metadata_attrs", ())
@@ -620,7 +632,8 @@ class SceneWriter:
                 metadata.dataset_version = stampable_version(
                     asked, metadata.payload_mass is not None,
                     bool(metadata.reset_pose and metadata.reset_qpos),
-                    bool(metadata.provenance_source))
+                    bool(metadata.provenance_source),
+                    bool(metadata.gripper))
             if metadata.dataset_version != asked:
                 # **말없이 내리지 않는다.** _resume_version 이 못 올릴 때
                 # 이유를 남기는 것과 같은 이유다 -- 마법사에서 고른 버전과
@@ -655,9 +668,15 @@ class SceneWriter:
                     (META_COLLECTOR_COMMIT, metadata.collector_commit),
                     (META_PYLIBFRANKA_VERSION, metadata.pylibfranka_version),
                     (META_FR3_SYSTEM_VERSION, metadata.fr3_system_version),
-                    (META_PROVENANCE_SOURCE, metadata.provenance_source)):
+                    (META_PROVENANCE_SOURCE, metadata.provenance_source),
+                    (META_GRIPPER, metadata.gripper)):
                 if value:
                     self._meta.attrs[attr] = str(value)
+            # 최대 벌림은 이름에서 파생되지만 파일에도 적는다 -- 표가 바뀌어도
+            # 옛 파일이 자기 값으로 읽히게 (META_RESET_QPOS 와 같은 이유).
+            if metadata.gripper_max_width:
+                self._meta.attrs[META_GRIPPER_MAX_WIDTH] = float(
+                    metadata.gripper_max_width)
             self._meta.attrs["next_episode_idx"] = 0
 
         if "next_episode_idx" not in self._meta.attrs:
@@ -823,6 +842,16 @@ class SceneWriter:
             known[META_RESET_POSE] = str(reset["name"])
             known[META_RESET_QPOS] = json.dumps(
                 [float(x) for x in reset["qpos"]])
+        # 그리퍼는 station 설정에서 언제나 풀린다 -- 로봇도 세션 값도 필요
+        # 없다. 그래서 이어찍기에서 2.1.0 으로 올리는 것이 막히지 않는다.
+        try:
+            from mstack.config.station import load_station
+
+            r = load_station().robot
+            known[META_GRIPPER] = str(r.gripper)
+            known[META_GRIPPER_MAX_WIDTH] = float(r.gripper_max_width)
+        except Exception:  # noqa: BLE001 -- 못 읽으면 그 버전으로 못 올라간다
+            pass
         if provenance:
             # 이 세션이 그 자리에서 읽은 값이므로 ``live`` 다 -- Doctor 가
             # 나중에 채울 때 쓰는 ``backfilled <날짜>`` 와 구분된다.

@@ -77,8 +77,23 @@ def offline_provenance() -> dict:
     return {"collector_commit": commit} if commit else {}
 
 
+def gripper_from_station() -> dict:
+    """달려 있는 그리퍼. 로봇이 필요 없다 -- station 설정에 적혀 있다.
+
+    그리퍼 열이 0~1 정규화값이라 (실측 0.0026~0.9624), 최대 벌림을 모르면
+    미터로 되돌릴 수 없다. 그래서 리셋 자세와 같이 파일에 적는다.
+    """
+    try:
+        from mstack.config.station import load_station
+
+        r = load_station().robot
+        return {"name": r.gripper, "max_width": r.gripper_max_width}
+    except Exception:  # noqa: BLE001 -- 못 읽으면 그 버전을 안 찍을 뿐이다
+        return {}
+
+
 def apply_to_metadata(meta, payload: Optional[dict], reset: Optional[dict],
-                      prov: Optional[dict]) -> None:
+                      prov: Optional[dict], gripper: Optional[dict] = None) -> None:
     """읽어 온 값을 ``SceneMetadata`` 에 싣는다 (새 scene 을 만들기 직전).
 
     워커와 구성기가 같은 방식으로 실어야 한다 -- 한쪽만 ``provenance_source``
@@ -90,6 +105,10 @@ def apply_to_metadata(meta, payload: Optional[dict], reset: Optional[dict],
     if reset:
         meta.reset_pose = reset["name"]
         meta.reset_qpos = list(reset["qpos"])
+    gripper = gripper if gripper is not None else gripper_from_station()
+    if gripper:
+        meta.gripper = gripper["name"]
+        meta.gripper_max_width = float(gripper["max_width"])
     prov = prov or {}
     meta.collector_commit = prov.get("collector_commit") or None
     meta.pylibfranka_version = prov.get("pylibfranka") or None

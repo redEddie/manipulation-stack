@@ -86,13 +86,18 @@ def main() -> None:
             a, ft1 = build_frames(ep)
 
             p = os.path.join(TMP, f"{name}.h5")
-            write_v2(ep, p)
+            # **2.0.0 쪽은 앞 N 행만 만든다.** 주장은 "두 레이아웃이 같은
+            # 프레임을 낸다" 이고 그것은 겹치는 구간에서 확인하면 된다 --
+            # 1.3.0 쪽(a)은 전부 만들어 두고 앞 N 개와 견준다. 전부 변환하면
+            # 에피소드당 이미지 228 MB 를 gzip 으로 다시 쓰게 된다.
+            N = 24
+            write_v2(ep, p, n=N)
             with h5py.File(p, "r") as g:
                 b, ft2 = build_frames(g["e"])
 
             n = ep["actions"].shape[0]
-            assert len(a) == len(b) == n, (len(a), len(b), n)
-            for i, (x, y) in enumerate(zip(a, b)):
+            assert len(a) == n and len(b) == N, (len(a), len(b), n, N)
+            for i, (x, y) in enumerate(zip(a[:N], b)):
                 for k in x:
                     assert np.array_equal(x[k], y[k]), (
                         f"{name} 프레임 {i} 의 {k!r} 가 두 레이아웃에서 다르다 "

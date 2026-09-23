@@ -72,11 +72,44 @@ class CameraSpec:
     fps: int = 30
 
 
+#: 알려진 그리퍼 -> (최대 벌림 m, 사람이 읽는 이름).
+#:
+#: **기록된 그리퍼 열은 0~1 정규화값이다** (실측: obs/gripper_states 가
+#: 0.0026~0.9624). 그 값을 미터로 되돌리려면 이 표가 필요하고, 그래서
+#: 어느 그리퍼로 찍었는지가 파일에 남아야 한다 -- 리그를 바꾸면 같은 0.5 가
+#: 다른 폭을 뜻하게 된다. 부하 모델·리셋 자세와 같은 부류의 값이다.
+GRIPPERS = {
+    "franka_hand": (0.08, "Franka Hand"),
+}
+
+
 @dataclass(frozen=True)
 class RobotSpec:
     kind: str = "fr3"
     ip: str = "172.16.0.2"  # FCI 주소. 정책 서버 주소가 아니다.
     reset_pose: str = "libero"
+    #: 달려 있는 그리퍼. GRIPPERS 의 키여야 한다.
+    gripper: str = "franka_hand"
+
+    @property
+    def gripper_max_width(self) -> float:
+        """이 그리퍼의 최대 벌림 (m). 정규화 0~1 을 미터로 되돌리는 값."""
+        return GRIPPERS.get(self.gripper, GRIPPERS["franka_hand"])[0]
+
+    @property
+    def gripper_label(self) -> str:
+        return GRIPPERS.get(self.gripper, (0.0, self.gripper))[1]
+
+
+def _gripper_from(robot: dict, fallback: str) -> str:
+    """설정의 그리퍼 이름. 모르는 값이면 경고하고 기본값 -- 여기서 예외를
+    던지면 오타 하나로 로봇이 안 뜬다 (_control_from 과 같은 규칙)."""
+    name = str(robot.get("gripper", fallback))
+    if name not in GRIPPERS:
+        _warn_once(f"[station] robot.gripper={name!r} 를 모릅니다 "
+                   f"(아는 것: {', '.join(sorted(GRIPPERS))}). {fallback} 을 씁니다.")
+        return fallback
+    return name
 
 
 @dataclass(frozen=True)
@@ -254,6 +287,7 @@ def _parse(raw: dict, path: Path) -> StationConfig:
             kind=str(robot.get("kind", base.robot.kind)),
             ip=str(robot.get("ip", base.robot.ip)),
             reset_pose=str(robot.get("reset_pose", base.robot.reset_pose)),
+            gripper=_gripper_from(robot, base.robot.gripper),
         ),
         node=NodeSpec(
             host=str(node.get("host", base.node.host)),

@@ -39,13 +39,23 @@ unset MSTACK_HISTORY MSTACK_PROXY_DIR MSTACK_HUB_STATE
 cd "$(dirname "$0")"
 fail=0
 
-# 세 개가 스위트 시간의 절반을 쓴다 (2026-09-18 실측: 전체 156 s 중
-# diversity_cloud 47.5, recommend_register 11.8, quick_resume 11.1). 모두
-# 추천기가 CP-SAT 로 실제 배치를 푸는 값이라 줄일 수 있는 성질이 아니다.
+# 네 개가 스위트 시간의 절반을 쓴다 (2026-09-23 실측: 순차 합계 221 s 중
+# diversity_cloud 44.2, frame_table 25.2, convert_frames 14.5, home_blend
+# 14.2 -- 넷이 98 s, 44%). 나머지 70개는 개당 1 초대이고 하위 50개를 다
+# 합쳐야 44 s 라, **테스트를 지워서 줄일 수 있는 시간이 아니다.**
+#
+# 무엇이 시간을 먹는지: diversity_cloud 는 추천기가 CP-SAT 로 실제 배치를
+# 풀고, frame_table·convert_frames 는 32 GB 짜리 scene_023 에서 에피소드를
+# 꺼내 2.0.0 으로 변환하며(이미지 228 MB gzip), home_blend 는 homing 궤적을
+# 끝까지 돌린다. 전부 그 테스트의 값어치인 계산이다.
+#
+# 목록이 낡으면 효과가 사라진다 -- 2026-09-18 의 셋에는 recommend_register
+# (지금 5.9 s)와 quick_resume(8.3 s)이 들어 있었고, 정작 25 s 짜리
+# frame_table 은 순차로 돌고 있었다. 시간이 달라지면 여기도 다시 잰다.
 # 그래서 이 셋만 먼저 띄우고, 나머지 56 개가 순차로 도는 동안 같이 끝나게
 # 한다. 전체를 병렬로 돌리지 않는 이유는 아래 상태 디렉터리 때문이다 --
 # 격리해야 할 대상이 셋이면 눈으로 확인되지만 쉰아홉이면 그렇지 않다.
-SLOW="test_diversity_cloud test_recommend_register test_quick_resume"
+SLOW="test_diversity_cloud test_home_blend test_frame_table test_convert_frames"
 slow_pids=""
 for t in $SLOW; do
   # 상태 디렉터리를 공유하면 동시에 도는 테스트끼리 서로의 격자·캐시·장부를

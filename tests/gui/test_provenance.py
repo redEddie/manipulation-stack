@@ -81,13 +81,18 @@ with tempfile.TemporaryDirectory() as d:
         payload_mass=0.85, payload_com=[0.0, 0.0, 0.03],
         reset_pose="libero", reset_qpos=[0.0] * 7,
         collector_commit=sha, pylibfranka_version="0.21.2",
-        fr3_system_version="5.10.0", provenance_source="live")
+        fr3_system_version="5.10.0", provenance_source="live",
+        # knu-2.1.0 이 요구한다 -- 그리퍼 열이 0~1 정규화값이라 이것이 없으면
+        # 미터로 되돌릴 수 없다 (dataset_schema.META_GRIPPER).
+        gripper="franka_hand", gripper_max_width=0.08)
     SceneWriter(root, metadata=md, known_prop_ids=active_prop_ids()).close()
     with h5py.File(root / "scene_000.hdf5", "r") as f:
         attrs = dict(f["metadata"].attrs)
     assert attrs[META_COLLECTOR_COMMIT] == sha
     assert attrs[META_PYLIBFRANKA_VERSION] == "0.21.2"
     assert attrs[META_PROVENANCE_SOURCE] == "live"
+    assert attrs["gripper"] == "franka_hand", attrs.get("gripper")
+    assert float(attrs["gripper_max_width"]) == 0.08
     # 뜻을 모르는 Desk 응답의 나머지 두 줄은 기록하지 않는다 (2026-09-14).
     assert "fr3_system_build" not in attrs, "뺀 빌드 해시 필드가 돌아왔다"
     assert attrs["dataset_version"] == SCHEMA_VERSION, attrs["dataset_version"]
