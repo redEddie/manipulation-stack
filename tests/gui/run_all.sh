@@ -59,7 +59,7 @@ done
 
 for t in test_phase4a test_grid_replay test_plan_form test_right_scene \
          test_gate_reset test_plan_edit_replay test_h5view \
-         test_depth17 test_save_pool test_frame_table test_c5_consumers test_trim_axis test_convert_frames \
+         test_depth17 test_save_pool test_frame_table test_c5_consumers test_trim_axis test_convert_frames test_capture_all \
          test_scene_edit test_stats_group test_relabel test_dataset_sync \
          test_hub_upload_state test_camera_node test_match_gate \
          test_app_structure test_ui_surface test_domain_attrs \
