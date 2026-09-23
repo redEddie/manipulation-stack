@@ -1738,21 +1738,12 @@ class CollectionWorker(QThread):
     def _read_reset_pose(self) -> "dict | None":
         """이번 세션의 리셋 자세 -- 별칭과 7관절 절대값.
 
-        station 설정에서 이름을 읽고 FR3_RESET_POSES 에서 값을 푼다. 둘을
-        함께 적는 이유는 dataset_schema.META_RESET_POSE 주석에 있다 -- 이름만
-        적으면 그 표가 바뀔 때 옛 파일을 잘못 읽는다.
+        Scene 구성기도 같은 값을 채워야 해서 (로봇 없이 만드는 새 scene 이
+        옛 버전으로 내려 찍히던 문제) 본체는 session_meta 로 옮겼다.
         """
-        try:
-            from mstack.config.station import load_station
-            from mstack.robots.franka_fr3 import FR3_RESET_POSES
+        from mstack.collect.session_meta import reset_pose_from_station
 
-            name = str(load_station().robot.reset_pose or "")
-            q = FR3_RESET_POSES.get(name)
-            if not name or q is None:
-                return None
-            return {"name": name, "qpos": [float(x) for x in q]}
-        except Exception:  # noqa: BLE001 -- 못 읽으면 그 버전을 안 찍을 뿐이다
-            return None
+        return reset_pose_from_station()
 
     def _read_versions(self) -> dict:
         """이 파일을 만든 소프트웨어 판번호. 못 읽은 항목은 빠진다.
@@ -1825,17 +1816,9 @@ class CollectionWorker(QThread):
                 # 그 답은 사람 기억뿐이다.
                 prov = self._read_versions()
                 if self.cfg.scene_metadata is not None and not self.cfg.scene_resume:
-                    if payload:
-                        self.cfg.scene_metadata.payload_mass = float(payload["mass"])
-                        self.cfg.scene_metadata.payload_com = list(payload.get("com") or [])
-                    if reset:
-                        self.cfg.scene_metadata.reset_pose = reset["name"]
-                        self.cfg.scene_metadata.reset_qpos = list(reset["qpos"])
-                    meta = self.cfg.scene_metadata
-                    meta.collector_commit = prov.get("collector_commit") or None
-                    meta.pylibfranka_version = prov.get("pylibfranka") or None
-                    meta.fr3_system_version = prov.get("fr3_system") or None
-                    meta.provenance_source = "live" if prov else None
+                    from mstack.collect.session_meta import apply_to_metadata
+
+                    apply_to_metadata(self.cfg.scene_metadata, payload, reset, prov)
 
                 self._writer = SceneWriter(
                     root=self.cfg.data_root,
