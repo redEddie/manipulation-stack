@@ -155,6 +155,7 @@ from mstack.data.dataset_schema import (  # noqa: E402
     normalize_schema_version,
 )
 from mstack.data.crop import EYE_IN_HAND_CROP_X_SHIFT, resize_rgb  # noqa: E402
+from mstack.data.dataset_schema import DEFAULT_EXPORT_FPS  # noqa: E402
 from mstack.data.schema_description import action_column_names  # noqa: E402
 from mstack.scene.scene_format import (  # noqa: E402
     EPISODE_GROUP_RE,
@@ -761,8 +762,8 @@ def _check_resume_fps(existing_fps: int, requested_fps: int) -> None:
         f"  기존: {existing_fps}\n"
         f"  지금: {requested_fps}\n"
         "다른 fps 로 이어붙이면 프레임 timestamp 와 비디오 속도가 갈라져 Hub "
-        "데이터셋이 망가집니다 -- 스테이션 설정의 recording.fps 를 기존 "
-        "데이터셋에 맞추거나, --repo-id를 바꿔 별도 데이터셋으로 변환하세요."
+        f"데이터셋이 망가집니다 -- --fps {existing_fps} 로 맞추거나, "
+        "--repo-id 를 바꿔 별도 데이터셋으로 변환하세요."
     )
 
 
@@ -790,15 +791,28 @@ def _stamp_schema_version(root: Path, source_versions: "list[str]") -> None:
 def main() -> None:
     # fps 의 정본은 스테이션 설정(recording.fps)이다 -- 여기서 안 넘기면
     # 어느 쪽 기준으로 만들어졌는지 알 수 없고, --resume 일치 검사도 못 한다.
-    station_fps = load_station().fps
+    # **내보내기 주기는 기록 주기를 따라가지 않는다.** 예전에는
+    # load_station().fps 였고 둘이 같은 20 이라 맞는 것처럼 보였지만, 그 값은
+    # "지금부터 무엇을 찍을까" 이고 여기 필요한 것은 "이 데이터를 어느
+    # 주기로 학습에 낼까" 다. 기록을 120 Hz 로 올리면 내보내기 기본값도
+    # 120 이 되어, 30 fps 카메라 이미지가 행마다 네 번씩 중복된 영상이
+    # 여섯 배 용량으로 나간다.
+    #
+    # 20 인 이유는 둘이다. (1) frame_table 이 control_hz 를 정수로 나누는
+    # 주기만 받는데, 20 은 새 파일(120/20=6)과 옛 파일(20/20=1) 양쪽을
+    # 나눈다 -- 30 은 옛 파일에서 거부된다. (2) 지금 배포 정책이 학습된
+    # 주기다 (apps/fr3_policy_client.py 의 FPS).
+    #
+    # 데이터세트마다 고르는 것은 내보내기 프로파일(E3)이 할 일이고, 그때
+    # 이 기본값은 프로파일의 한 항목이 된다.
+    station_fps = DEFAULT_EXPORT_FPS
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("hdf5_paths", type=Path, nargs="*",
                    help="<task>_demo.hdf5 파일들 (여러 개 가능). --push-only 일 때는 불필요")
     p.add_argument("--repo-id", required=True, help="예: knu-physical-ai/fr3-libero-teleop-lerobot")
     p.add_argument("--root", type=Path, required=True, help="로컬에 LeRobotDataset을 만들 경로")
     p.add_argument("--fps", type=int, default=station_fps,
-                   help=f"LeRobot 데이터셋의 fps (기본 {station_fps} = 스테이션 설정 "
-                        "recording.fps). 모든 프레임의 timestamp 와 비디오 스트림 속도를 "
+                   help=f"LeRobot 데이터셋의 fps (기본 {station_fps}). 모든 프레임의 timestamp 와 비디오 스트림 속도를 "
                         "여기서 만든다 -- .hdf5 를 기록한 수집 루프 주파수와 맞아야 한다. "
                         "--resume 에서는 기존 데이터셋의 fps 와 다르면 거부된다.")
     p.add_argument("--only-success", action="store_true", help="success=True인 에피소드만 포함")

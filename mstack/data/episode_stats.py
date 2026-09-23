@@ -85,10 +85,14 @@ class EpisodeStat:
     per_dim_sigma: np.ndarray = field(repr=False, default=None)
     task_dev: float = 0.0   # 같은 (scene, task) 평균과의 차 (rad/frame). +면 급함, -면 느림
     scene: str = ""         # scene-v1 의 scene_id (legacy 는 빈 문자열)
+    # 이 테이크를 찍은 주기 (Hz) -- 초 계산에 쓴다. 파일 에피소드 attrs 의
+    # control_hz 에서 온다. station 의 fps 는 **지금 찍을** 주기라 옛 파일의
+    # 주기가 아니므로 쓰지 않는다 -- 재생·표시 주기는 항상 파일에서 읽는다.
+    control_hz: float = 20.0
 
     @property
     def seconds(self) -> float:
-        return self.n_frames / 20.0
+        return self.n_frames / self.control_hz
 
     @property
     def key(self) -> tuple:
@@ -150,10 +154,14 @@ def scan_dataset(paths) -> list[EpisodeStat]:
                     da = np.abs(np.diff(arm, axis=0))
                     vel = da.max(axis=1)
                     success = grp.attrs.get("success")
+                    # attr 이 없는 옛 파일은 20 Hz 로 찍힌 것으로 본다 --
+                    # 레거시 화면값이 바뀌면 안 되므로 예전 하드코딩과 같다.
+                    hz = grp.attrs.get("control_hz")
                     out.append(EpisodeStat(
                         path=str(p), demo=name, task=task, scene=scene,
                         n_frames=int(a.shape[0]),
                         success=None if success is None else bool(success),
+                        control_hz=20.0 if hz is None else float(hz),
                         mean_da=float(da.mean()),
                         travel=float(da.sum()),
                         still_frac=float((vel < STILL_VEL).mean()),

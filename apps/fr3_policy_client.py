@@ -81,7 +81,18 @@ ROBOT_PORT = STATION.node.port             # launch_nodes.py ZMQ port
 HOSTNAME = STATION.node.host
 AGENT_CAMERA_SERIAL = STATION.camera("agent").serial
 WRIST_CAMERA_SERIAL = STATION.camera("wrist").serial
-FPS = STATION.fps                          # 학습 데이터와 동일 (20 Hz)
+# 추론 주기(Hz). **정책이 학습된 주기이지, 이 리그가 지금 기록하는 주기가
+# 아니다.** 예전에는 STATION.fps 를 읽었고 둘이 같은 20 이라 맞았지만, 그
+# 값은 station 설정의 recording.fps -- 다음 데이터세트를 어느 주기로 찍을지다.
+# 그것을 120 으로 올리는 순간 20 Hz 로 학습된 정책이 120 Hz 로 실행된다:
+# 정책은 "청크 인덱스 i = 관측시각 + i·dt" 로 학습돼 있으므로 dt 가 6분의 1이
+# 되면 같은 청크를 6배 빠르게 쏘고, 아래 홈 복귀 램프도 RAMP_STEP 을 6배
+# 자주 더해 6 rad/s 로 달리면서 상한 600틱이 5초에서 0.83초로 줄어 수렴 전에
+# 예외로 죽는다.
+#
+# 그래서 여기는 **정책 쪽 사실**이고, 바꾸려면 그 정책을 어느 주기로
+# 학습했는지를 보고 바꾼다.
+FPS = 20                                   # int -- K*1000//FPS 표시가 정수로 남는다
 EXEC_HORIZON = 10                          # 청크 중 쓸 최대 개수 (10=full, 서버 청크와 동일)
 # 청크 경계 정지를 없애는 겹치기 실행. 정책은 "인덱스 i = 관측시각 + i·dt"로 학습돼
 # 있으므로, 그 약속을 벽시계와 맞추기만 하면 된다 — 재학습 불필요한 클라이언트 장부 정리다.
@@ -99,7 +110,13 @@ RESET_POSE = "libero"                      # FR3_RESET_POSES key (수집 세션�
 # 학습된 4개 태스크 (다른 문장을 주면 분포 밖 — 2026-08-03 수집분 117 에피소드):
 #   pick up the {blue|white} cup and place it on the {blue|yellow} bowl
 DEFAULT_INSTRUCTION = "pick up the white cup and place it inside the large yellow bowl"
-RAMP_STEP = 0.05                           # rad/tick @20Hz — 홈 복귀 램프 (수집기와 동일)
+# 홈 복귀 램프. **속도로 적고 tick 당 이동은 파생시킨다** -- 예전에는
+# 0.05 rad/tick 이라고 적혀 있었고 20 Hz 에서 1.0 rad/s 였다. 주기가 바뀌면
+# 같은 상수가 그 배수만큼 빠른 램프가 된다 (수집기가 approach_speed 를
+# 속도로 두는 것과 같은 이유 -- mstack/config/station.py 의 ControlSpec).
+HOME_SPEED_RAD_S = 1.0
+HOME_TIMEOUT_S = 30.0                      # 램프가 이 안에 수렴하지 않으면 중단
+RAMP_STEP = HOME_SPEED_RAD_S / FPS         # rad/tick
 # 안전 클램프: 스텝당 "명령 목표 - 측정 위치" 최대 괴리.
 # 이건 속도 제한이 아니다 — 실제 속도/가속/저크 제한은 로봇 노드의 레퍼런스 필터
 # (v_max 1.0 rad/s, a_max 4.0 rad/s^2, 1 kHz)가 하고, 이 값과 무관하게 항상 건다.
@@ -282,7 +299,7 @@ def main() -> None:
     try:
         # ── 홈 복귀 램프 (수집기 _ramp_to와 동일 상수) ──
         print(f"[client] ramping to reset pose '{RESET_POSE}' ...")
-        for _ in range(600):
+        for _ in range(int(HOME_TIMEOUT_S * FPS)):
             obs = robot.get_observation()
             q = joints(obs)
             d = reset_q - q

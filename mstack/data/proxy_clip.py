@@ -325,19 +325,36 @@ def encode_clip(frames, out: Path, fps: float = 20.0,
     return out
 
 
-def record_fps(default: float = 20.0) -> float:
-    """기록 주기 (Hz). 파일에는 없고 station 설정이 정본이다.
+def record_fps(ep=None, default: float = 20.0) -> float:
+    """프록시 클립의 컨테이너 fps (Hz).
 
-    에피소드는 프레임별 시각을 남기지 않는다 -- ``timestamp`` 는 에피소드
-    attrs 한 개(녹화 시각)다. 그래서 재생 속도는 설정에서 온다. 이 값이 틀리면
-    클립이 빠르거나 느리게 보일 뿐 무엇이 찍혔는지는 그대로다.
+    프록시는 사람이 눈으로 보는 것이므로 굽기 fps 는 **그 파일이 찍힌 주기**
+    에서 온다. knu-2.0.0 은 ``t/agent`` (이미지가 실린 축), 없으면
+    ``t/control``. knu-1.3.0 은 축이 하나뿐이고 ``timing/frame`` 이 그 역할을
+    한다. 그보다 옛 파일에는 시각이 없어 ``default`` 로 떨어지는데, 그
+    파일들은 전부 20 Hz 로 찍혔으므로 20 이 맞는 값이다.
+
+    **station 의 fps 는 보지 않는다.** 그것은 "지금부터 찍을" 기록 주기
+    설정이지 이 파일이 찍힌 주기가 아니다. 예전에는 둘이 같은 20 이라 맞는
+    것처럼 보였지만, 설정을 120 으로 올리는 순간 이미 찍어 둔 20 Hz 파일의
+    클립이 전부 6배 빠르게 구워진다 -- 큐레이션에서 "얼마나 걸렸나" 를 눈으로
+    비교하는 신호가 파일마다 달라진다.
     """
-    try:
-        from mstack.config.station import load_station
-
-        return float(load_station().fps) or default
-    except Exception:  # noqa: BLE001 -- 설정을 못 읽어도 프록시는 만들어야 한다
-        return default
+    if ep is not None:
+        for axis in ("agent", "control"):
+            try:
+                t = ep["t"][axis][:]
+            except (KeyError, TypeError):
+                continue
+            if len(t) >= 2 and t[-1] > t[0]:
+                return float((len(t) - 1) / (t[-1] - t[0]))
+        try:
+            t = ep["timing"]["frame"][:]        # knu-1.3.0
+            if len(t) >= 2 and t[-1] > t[0]:
+                return float((len(t) - 1) / (t[-1] - t[0]))
+        except (KeyError, TypeError):
+            pass
+    return default
 
 
 def episode_uid_of(group) -> str:
@@ -421,7 +438,7 @@ def build_file(path, scale: float = DEFAULT_SCALE, crf: int = DEFAULT_CRF,
     for name, uid, cam in todo:
         by_ep.setdefault((name, uid), []).append(cam)
 
-    fps = float(fps if fps is not None else record_fps())
+    fps = float(fps) if fps is not None else None
     made = failed = 0
     error = None
     nbytes = 0
@@ -432,12 +449,16 @@ def build_file(path, scale: float = DEFAULT_SCALE, crf: int = DEFAULT_CRF,
             if should_stop is not None and should_stop():
                 break
             obs = f[name]["obs"]
+            # 굽기 fps 는 명시값이 없으면 이 에피소드 축의 실측 주기다.
+            # station fps(기록 주기)를 쓰면 주기가 다른 옛 클립의 재생 속도가
+            # 달라지므로, 파일에서 읽는 쪽이 정답이다.
+            ep_fps = fps if fps is not None else record_fps(f[name])
             for cam in cams:
                 if should_stop is not None and should_stop():
                     break
                 out = proxy_path(uid, cam, proxy_dir)
                 try:
-                    encode_clip(obs[cam][:], out, fps=fps, scale=scale, crf=crf)
+                    encode_clip(obs[cam][:], out, fps=ep_fps, scale=scale, crf=crf)
                     made += 1
                     nbytes += out.stat().st_size
                 except Exception as e:  # noqa: BLE001 -- 한 클립이 전체를 멈추지 않는다

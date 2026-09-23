@@ -49,6 +49,7 @@ class SeriesPlot(QWidget):
         self.title = title
         self._dims: list[tuple[int, str]] = []
         self._series: dict = {}
+        self._t = None          # 행 시각(초). load_series 가 준다. 없으면 레거시 파일
         self._cursor: float | None = None
         self._cut: int | None = None
         self.setMinimumHeight(150)
@@ -57,6 +58,10 @@ class SeriesPlot(QWidget):
     def set_data(self, series: dict, dims: list) -> None:
         """`series` is {"state"|"commanded"|"action": (T, D)}; `dims` a list of
         (column index, label)."""
+        # t 는 계열 필터 전에 따로 뺀다. x축 끝 라벨의 초값은 이 파일의 실측
+        # 행 시각 차이에서 오는 것이지, station fps 로 나눈 값이 아니다 --
+        # station fps 는 기록 주기 설정이라 표시 주기가 다를 수 있다.
+        self._t = series.get("t")
         # SERIES_STYLES에 있는 키만 받는다. load_series는 프레임 수("n")도 함께
         # 돌려주는데, 그것까지 계열로 잡으면 정수를 배열처럼 슬라이스하게 된다.
         self._series = {k: v for k, v in series.items()
@@ -81,6 +86,7 @@ class SeriesPlot(QWidget):
 
     def clear(self) -> None:
         self._series, self._dims = {}, []
+        self._t = None
         self._cut = self._cursor = None
         self.update()
 
@@ -132,8 +138,12 @@ class SeriesPlot(QWidget):
                        _fmt(hi - (hi - lo) * k / 3))
         p.drawText(QRectF(plot.left(), plot.bottom() + 2, 40, 14),
                    Qt.AlignmentFlag.AlignLeft, "0.0s")
+        # 오른쪽 끝 초값은 파일의 실측 행 시각 차이에서 온다. t 가 없거나 한
+        # 점뿐인 옛 파일만 예전대로 n/20 으로 본다 -- 그 파일들은 20 Hz 다.
+        t = self._t
+        dur = float(t[-1] - t[0]) if t is not None and len(t) >= 2 else n / 20.0
         p.drawText(QRectF(plot.right() - 44, plot.bottom() + 2, 44, 14),
-                   Qt.AlignmentFlag.AlignRight, f"{n / 20:.1f}s")
+                   Qt.AlignmentFlag.AlignRight, f"{dur:.1f}s")
 
         if self._cut is not None and 0 <= self._cut < n:
             cut = QColor(220, 70, 70); cut.setAlpha(46)

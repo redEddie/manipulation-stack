@@ -98,8 +98,21 @@ def load_trajectory(path: Path, episode: str) -> dict:
         if instr is None:
             info = f["data"].attrs.get("problem_info") if "data" in f else None
             instr = str(info)[:60] if info else "(없음)"
+        # 재생 주기도 파일에서 온다 -- t/control (없으면 t/agent) 의 실측 주기.
+        # station fps 는 지금 찍을 기록 주기 설정이라 이 파일이 찍힌 주기가
+        # 아니다. 축 시각이 없는 옛 파일만 20 Hz 로 본다.
+        play_hz = None
+        tg = grp.get("t")
+        if tg is not None:
+            for axis in ("control", "agent"):
+                if axis in tg:
+                    tt = tg[axis][:]
+                    if len(tt) >= 2 and tt[-1] > tt[0]:
+                        play_hz = float((len(tt) - 1) / (tt[-1] - tt[0]))
+                        break
     return {"q": np.asarray(q, dtype=float), "grip": np.asarray(g, dtype=float),
             "source": src, "instruction": str(instr),
+            "fps": 20.0 if play_hz is None else play_hz,
             "uid": None}
 
 
@@ -120,8 +133,9 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("hdf5", type=Path)
     ap.add_argument("episode", help="episode_000 (scene) 또는 demo_0 (legacy)")
-    ap.add_argument("--fps", type=float, default=float(STATION.fps),
-                    help="기록 주기 (기본: 스테이션 fps)")
+    ap.add_argument("--fps", type=float, default=None,
+                    help="재생 주기 (기본: 파일의 t/control 실측 주기, "
+                         "없으면 t/agent, 그것도 없으면 20)")
     ap.add_argument("--speed", type=float, default=1.0,
                     help="재생 배속 (0.5 = 절반 속도, 첫 재생 권장)")
     ap.add_argument("--dry-run", action="store_true", help="로봇 없이 궤적 통계만")
@@ -132,8 +146,11 @@ def main() -> None:
         raise SystemExit("--speed 는 0.1~1.0 (기록보다 빠른 재생은 지원하지 않는다)")
 
     traj = load_trajectory(args.hdf5, args.episode)
+    # 명시 --fps 가 없으면 파일의 실측 주기로 재생한다. 120 Hz 찍힌 파일을
+    # station 설정(기록 주기)으로 재생하면 6배 빠르게 나간다.
+    fps = args.fps if args.fps is not None else traj["fps"]
     print(f"[replay] {args.hdf5.name} / {args.episode}")
-    describe(traj, args.fps)
+    describe(traj, fps)
     if args.dry_run:
         print("[replay] dry-run 종료 (로봇 미접촉)")
         return
@@ -167,7 +184,7 @@ def main() -> None:
             if np.abs(d).max() < 0.02:
                 break
             command(q + np.clip(d, -RAMP_STEP, RAMP_STEP), g0)
-            time.sleep(1.0 / args.fps)
+            time.sleep(1.0 / fps)
         else:
             raise SystemExit("램프가 수렴하지 않았다 -- 로봇/노드 상태 확인")
         print("[replay] 시작 포즈 도착.")
@@ -175,7 +192,7 @@ def main() -> None:
             input(f"Enter 를 누르면 재생을 시작합니다 "
                   f"({len(traj['q'])}프레임, {args.speed:g}x) ... ")
 
-        dt = 1.0 / (args.fps * args.speed)
+        dt = 1.0 / (fps * args.speed)
         t_next = time.monotonic()
         for t in range(len(traj["q"])):
             q_meas = joints(robot.get_observation())

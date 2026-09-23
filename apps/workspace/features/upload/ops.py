@@ -18,7 +18,7 @@ from mstack.scene.dataset_sync import local_tasks, plan_sync
 from mstack.data.episode_stats import hdf5_files
 from apps.workspace.features.upload.hdf5_auto_dialog import Hdf5AutoDialog
 from mstack.data.lerobot_local import local_lerobot_status
-from mstack.config.station import load_station
+from mstack.data.dataset_schema import DEFAULT_EXPORT_FPS
 from mstack.gui.dialogs import (
     HdfUploadDialog,
     HfAccountDialog,
@@ -40,7 +40,7 @@ def lerobot_convert_step(paths: list, repo: str, root: str, resume: bool) -> dic
     이어붙이기에서 --fps 가 기존 데이터셋의 fps 와 다르면 변환기가 거부하는데,
     명시하지 않으면 그 검사가 의도한 값을 받는지 알 수 없다."""
     args = [CONVERT_SCRIPT, *paths, "--repo-id", repo, "--root", root,
-            "--fps", str(load_station().fps)]
+            "--fps", str(DEFAULT_EXPORT_FPS)]
     if resume:
         args.append("--resume")
     return {"name": tr("LeRobot 변환 (이어붙이기)" if resume

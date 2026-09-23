@@ -48,18 +48,32 @@ assert not still, (
 print("1. 옛 모듈 상수 제거 확인 OK")
 
 # ---------------------------------------------- 2. 기본값이 상수 시절과 같다
+#
+# **비교 대상은 ControlSpec 의 dataclass 기본값이다, 지금 station 파일이
+# 아니다.** 이 시험이 지키려는 것은 "상수를 설정으로 옮기면서 값이 바뀌지
+# 않았다" 이고, station 파일은 그 뒤로 조작자가 의도적으로 바꾸는 자리다
+# (2026-09-23: 기록 120 Hz, substeps 1). 로드된 값을 여기에 박아 두면
+# 설정을 바꿀 때마다 이 시험이 "회귀" 라고 거짓말을 한다.
+d = ControlSpec()
+assert d.ramp_hz == 100.0, d.ramp_hz
+assert d.teleop_substeps == 5, d.teleop_substeps
+assert d.approach_speed == 2.0, d.approach_speed
+assert d.approach_done_rad == 0.10, d.approach_done_rad
+assert d.home_speed == 1.2, d.home_speed
+assert abs(d.ramp_period_s - 0.01) < 1e-12, d.ramp_period_s
+assert abs(d.ramp_step - 0.02) < 1e-12, d.ramp_step
+print("2. ControlSpec 기본값이 상수 시절과 동일 OK")
+
+# 이 리그가 실제로 쓰는 값은 station 파일에서 오고, 파생값은 **그 값과**
+# 맞아야 한다 -- 특정 숫자가 아니라 관계를 본다.
 c = cfg()
-assert c.ramp_hz == 100.0, c.ramp_hz
-assert c.teleop_substeps == 5, c.teleop_substeps
-assert c.approach_speed == 2.0, c.approach_speed
-assert c.approach_done_rad == 0.10, c.approach_done_rad
-assert c.home_speed == 1.2, c.home_speed
-# 파생값도 옛 값 그대로
-assert abs(c.ramp_period_s - 0.01) < 1e-12, c.ramp_period_s
-assert abs(c.ramp_step - 0.02) < 1e-12, c.ramp_step
-assert abs(c.home_tick_dq - 0.012) < 1e-12, c.home_tick_dq
-assert c.command_hz == 100, c.command_hz
-print(f"2. 기본값이 상수 시절과 동일 OK (명령 {c.command_hz:.0f} Hz)")
+assert abs(c.ramp_period_s - 1.0 / c.ramp_hz) < 1e-12, c.ramp_period_s
+assert abs(c.ramp_step - c.approach_speed / c.ramp_hz) < 1e-12, c.ramp_step
+assert abs(c.home_tick_dq - c.home_speed / c.ramp_hz) < 1e-12, c.home_tick_dq
+assert c.command_hz == c.fps * c.teleop_substeps, (
+    c.command_hz, c.fps, c.teleop_substeps)
+print(f"2b. 이 리그 설정과 파생값이 일관 OK "
+      f"(기록 {c.fps} Hz x {c.teleop_substeps} = 명령 {c.command_hz:.0f} Hz)")
 
 # ---------------------------------------------- 3. 주기를 바꿔도 속도가 보존된다
 fast = cfg(ramp_hz=200.0)

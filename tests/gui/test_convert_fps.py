@@ -10,11 +10,20 @@ fps 는 메타데이터가 아니라 모든 프레임의 timestamp 와 비디오
 여기서 못박는 것:
 
 1. 변환 argv 를 만드는 세 자리(UploadOps 의 자동/이어붙이기 단계,
-   PipelineDialog.steps, 변환 대화상자 build_args) 가 스테이션 설정
-   (load_station().fps) 의 fps 를 **명시로** 넘긴다.
+   PipelineDialog.steps, 변환 대화상자 build_args) 가 fps 를 **명시로**
+   넘긴다 -- 숨은 기본값에 맡기지 않는다.
 2. 변환기의 --resume 검사(_check_resume_fps) 가 기존 fps 와 다른 --fps 를
    SystemExit 로 거부하고, 같으면 통과한다.
-3. 변환 대화상자의 FPS 칸이 스테이션 값으로 채워지고, 칸을 비워도 스테이션 값이 나간다.
+3. 변환 대화상자의 FPS 칸이 그 기본값으로 채워지고, 칸을 비워도 같은 값이 나간다.
+
+기본값의 **출처**는 2026-09-23 에 바뀌었다: 예전에는 ``load_station().fps``
+였는데, 그것은 "지금부터 무엇을 찍을까"(기록 주기)이지 "이미 찍은 것을 어느
+주기로 학습에 낼까"가 아니다. 둘이 같은 20 이던 동안에는 구분이 드러나지
+않았지만, 기록을 120 Hz 로 올리자 내보내기 기본값까지 120 이 되어 30 fps
+카메라 이미지가 행마다 네 번 중복된 영상이 나갈 뻔했다. 지금은
+``dataset_schema.DEFAULT_EXPORT_FPS`` 가 정본이다. **이 시험이 지키는 계약은
+그대로다** -- 세 자리가 그 값을 명시로 넘기고, --resume 이 그것을 조용히
+무시하지 않는다.
 
 로봇도 카메라도 필요 없다 (offscreen). 네트워크도 쓰지 않는다 -- hf_account
 는 whoami() 를 부르므로 스텁으로 막는다.
@@ -38,9 +47,10 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication.instance() or QApplication([])
 
-from mstack.config.station import load_station  # noqa: E402
+from mstack.config.station import load_station
+from mstack.data.dataset_schema import DEFAULT_EXPORT_FPS  # noqa: E402
 
-STATION_FPS = str(load_station().fps)
+EXPORT_FPS = str(DEFAULT_EXPORT_FPS)
 
 from apps.workspace.constants import (  # noqa: E402
     CONVERT_SCRIPT,
@@ -65,14 +75,14 @@ for resume in (False, True):
     a = step["args"]
     assert a[0] == CONVERT_SCRIPT, a
     assert a[1:3] == paths, a
-    assert _fps_of(a) == STATION_FPS, (a, STATION_FPS)
+    assert _fps_of(a) == EXPORT_FPS, (a, EXPORT_FPS)
     assert ("--resume" in a) is resume, a
     assert step["clear_root"] == "/out", step
 auto = lerobot_convert_step(paths, "org/ds", "/out", resume=False)
 res = lerobot_convert_step(paths, "org/ds", "/out", resume=True)
 assert "전체 재빌드" in auto["name"] and "이어붙이기" in res["name"], \
     (auto["name"], res["name"])
-print(f"1. UploadOps 자동/이어붙이기 변환 단계가 --fps {STATION_FPS} 명시 OK")
+print(f"1. UploadOps 자동/이어붙이기 변환 단계가 --fps {EXPORT_FPS} 명시 OK")
 
 
 # ------------- 2. PipelineDialog.steps() 의 변환 단계도 fps 를 명시한다
@@ -100,9 +110,9 @@ for resume in (False, True):
     assert len(conv) == 1, [s.get("name") for s in steps]
     a = conv[0]["args"]
     assert a[0] == CONVERT_SCRIPT, a
-    assert _fps_of(a) == STATION_FPS, (a, STATION_FPS)
+    assert _fps_of(a) == EXPORT_FPS, (a, EXPORT_FPS)
     assert ("--resume" in a) is resume, a
-print(f"2. PipelineDialog.steps() 변환 단계가 --fps {STATION_FPS} 명시 OK "
+print(f"2. PipelineDialog.steps() 변환 단계가 --fps {EXPORT_FPS} 명시 OK "
       "(재빌드/이어붙이기 둘 다)")
 
 
@@ -133,22 +143,26 @@ with tempfile.TemporaryDirectory() as d:
     root = Path(d)
     made = _make_hdf5(root)
     cv = convert_mod.LerobotConvertDialog(None, str(root))
-    assert cv.fps_edit.text() == STATION_FPS, \
-        f"FPS 칸이 스테이션 값({STATION_FPS})이 아니다: {cv.fps_edit.text()!r}"
+    assert cv.fps_edit.text() == EXPORT_FPS, \
+        f"FPS 칸이 기본 내보내기 값({EXPORT_FPS})이 아니다: {cv.fps_edit.text()!r}"
     cv.repo_id_edit.set_text("org/x")
     cv.out_root_edit.setCurrentText(str(root / "out"))
-    assert _fps_of(cv.build_args()) == STATION_FPS
-    # 조작자가 칸을 지워도(공백) 스테이션 값이 나간다 -- 상수 20 폴백은 없다.
+    assert _fps_of(cv.build_args()) == EXPORT_FPS
+    # 조작자가 칸을 지워도(공백) 같은 기본값이 나간다 -- 다른 값으로 안 샌다.
     cv.fps_edit.setText("")
-    assert _fps_of(cv.build_args()) == STATION_FPS
-print(f"3. 변환 대화상자 FPS 칸({STATION_FPS}) + 빈칸 폴백 OK")
+    assert _fps_of(cv.build_args()) == EXPORT_FPS
+print(f"3. 변환 대화상자 FPS 칸({EXPORT_FPS}) + 빈칸 폴백 OK")
+assert EXPORT_FPS != str(load_station().fps), (
+    "내보내기 기본값이 기록 주기와 같아졌다 -- 둘은 다른 질문이라 "
+    "station 을 바꾸면 내보내기가 따라 움직이면 안 된다")
+print(f"3b. 내보내기 {EXPORT_FPS} != 기록 {load_station().fps} (끊겨 있다) OK")
 
 
 # ----------- 4. 변환기 --resume 검사: fps 불일치는 거부, 일치는 통과
 import scripts.convert.convert_libero_to_lerobot as conv  # noqa: E402
 
-conv._check_resume_fps(int(STATION_FPS), int(STATION_FPS))   # 같으면 조용히 통과
-print(f"4a. --resume fps 일치 통과 OK ({STATION_FPS})")
+conv._check_resume_fps(int(EXPORT_FPS), int(EXPORT_FPS))   # 같으면 조용히 통과
+print(f"4a. --resume fps 일치 통과 OK ({EXPORT_FPS})")
 try:
     conv._check_resume_fps(20, 30)
 except SystemExit as e:

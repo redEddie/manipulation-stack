@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from mstack.config.station import load_station
+from mstack.data.dataset_schema import DEFAULT_EXPORT_FPS
 from mstack.data.libero_format import hdf5_repack_status
 from mstack.gui.dialogs.hf_account import HfAccountDialog, hf_account
 from mstack.gui.dialogs.parts import Hdf5FileTable, RepoIdEdit
@@ -121,7 +122,7 @@ class LerobotConvertDialog(QDialog):
 
         grid.addWidget(QLabel(tr("FPS:")), 2, 0)
         # 정본은 스테이션 설정(recording.fps)이다 -- 칸도 argv 도 거기서 온다.
-        self.fps_edit = QLineEdit(str(load_station().fps))
+        self.fps_edit = QLineEdit(str(DEFAULT_EXPORT_FPS))
         grid.addWidget(self.fps_edit, 2, 1)
         layout.addLayout(grid)
 
@@ -268,7 +269,7 @@ class LerobotConvertDialog(QDialog):
         args = list(paths) + [
             "--repo-id", repo_id,
             "--root", out_root,
-            "--fps", self.fps_edit.text().strip() or str(load_station().fps),
+            "--fps", self.fps_edit.text().strip() or str(DEFAULT_EXPORT_FPS),
         ]
         if self.only_success_check.isChecked():
             args.append("--only-success")
