@@ -375,8 +375,14 @@ from apps.workspace.launcher.pages import _ROBOT_OBS_FIELDS  # noqa: E402
 # becomes the episode dataset timing/robot_state.
 from mstack.data.dataset_schema import ROBOT_STATE_TIME, TIMING_ROBOT_STATE  # noqa: E402
 
-_STORED_AS = {ROBOT_STATE_TIME: f"timing/{TIMING_ROBOT_STATE}"}
+# knu-2.0.0 은 timing/ 을 없애고 그 값을 meta/<축>/ 로 옮겼다 -- 같은 보장이
+# 자리만 바꾼 것이라, 어느 이름으로 저장되는지가 버전마다 다르다.
+_STORED_AS_BY_MAJOR = {
+    1: {ROBOT_STATE_TIME: f"timing/{TIMING_ROBOT_STATE}"},
+    2: {ROBOT_STATE_TIME: f"meta/control/{TIMING_ROBOT_STATE}"},
+}
 for _v, _fields in _ROBOT_OBS_FIELDS.items():
+    _STORED_AS = _STORED_AS_BY_MAJOR[int(_v.split("-")[1].split(".")[0])]
     _req = SCHEMA_FIELDS[_v]["obs_datasets"]
     _req_ep = SCHEMA_FIELDS[_v]["episode_datasets"]
     _extra = [f for f in _fields

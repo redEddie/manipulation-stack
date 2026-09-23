@@ -99,8 +99,13 @@ def test_round_trip():
             data = f["data"]
             assert set(data.keys()) == {"demo_0", "demo_1", "demo_2"}
 
-            required_datasets = set(SCHEMA_FIELDS[SCHEMA_VERSION]["episode_datasets"])
-            required_obs = set(SCHEMA_FIELDS[SCHEMA_VERSION]["obs_datasets"])
+            # 이 시험은 capture 없이 쓴다 -- 즉 **한 행 = 한 프레임** 구조다.
+            # 그러니 최신(knu-2.0.0, 계열마다 자기 시간축)이 아니라 그 구조의
+            # 마지막 버전을 기준으로 봐야 한다. SCHEMA_VERSION 을 그대로 쓰면
+            # "이 코드가 쓰는 최신" 과 "이 시험이 만든 구조" 가 어긋난다.
+            _LAYOUT_VERSION = "knu-1.3.0"
+            required_datasets = set(SCHEMA_FIELDS[_LAYOUT_VERSION]["episode_datasets"])
+            required_obs = set(SCHEMA_FIELDS[_LAYOUT_VERSION]["obs_datasets"])
 
             for name in data.keys():
                 grp = data[name]
