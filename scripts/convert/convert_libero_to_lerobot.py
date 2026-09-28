@@ -135,7 +135,13 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 from lerobot.datasets.lerobot_dataset import CODEBASE_VERSION, LeRobotDataset
-from lerobot.datasets.utils import DatasetInfo
+
+try:
+    # lerobot trees that ship DatasetInfo (patched/old installs)
+    from lerobot.datasets.utils import DatasetInfo
+except ImportError:
+    # stock lerobot >= 0.4.x: create_lerobot_dataset_card() takes a plain dict
+    DatasetInfo = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from mstack.config.station import load_station  # noqa: E402
@@ -886,7 +892,9 @@ def main() -> None:
         # 올라갔는데 카드도 없고, 더 중요하게는 그 다음의 create_tag가 실행되지
         # 않아 lerobot이 읽는 v3.0 태그가 옛 커밋에 멈춘다. 다음 resume이 그
         # 낡은 메타데이터를 씨앗으로 삼아 틀린 개수를 만들어낸다.
-        info = DatasetInfo.from_dict(info_dict)
+        # 카드 생성기가 받는 형태는 트리마다 다르다: 패치된 구 트리는
+        # DatasetInfo 객체, 공식 0.4.x 는 평범한 dict 를 직접 받는다.
+        info = DatasetInfo.from_dict(info_dict) if DatasetInfo else info_dict
         ds = LeRobotDataset.__new__(LeRobotDataset)
         ds.repo_id = args.repo_id
         ds.root = root
