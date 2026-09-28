@@ -7,12 +7,12 @@
       "slots": [
         {
           "instruction_id": "I000",
-          "instruction": "pick up the blue cup and place it on the yellow bowl",
+          "instruction": "pick up the blue cup and place it inside the small yellow bowl",
           "target": 10
         },
         {
           "instruction_id": "I001",
-          "instruction": "pick up the white cup and place it on the yellow bowl",
+          "instruction": "pick up the white cup and place it inside the small yellow bowl",
           "target": 10
         },
         {
@@ -27,12 +27,12 @@
         },
         {
           "instruction_id": "I004",
-          "instruction": "pick up the cup next to the yellow bowl and place it on top of the drawer",
+          "instruction": "pick up the blue cup closest to the small yellow bowl and place it on top of the drawer",
           "target": 10
         },
         {
           "instruction_id": "I005",
-          "instruction": "open the top drawer and put the small bowl in it",
+          "instruction": "tidy the cutlery into the drawer",
           "target": 10
         }
       ]
