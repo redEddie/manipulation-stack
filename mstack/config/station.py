@@ -80,6 +80,12 @@ class CameraSpec:
 #: 다른 폭을 뜻하게 된다. 부하 모델·리셋 자세와 같은 부류의 값이다.
 GRIPPERS = {
     "franka_hand": (0.08, "Franka Hand"),
+    # Franka Hand 에 UMI식 핑거(TPU)만 얹은 조합. 구동은 FCI 그대로라
+    # 폭/명령 경로가 바뀌지 않고, 달라지는 것은 손목 시야의 외형뿐 --
+    # 그래서 기록용 항목이다. 색이 바뀌면 키를 바꿔 찍는다 (데이터가
+    # 색별로 구분돼야 wrist 관측의 도메인 시프트를 잡을 수 있다).
+    "franka_hand_umi_yellow": (0.08, "Franka Hand + UMI finger (yellow)"),
+    "franka_hand_umi_black": (0.08, "Franka Hand + UMI finger (black)"),
 }
 
 
