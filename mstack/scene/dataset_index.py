@@ -250,7 +250,7 @@ def _write_tsv(path: Path, header: tuple, rows: list) -> None:
 def _number_scenes(scenes: list) -> None:
     """``ordinal`` 을 **만든 순서**로 1 부터 매긴다 (제자리 수정).
 
-    scene ID 가 불투명해지면서(``S7QK3M2A``) 사람이 "몇 번째 scene" 을 말할
+    scene ID 가 불투명해지면서(``S7QK3M2AB``) 사람이 "몇 번째 scene" 을 말할
     방법이 없어졌다. 그 자리를 이 열이 맡는다 -- R2R 처럼 "짧은 불투명 ID +
     별도의 넘버링 문서" 이고, 이 파일이 그 문서다.
 

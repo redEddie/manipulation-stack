@@ -276,7 +276,19 @@ def _read(ds: Any, idx: np.ndarray) -> np.ndarray:
     if idx.size and idx[0] == 0 and idx[-1] == ds.shape[0] - 1 and idx.size == ds.shape[0]:
         return ds[:]                      # 전부 쓰면 통째로 읽는 쪽이 빠르다
     uniq, inv = np.unique(idx, return_inverse=True)
-    return ds[uniq][inv]
+    if not uniq.size:
+        return ds[uniq][inv]
+    # **h5py 팬시 인덱싱(ds[list])은 쓰지 않는다.** 행마다 선택을 쌓는 비용이
+    # 행 수에 비례해 커져서, 640x480 gzip 영상 572장에 ~80초가 걸렸다 (한 장
+    # ~140 ms, 슬라이스는 ~3.4 ms). 그동안 h5py 가 GIL 을 쥐고 있어 GUI 전체가
+    # 멈췄고, 파일을 쥔 채라 같은 창의 에피소드 삭제가 "file is already open
+    # for read-only" 로 실패했다 (2026-09-29, scene_ZTR4X6NE).
+    lo, hi = int(uniq[0]), int(uniq[-1]) + 1
+    if uniq.size * 2 >= hi - lo:
+        # 거의 다 쓴다 -- 구간을 한 번에 읽고 메모리에서 고른다.
+        return ds[lo:hi][uniq - lo][inv]
+    # 드문드문 쓴다 -- 쓰는 행만 한 장씩 (메모리를 아끼는 것이 이 함수의 목적).
+    return np.stack([ds[i] for i in uniq.tolist()])[inv]
 
 
 @dataclass

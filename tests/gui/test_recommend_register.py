@@ -53,26 +53,32 @@ assert len(sents) >= 1, "추천 문장 체크리스트가 비어 있음"
 assert all(cb.isChecked() for cb in sents), "문장은 기본적으로 선택되어야 함"
 print(f"1 통과: 추천 문장 체크리스트 ({len(sents)}개)")
 
-# ---- 2. 계획 등록: 선택 문장이 plan 파일에 추가됨 ----
+# ---- 2. 채택은 문장을 **기록만** 한다 -- 계획 파일은 건드리지 않는다 ----
+# 이 배치는 아직 scene 이 아니고 ID 도 없다. 전에는 여기서 창을 열 때 뽑은
+# ID 로 등록했고, 만들 때 다른 ID 가 뽑혀 문장이 파일 없는 scene 에 붙었다
+# (2026-09-28 umi-test: SVYECJC88 에 48개, 파일 SDKG59AX4 에는 0개).
+_before = plan_copy.read_text()
 rdlg._accept()
-assert rdlg.registered_plan_path == plan_copy
-plan = json.loads(plan_copy.read_text())
-s999 = [s for s in plan["scenes"] if s["scene_id"] == "S999"]
-assert s999, "S999 scene 이 생성됨"
-added = s999[0]["slots"]
-assert len(added) == len(sents)
-assert added[0]["target"] == 10
-assert added[0]["instruction_id"].startswith("I")
-print(f"2 통과: 계획 등록 {len(added)}개 슬롯 (target=10, ID 자동)")
+assert plan_copy.read_text() == _before, "채택이 계획 파일을 고쳤다"
+assert rdlg.picked_sentences == [cb.text() for cb in sents]
+assert not hasattr(rdlg, "registered_plan_path")
+print(f"2 통과: 채택은 문장 {len(sents)}개를 기록만 한다 (파일 불변)")
 
-# ---- 3. 등록 검증 게이트: load_plan 을 통과해야 함 ----
-from mstack.scene.collection_plan import load_plan  # noqa: E402
-loaded = load_plan(plan_copy)
-assert loaded.scene("S999") is not None
-print("3 통과: 등록된 계획 load_plan 검증 통과")
+# ---- 3. 등록은 만든 scene 의 ID 로 -- load_plan 검증 통과 ----
+from mstack.scene.collection_plan import add_task_slots, load_plan  # noqa: E402
+n_add, n_dup, _w = add_task_slots(plan_copy, "S7QK3M2AB",
+                                  rdlg.picked_sentences, target=10)
+assert (n_add, n_dup) == (len(sents), 0), (n_add, n_dup)
+added = load_plan(plan_copy).slots_for("S7QK3M2AB")
+assert [s.instruction for s in added] == rdlg.picked_sentences
+assert added[0].target == 10 and added[0].instruction_id == "I000"
+# 같은 문장을 다시 넣으면 새 ID 로 쌓지 않는다
+assert add_task_slots(plan_copy, "S7QK3M2AB", rdlg.picked_sentences)[:2] == \
+    (0, len(sents))
+print(f"3 통과: 만든 scene ID 로 {n_add}개 등록 (target=10, I000~, 중복 무시)")
 
 # ---- 4. SceneComposer lint: 규칙 위반 시 경고 표시 ----
-nd = SceneComposer(None, "S100")
+nd = SceneComposer(None)
 # 위반 배치: 흰 컵 2개 + drawer 중앙
 nd.prop_list.blockSignals(True)
 for i in range(nd.prop_list.count()):
@@ -93,7 +99,7 @@ assert "ban_zones" in lint_text, lint_text
 print("4 통과: SceneComposer 규칙 위반 경고")
 
 # ---- 5. SceneComposer lint: 규칙 통과 시 경고 없음 ----
-nd2 = SceneComposer(None, "S101")
+nd2 = SceneComposer(None)
 nd2.prop_list.blockSignals(True)
 for i in range(nd2.prop_list.count()):
     it = nd2.prop_list.item(i)
@@ -109,7 +115,7 @@ nd2._placements = {"OBJ-CUP-WHT-01": [0, 0], "OBJ-CUP-BLU-01": [1, 0],
 nd2._refresh()
 assert nd2.lint_label.text() == "", nd2.lint_label.text()
 # 컵 1 + 그릇 1 이면 pair_if_present 경고가 떠야 한다 (shortcut 방지)
-nd3 = SceneComposer(None, "S102")
+nd3 = SceneComposer(None)
 nd3.prop_list.blockSignals(True)
 for i in range(nd3.prop_list.count()):
     it = nd3.prop_list.item(i)
@@ -191,19 +197,20 @@ assert rd_fresh._register_check.isEnabled(), \
     "파일이 없다고 등록을 막는다 -- 없으면 만들면 된다"
 assert rd_fresh._register_check.isChecked(), "기본으로 켜져 있어야 한다"
 _wait_recs(rd_fresh)
-_md = rd_fresh._recs[0]["md"]
-assert rd_fresh._register_plan(_md, ["pick up the blue cup and place it inside the white bowl"]), \
+assert add_task_slots(
+    fresh, "S7QK3M2AB",
+    ["pick up the blue cup and place it inside the white bowl"])[0] == 1, \
     "파일이 없을 때 등록이 실패했다"
 assert fresh.is_file(), "등록했는데 지시문 파일이 안 만들어졌다"
 _raw = json.loads(fresh.read_text(encoding="utf-8"))
 assert _raw["plan_version"] == 1, _raw
-assert [sc for sc in _raw["scenes"] if sc["scene_id"] == _md.scene_id], _raw
+assert [sc for sc in _raw["scenes"] if sc["scene_id"] == "S7QK3M2AB"], _raw
 print("지시문 파일이 없어도 등록하면 만들어진다 OK")
 
 # ---- 7. 워크플로 ②: 물체는 사람이 고르고 배치만 추천 (2026-09-06) ----
 # 버튼 자체는 우측 패널에 있고(2026-09-07), 누를 수 있는지를 아는 것은
 # composer 다 -- 여기서는 그 계약만 본다.
-nd4 = SceneComposer(None, "S103")
+nd4 = SceneComposer(None)
 ok, why = nd4.layout_button_state()
 assert not ok, "아무것도 안 골랐는데 눌린다"
 assert "이상 체크" in why, why

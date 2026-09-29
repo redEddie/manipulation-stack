@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import random
-import tempfile
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -30,9 +28,8 @@ from PyQt6.QtWidgets import (
 from apps.workspace.features.scene.dialogs.sentence_checks import build_sentence_checks
 from apps.workspace.shared.info import InfoCard
 from mstack.gui.i18n import tr
-from mstack.scene.collection_plan import load_plan
 from mstack.scene.scene_diversity import AXES, recommend_detailed, recommend_placement
-from mstack.scene.scene_format import INSTRUCTION_ID_RE, SceneMetadata
+from mstack.scene.scene_format import SceneMetadata
 from mstack.scene.scene_rules import violations_by_section
 from mstack.scene.skill_stats import (
     collected_skill_counts,
@@ -169,7 +166,13 @@ class RecommendDialog(QDialog):
         self._data_root = data_root
         self._skill_counts = None          # 워커가 채움 (Counter)
         self.picked = None                 # accept 시 SceneMetadata
-        self.registered_plan_path: "Path | None" = None  # 등록 성공 시 경로
+        # accept 시 등록하기로 한 문장. **여기서 파일에 쓰지 않는다** -- 이
+        # 배치는 아직 scene 이 아니고 ID 도 없다. ID 는 [✚ 새 Scene 만들기]
+        # 가 파일을 만드는 순간 한 번 뽑히고, 문장은 그때 그 ID 로 등록된다
+        # (scene.ops.on_compose_done). 전에는 여기서 창을 열 때 뽑은 ID 로
+        # 등록했고, 만들 때 다른 ID 가 뽑혀 문장이 파일 없는 scene 에 붙었다
+        # (2026-09-28).
+        self.picked_sentences: list[str] = []
         self._recs: list = []
         self._radios: list = []
         self._card_widgets: list = []
@@ -275,8 +278,8 @@ class RecommendDialog(QDialog):
 
         if self._plan_path is not None:
             self._register_check = QCheckBox(
-                tr("채택 시 선택한 문장을 지시문 파일 {n} 에 등록 (target=10)")
-                .format(n=self._plan_path.name))
+                tr("선택한 문장을 새 Scene 을 만들 때 지시문 파일 {n} 에 등록 "
+                   "(target=10)").format(n=self._plan_path.name))
             self._register_check.setChecked(True)
         else:
             # 여기는 **경로 자체를 모를 때**다 -- GUI 에서는 나오지 않는다
@@ -597,14 +600,14 @@ class RecommendDialog(QDialog):
         self._show_page(1)
 
     def _fill_step2_head(self, idx: int) -> None:
-        """2단계 머리말 = 고른 카드의 요약 (번호·scene id·버킷·보강 축)."""
+        """2단계 머리말 = 고른 카드의 요약 (번호·버킷·보강 축)."""
         while self._head_row.count():
             it = self._head_row.takeAt(0)
             if it.widget() is not None:
                 it.widget().deleteLater()
         rec = self._recs[idx]
-        lab = QLabel(tr("추천 {i} · {sid}")
-                     .format(i=idx + 1, sid=rec["md"].scene_id))
+        # scene ID 는 적지 않는다 -- 아직 없다 (만드는 순간 정해진다).
+        lab = QLabel(tr("추천 {i}").format(i=idx + 1))
         lab.setStyleSheet("font-weight:bold;")
         self._head_row.addWidget(lab)
         self._head_row.addWidget(_bucket_badge(rec["bucket"]))
@@ -620,92 +623,6 @@ class RecommendDialog(QDialog):
     def _selected_sentences(self, idx: int) -> list[str]:
         return [cb.text() for cb in self._sentence_checks[idx] if cb.isChecked()]
 
-    def _register_plan(self, md: SceneMetadata, sentences: list[str]) -> bool:
-        """선택한 문장을 plan_path 의 scene+slots 로 등록. load_plan 검증 통과."""
-        if self._plan_path is None or not sentences:
-            return False
-        path = self._plan_path
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(raw, dict):
-                raise ValueError("최상위가 매핑이 아니다")
-        except FileNotFoundError:
-            # 파일이 아직 없는 것은 막을 사유가 아니다 -- 없으면 만든다.
-            # collection_plan.ensure_scene 과 같은 규칙이다 (새 scene 을
-            # 만들 때도 지시문 파일이 없으면 그 자리에서 만든다). 전에는
-            # 여기서 "읽기 실패" 를 띄웠고, 그래서 새 데이터셋에서는 추천
-            # 문장을 한 번에 등록할 수 없었다 (2026-09-07 조작자 지적).
-            raw = {"plan_version": 1, "scenes": []}
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, tr("지시문 읽기 실패"), str(e))
-            return False
-        raw.setdefault("plan_version", 1)
-        if not isinstance(raw.get("scenes"), list):
-            raw["scenes"] = []
-        by_sid = {s.get("scene_id"): s for s in raw["scenes"]}
-        scene = by_sid.get(md.scene_id)
-        if scene is None:
-            scene = {"scene_id": md.scene_id, "slots": []}
-            raw["scenes"].append(scene)
-        used = {
-            int(m.group(1))
-            for sl in scene.get("slots", [])
-            if (m := INSTRUCTION_ID_RE.match(str(sl.get("instruction_id", ""))))
-        }
-        # 같은 문장이 이미 있으면 새 ID 로 또 쌓지 않는다 -- load_plan 은
-        # "같은 ID·다른 문장"만 막으므로 여기서 문장 기준으로 걸러야 한다.
-        existing_sents = {str(sl.get("instruction", "")).strip()
-                          for sl in scene.get("slots", [])}
-        new_slots = []
-        n_dup = 0
-        for sent in sentences:
-            if sent.strip() in existing_sents:
-                n_dup += 1
-                continue
-            existing_sents.add(sent.strip())
-            n = max(used, default=-1) + 1
-            used.add(n)
-            new_slots.append({
-                "instruction_id": f"I{n:03d}",
-                "instruction": sent,
-                "target": 10,
-            })
-        if not new_slots:
-            QMessageBox.information(
-                self, tr("지시문에 등록"),
-                tr("선택한 문장이 모두 이미 등록되어 있습니다 (중복 {n}건 건너뜀).")
-                .format(n=n_dup))
-            return False
-        scene.setdefault("slots", []).extend(new_slots)
-
-        # 검증 게이트 -- 실패해도 temp 파일은 남기지 않는다.
-        tmp: "Path | None" = None
-        try:
-            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
-                                             encoding="utf-8") as tf:
-                tf.write(json.dumps(raw, ensure_ascii=False, indent=2) + "\n")
-                tmp = Path(tf.name)
-            plan = load_plan(tmp)
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(
-                self, tr("지시문 등록 실패"),
-                tr("load_plan 검증을 통과하지 못했습니다:\n{e}").format(e=e))
-            return False
-        finally:
-            if tmp is not None:
-                tmp.unlink(missing_ok=True)
-        if plan.warnings:
-            # 통일 문법 경고(§4)는 등록을 막지 않지만 버리지도 않는다 --
-            # PlanEditDialog 저장 경로와 같은 규칙.
-            QMessageBox.warning(self, tr("지시문 경고"),
-                                "\n".join(str(x) for x in plan.warnings))
-
-        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8")
-        self._n_dup_skipped = n_dup
-        self.registered_plan_path = path
-        return True
-
     def _accept(self) -> None:
         idx = -1
         for i, rb in enumerate(self._radios):
@@ -716,6 +633,7 @@ class RecommendDialog(QDialog):
             return
         md = self._recs[idx]["md"]
         self.picked = md
+        self.picked_sentences = []
         if self._register_check is not None and self._register_check.isChecked():
             sents = self._selected_sentences(idx)
             # 문장 수 × target 이 곧 수집량이다 -- 물체 5개 scene 은 문장이
@@ -723,18 +641,12 @@ class RecommendDialog(QDialog):
             # 얹히는 것을 총량 확인으로 막는다.
             if sents and QMessageBox.question(
                     self, tr("지시문에 등록"),
-                    tr("{n}개 문장 × target 10 = 총 {t} 에피소드를 {sid} 에 "
-                       "등록합니다. 진행할까요?")
-                    .format(n=len(sents), t=len(sents) * 10, sid=md.scene_id),
-            ) != QMessageBox.StandardButton.Yes:
-                sents = []
-            if sents and self._register_plan(md, sents):
-                dup = getattr(self, "_n_dup_skipped", 0)
-                QMessageBox.information(
-                    self, tr("지시문 등록 완료"),
-                    tr("{n}개 문장을 {sid} 에 등록했습니다.{d}")
-                    .format(n=len(sents) - dup, sid=md.scene_id,
-                            d=tr(" (중복 {k}건 건너뜀)").format(k=dup) if dup else ""))
+                    tr("{n}개 문장 × target 10 = 총 {t} 에피소드를 등록합니다.\n"
+                       "[✚ 새 Scene 만들기] 를 누를 때 그 scene 에 들어갑니다. "
+                       "진행할까요?")
+                    .format(n=len(sents), t=len(sents) * 10),
+            ) == QMessageBox.StandardButton.Yes:
+                self.picked_sentences = sents
         super().accept()
 
 

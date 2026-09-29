@@ -208,6 +208,82 @@ def ensure_scene(path: Path, scene_id: str) -> bool:
     return True
 
 
+def add_task_slots(path: Path, scene_id: str, sentences: list,
+                   target: int = 10) -> tuple:
+    """Append ``sentences`` to ``scene_id`` as new task slots.
+
+    Returns ``(added, n_dup, warnings)`` -- ``warnings`` are load_plan's
+    grammar warnings for the **added** slots only; the rest of the plan's
+    warnings are not this call's news. A sentence already in that scene is
+    skipped, not given a second ID -- load_plan only rejects "same ID,
+    different sentence", so the duplicate check has to be by text. The file
+    is created if missing and the scene entry is added if absent.
+
+    The result must pass ``load_plan`` or nothing is written (ValueError).
+
+    Callers pass the scene ID **of a file that already exists**. The scene
+    recommender used to register here with an ID it had drawn when the
+    dialog opened, and scene creation then drew a fresh one -- once IDs
+    became random (2026-09-23) the sentences landed under a scene that never
+    got a file (2026-09-28, umi-test: 48 slots under SVYECJC88, file
+    SDKG59AX4 with none).
+    """
+    import tempfile
+
+    path = Path(path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("최상위가 매핑이 아니다")
+    except FileNotFoundError:
+        raw = {"plan_version": 1, "scenes": []}
+    raw.setdefault("plan_version", 1)
+    if not isinstance(raw.get("scenes"), list):
+        raw["scenes"] = []
+    scene = next((s for s in raw["scenes"]
+                  if isinstance(s, dict) and s.get("scene_id") == scene_id),
+                 None)
+    if scene is None:
+        scene = {"scene_id": scene_id, "slots": []}
+        raw["scenes"].append(scene)
+        raw["scenes"].sort(key=lambda s: str(s.get("scene_id", "")))
+    slots = scene.setdefault("slots", [])
+    used = {int(m.group(1)) for sl in slots
+            if (m := INSTRUCTION_ID_RE.match(str(sl.get("instruction_id", ""))))}
+    have = {str(sl.get("instruction", "")).strip() for sl in slots}
+    added = n_dup = 0
+    new_ids: list = []
+    for sent in sentences:
+        if sent.strip() in have:
+            n_dup += 1
+            continue
+        have.add(sent.strip())
+        n = max(used, default=-1) + 1
+        used.add(n)
+        slots.append({"instruction_id": f"I{n:03d}", "instruction": sent,
+                      "target": int(target)})
+        new_ids.append(f"{scene_id}/I{n:03d}:")
+        added += 1
+    if not added:
+        return 0, n_dup, []
+
+    text = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+    tmp: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as tf:
+            tf.write(text)
+            tmp = Path(tf.name)
+        plan = load_plan(tmp)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return added, n_dup, [w for w in plan.warnings
+                          if str(w).startswith(tuple(new_ids))]
+
+
 #: reset 슬롯의 기본 문장. 사람이 읽는 이름일 뿐이고, 역할은 kind 가 정한다.
 RESET_INSTRUCTION = "reset"
 

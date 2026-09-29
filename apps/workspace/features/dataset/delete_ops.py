@@ -210,6 +210,13 @@ class DeleteOps:
         elif QMessageBox.question(self.win, title, body) != QMessageBox.StandardButton.Yes:
             return False
 
+        # 트림 뷰어의 에피소드 로더가 같은 파일을 읽기 전용으로 쥐고 있으면
+        # 이 프로세스 안에서 쓰기 열기가 "file is already open for read-only"
+        # 로 거부된다 (2026-09-29). 로드는 몇 초라 끝나기를 기다린다.
+        loader = getattr(self.win.trim, "loader", None)
+        if loader is not None and loader.isRunning():
+            loader.wait()
+
         for path, names in by_file.items():
             owned = self.win.session.active_file_path is not None and path == self.win.session.active_file_path
             is_scene = path.name.startswith("scene_")

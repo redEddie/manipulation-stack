@@ -92,7 +92,7 @@ rdlg._radios[1].setChecked(True)
 rdlg._accept()
 assert rdlg.picked is not None
 assert rdlg.picked.objects == rdlg._recs[1]["md"].objects
-nd = SceneComposer(None, "S001")
+nd = SceneComposer(None)
 nd._apply_recommendation(rdlg.picked)
 assert set(nd._checked_ids()) == set(rdlg.picked.objects)
 want_zones = {o: s["zone"] for o, s in

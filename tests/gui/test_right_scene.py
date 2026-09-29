@@ -55,7 +55,7 @@ from mstack.scene.scene_format import (  # noqa: E402
     SceneMetadata as _MD,
     SceneWriter as _W,
     iter_scene_files as _files,
-    next_scene_id as _next,
+    new_scene_id as _next,
     scene_filename as _fname,
 )
 from mstack.scene.props import active_prop_ids as _apid  # noqa: E402

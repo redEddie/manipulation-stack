@@ -7,7 +7,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QMessageBox
 
 from mstack.config.station import load_station
-from mstack.scene.collection_plan import ensure_scene
+from mstack.scene.collection_plan import add_task_slots, ensure_scene
 from mstack.scene.dataset_meta import plan_path as dataset_plan_path
 from apps.workspace.shared.tabs import show_center_tab
 from mstack.gui.i18n import tr
@@ -24,7 +24,7 @@ from mstack.scene.scene_format import (
     SceneWriter,
     count_by_slot,
     iter_scene_files,
-    next_scene_id,
+    new_scene_id,
     read_scene_metadata,
     scene_filename,
     scene_label,
@@ -46,11 +46,9 @@ class SceneOps:
         self.win.scene_combo.blockSignals(True)
         self.win.scene_combo.clear()
         root = Path(self.win.root_edit.text().strip() or ".")
-        try:
-            sid_next = next_scene_id(root)
-        except Exception:  # noqa: BLE001
-            sid_next = "S???"
-        self.win.scene_combo.addItem(tr("— 새 Scene ({sid}) —").format(sid=sid_next), None)
+        # 새 scene 의 ID 는 적지 않는다 -- 아직 없다. 여기서 뽑으면 새로고침
+        # 할 때마다 다른 난수가 뜨고, 그 ID 로 만들어지지도 않는다.
+        self.win.scene_combo.addItem(tr("— 새 Scene —"), None)
         try:
             # **목록에는 #번호만.** 여덟 글자 난수는 목록에서 읽히지 않고
             # 자리만 먹는다. 전체 ID 는 툴팁에 남는다 -- 파일을 찾을 때
@@ -131,20 +129,14 @@ class SceneOps:
             self.on_new_scene()
 
     def on_new_scene(self) -> None:
-        """Scene 탭을 열고 다음 scene 번호로 맞춘다 (2026-09-06: 대화상자 ->
-        탭). 파일은 우측 패널의 [✚ 새 Scene 만들기] 를 누를 때 생긴다 --
-        Connect 를 기다리지 않는다 (계약은 on_compose_done).
+        """Scene 탭을 연다 (2026-09-06: 대화상자 -> 탭). 파일과 scene ID 는
+        우측 패널의 [✚ 새 Scene 만들기] 를 누를 때 생긴다 -- Connect 를
+        기다리지 않는다 (계약은 on_compose_done).
 
         안내문은 비운다 -- "아직 저장 안 됨" 은 그 버튼 밑의 상태 줄이 늘
         말하고 있고(composer.save_state_text), 지난 결과가 새 구성 옆에
         남아 있으면 그게 이번 것인 줄 읽힌다."""
         root = Path(self.win.root_edit.text().strip() or ".")
-        try:
-            sid = next_scene_id(root)
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self.win, tr("경로 오류"),
-                                tr("저장 경로를 확인하세요: {e}").format(e=e))
-            return
         # 지시문은 데이터셋 폴더 안 instructions.json 하나뿐이다 (고정 파일명).
         # **파일이 아직 없어도 경로는 넘긴다** -- 없으면 만들면 되는 것이지
         # 등록을 막을 사유가 아니다 (2026-09-07 조작자 지적). 전에는
@@ -152,25 +144,21 @@ class SceneOps:
         # "Configure 에서 지시문 파일을 먼저 고르세요" 라는 회색 체크박스를
         # 만났다 -- 그런 자리는 9/6 에 없어졌는데 문구만 남아 있었다.
         self.win.scene_composer.set_context(
-            sid, root, dataset_plan_path(root),
+            root, dataset_plan_path(root),
             STATION.name, self.win.schema_version)
         self.win.scene_compose_hint.setText("")
         show_center_tab(self.win, "scene")
 
     def refresh_composer_context(self) -> None:
-        """구성기에 지금 데이터셋의 경로·다음 scene 번호를 물린다.
+        """구성기에 지금 데이터셋의 경로를 물린다.
 
         on_new_scene 이 하던 일 중 **맥락을 채우는 부분만** 떼어 낸 것이다.
         Scene 탭은 그 명령을 거치지 않고 탭 클릭으로도 열려서, 그때는 구성기가
         경로 없이 남아 있었다.
         """
         root = Path(self.win.root_edit.text().strip() or ".")
-        try:
-            sid = next_scene_id(root)
-        except Exception:  # noqa: BLE001 -- 경로가 아직 없을 수 있다
-            return
         self.win.scene_composer.set_context(
-            sid, root, dataset_plan_path(root),
+            root, dataset_plan_path(root),
             STATION.name, self.win.schema_version)
 
     def on_compose_done(self) -> None:
@@ -190,15 +178,12 @@ class SceneOps:
         if md is None:
             return
         root = Path(self.win.root_edit.text().strip() or ".")
-        # **번호는 만드는 순간 다시 센다.** 구성기가 들고 있던 번호는 맥락을
-        # 물린 시점의 것이라, 그 사이에 데이터셋이 바뀌었거나 맥락을 못 받은
-        # 채였으면 낡았다 -- 실제로 S000 인 채로 남아 이미 있는 파일과 부딪혔다
-        # (2026-09-07 실기). 화면 표시가 틀리는 것은 불편이지만, 그 번호로
-        # 파일을 만드는 것은 사고다.
-        try:
-            md.scene_id = next_scene_id(root)
-        except Exception:  # noqa: BLE001 -- 경로가 이상하면 아래에서 잡힌다
-            pass
+        # **scene ID 를 뽑는 곳은 여기 하나다.** 파일, 계획 항목, 추천 문장이
+        # 모두 이 값 하나를 쓴다. 구성기와 추천 창은 ID 를 모른다 (자리표시
+        # DRAFT_SCENE_ID 뿐이다) -- ID 가 난수가 된 뒤(2026-09-23) 여러 곳이
+        # 각자 뽑자, 추천 문장이 창을 열 때 뽑은 ID 로 등록되고 파일은 다른
+        # ID 로 만들어졌다 (2026-09-28 umi-test).
+        md.scene_id = new_scene_id(root)
         # **세션 메타를 만들기 전에 채운다.** 부하 모델·리셋 자세·판번호는
         # 스키마가 metadata attrs 로 요구하고(knu-1.2.0/1.2.1/1.2.2), 없으면
         # SceneWriter 가 도장을 내려 찍는다. 예전에는 여기서 아무것도 안
@@ -251,23 +236,50 @@ class SceneOps:
         self.win.log(f"[Scene] {md.scene_id} 생성 (물체 {len(md.objects)}개, "
                      f"에피소드 0개) — {scene_filename(md.scene_id)}"
                      + (f" · 지시문에 {md.scene_id} 추가" if added else ""))
+        # 추천에서 채택한 문장은 **방금 뽑은 이 ID** 로 등록한다.
+        n_reg = self._register_pending(root, md.scene_id)
         self.refresh_scene_combo()
         for i in range(self.win.scene_combo.count()):
             if self.win.scene_combo.itemData(i) == md.scene_id:
                 self.win.scene_combo.setCurrentIndex(i)
                 break
-        self.win.scene_compose_hint.setText(tr(
-            "{f} 를 만들고 지시문에 {s} 를 넣었습니다. 이제 이 scene 에서 무엇을 "
-            "시킬지 적으세요.").format(f=scene_filename(md.scene_id), s=md.scene_id))
-        # 다음 번호로 갈아 끼워 둔다 -- 연달아 여러 개를 짜는 것이 이 화면의
-        # 새 용도다.
-        self.win.scene_composer.set_context(
-            next_scene_id(root), root, dataset_plan_path(root),
-            STATION.name, self.win.schema_version)
+        if n_reg:
+            self.win.scene_compose_hint.setText(tr(
+                "{f} 를 만들고 추천 문장 {n}개를 {s} 에 등록했습니다.").format(
+                    f=scene_filename(md.scene_id), n=n_reg, s=md.scene_id))
+        else:
+            self.win.scene_compose_hint.setText(tr(
+                "{f} 를 만들고 지시문에 {s} 를 넣었습니다. 이제 이 scene 에서 "
+                "무엇을 시킬지 적으세요.").format(
+                    f=scene_filename(md.scene_id), s=md.scene_id))
         # 지시문을 적으러 보낸다. scene 을 만든 사람의 다음 질문이 늘
         # "여기서 무엇을 시키지?" 라서, 그 화면으로 데려다 주는 편이 낫다.
         self.win.scene_planning.refresh_plan_progress()
         show_center_tab(self.win, "instruction")
+
+    def _register_pending(self, root: Path, scene_id: str) -> int:
+        """구성기가 들고 있던 추천 문장을 ``scene_id`` 에 등록한다. 등록한 수."""
+        sents = self.win.scene_composer.take_pending_sentences()
+        if not sents:
+            return 0
+        try:
+            n, n_dup, warns = add_task_slots(
+                dataset_plan_path(root), scene_id, sents, target=10)
+        except Exception as e:  # noqa: BLE001
+            # 파일은 이미 만들어졌다 -- scene 은 남기고, 문장만 못 넣었다고 말한다.
+            self.win.log(f"[지시문] {scene_id} 추천 문장 등록 실패: "
+                         f"{type(e).__name__}: {e}")
+            QMessageBox.warning(self.win, tr("지시문 등록 실패"), tr(
+                "{s} 는 만들어졌지만 추천 문장을 등록하지 못했습니다:\n{e}")
+                .format(s=scene_id, e=e))
+            return 0
+        if warns:
+            # 통일 문법 경고(§4)는 등록을 막지 않지만 버리지도 않는다.
+            QMessageBox.warning(self.win, tr("지시문 경고"),
+                                "\n".join(str(x) for x in warns))
+        self.win.log(f"[지시문] {scene_id} 에 추천 문장 {n}개 등록"
+                     + (f" (중복 {n_dup}건 건너뜀)" if n_dup else ""))
+        return n
 
     def scene_config_from_ui(self):
         """Connect 시점의 scene 설정 검증. (meta, scene_id, resume, error) --
@@ -297,6 +309,11 @@ class SceneOps:
         # 갈라짐), 그 길을 아예 없앴다. 계획 없이 찍은 파일은 나중에 무엇을
         # 얼마나 모았는지 셀 수가 없다.
         psid = self.configure_scene_id()
+        if psid is None:
+            return None, None, False, tr(
+                "찍을 scene 을 드롭다운에서 고르세요.\n\n"
+                "없으면 Scene 탭에서 배치를 짜고 오른쪽의 [✚ 새 Scene 만들기] 를 "
+                "누르면 목록에 생깁니다.")
         # "계획에 없다"와 "지시문을 아직 안 적었다"는 다른 사건이다 -- 앞은
         # 이제 거의 안 나고(만들 때 함께 적힌다), 뒤는 새 scene 을 만든 직후
         # 늘 나는 정상 상태다. 같은 문구로 말하면 무엇을 하라는 것인지 모른다.
@@ -326,18 +343,14 @@ class SceneOps:
         return None, sid, True, None
 
     def configure_scene_id(self):
-        """Configure 가 가리키는 scene ID -- 고른 것이 없으면 다음 발번 예정 ID.
+        """Configure 가 가리키는 scene ID. 고른 것이 없으면 None.
 
         "대기 구성" 은 없어졌다 (2026-09-06): 새 scene 은 Scene 탭에서 만드는
-        순간 파일이 되고 목록에 뜬다.
+        순간 파일이 되고 목록에 뜬다. 그래서 "— 새 Scene —" 에는 ID 가 없다
+        -- 전에는 여기서 난수를 뽑아 돌려주어, 연결 거부 문구와 준비 경고가
+        만들어지지도 않을 ID 를 "지시문에 없다" 고 말했다.
         """
-        sid = self.win.scene_combo.currentData()
-        if sid is not None:
-            return sid
-        try:
-            return next_scene_id(Path(self.win.root_edit.text().strip() or "."))
-        except Exception:  # noqa: BLE001
-            return None
+        return self.win.scene_combo.currentData()
 
     def selected_scene_path(self):
         """Configure 의 Scene 콤보가 가리키는 기존 scene 파일 (새 scene 이면 None)."""

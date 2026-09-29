@@ -447,11 +447,14 @@ assert not hasattr(win, "_pending_scene_meta"), \
     "'대기 구성' 이 아직 있다 -- 만들면 곧바로 파일이어야 한다"
 win.scene_ops.on_new_scene()
 assert center_tab_key(win) == "scene", center_tab_key(win)
-# 제목에는 **새 불투명 ID**가 뜬다 -- "다음 번호"가 아니라 난수다 (S7QK3M2A 식)
+# 구성 중에는 scene ID 가 **없다** -- 파일을 만드는 순간 한 번 뽑힌다. 전에는
+# 제목·콤보·추천 창이 각자 난수를 뽑았고, 추천 문장이 그중 하나로 등록된 채
+# 파일은 다른 ID 로 만들어졌다 (2026-09-28 umi-test).
 _title_a = win.scene_composer.title_label.text()
-_sid_a = next((t for t in _title_a.split() if SCENE_ID_RE.match(t)), None)
-assert _sid_a, _title_a
-sid_a = _sid_a
+assert not any(SCENE_ID_RE.match(t) for t in _title_a.split()), _title_a
+assert win.scene_combo.itemText(0) == "— 새 Scene —", win.scene_combo.itemText(0)
+# "새 Scene" 을 가리키면 ID 는 None 이다 -- 만들어지지도 않을 난수가 아니라
+assert win.scene_ops.configure_scene_id() == win.scene_combo.currentData()
 
 
 def _compose(objs, zones):
@@ -483,13 +486,14 @@ assert not win.scene_create_btn.isEnabled(), "빈 구성인데 만들기가 눌�
 assert win.scene_create_btn.toolTip().strip(), "왜 못 누르는지 말하지 않는다"
 # 라벨에 scene ID 가 없다 -- ID 는 고르는 것이 아니라 만드는 순간 자동으로
 # 뽑힌다 (2026-09-07 조작자 지적; 번호에서 불투명 난수로 바뀜).
-assert sid_a not in win.scene_create_btn.text(), win.scene_create_btn.text()
+assert not any(SCENE_ID_RE.match(t) for t in win.scene_create_btn.text().split())
 # 저장 여부는 늘 한 줄로 말한다 (이 탭에 [저장] 은 따로 없다)
 assert "아직" in win.scene_save_state.text(), win.scene_save_state.text()
 assert not win.scene_clear_btn.isEnabled(), "체크가 없는데 전체 해제가 눌린다"
 
 RED = "OBJ-CUP-RED-01"
 n_files0 = len(list(root.glob("scene_*.hdf5")))
+plan_before_14 = json.loads((root / "instructions.json").read_text(encoding="utf-8"))
 _compose([CUP, BOWL], {CUP: [0, 1], BOWL: [2, 0]})
 # 만드는 순간 ID 를 다시 뽑는다 -- 콤보가 가리키는 것이 곧 방금 만든 scene 이고
 # 파일명은 그 ID 에서 기계적으로 나온다
@@ -497,15 +501,33 @@ made1 = win.scene_combo.currentData()
 assert SCENE_ID_RE.match(made1), made1
 assert (root / scene_filename(made1)).exists(), "만들었는데 파일이 없다"
 assert len(list_scene_episodes(root / scene_filename(made1))) == 0, "빈 scene 이어야 한다"
-# 연달아 또 하나 -- 미리 여러 개를 짜 두는 것이 이 화면의 용도다. 제목의
-# 새 ID 는 방금 만든 것과 다른 다음 난수다
-_title_b = win.scene_composer.title_label.text()
-sid_b = next((t for t in _title_b.split() if SCENE_ID_RE.match(t)), None)
-assert sid_b, _title_b
-assert sid_b != made1, (sid_b, made1)
-_compose([CUP, BOWL, RED], {CUP: [0, 2], BOWL: [2, 1], RED: [1, 1]})
+# 연달아 또 하나 -- 미리 여러 개를 짜 두는 것이 이 화면의 용도다. 이번에는
+# 추천에서 문장을 채택해 둔 채로 만든다: 문장은 **만들어진 파일의 ID** 로
+# 등록되어야 한다 (추천 창이 채택 때 남기는 것과 같은 상태를 넣는다).
+from mstack.scene.instruction_grammar import enumerate_instructions  # noqa: E402
+from mstack.scene.props import props_by_id as _pbi  # noqa: E402
+from mstack.scene.scene_format import SceneMetadata as _SM  # noqa: E402
+
+_zones2 = {CUP: [0, 2], BOWL: [2, 1], RED: [1, 1]}
+_rec_sents = enumerate_instructions(_SM(
+    scene_id="S000", objects=[CUP, BOWL, RED],
+    layout={"grid": [3, 3], "placements": {o: {"zone": z}
+                                            for o, z in _zones2.items()}}),
+    _pbi())[:3]
+assert _rec_sents, "문법이 문장을 하나도 안 만든다"
+win.scene_composer._pending_sentences = list(_rec_sents)
+win.scene_composer._pending_objects = frozenset([CUP, BOWL, RED])
+_compose([CUP, BOWL, RED], _zones2)
 made2 = win.scene_combo.currentData()
 assert made2 != made1, (made2, made1)
+_plan2 = json.loads((root / "instructions.json").read_text(encoding="utf-8"))
+_by = {sc["scene_id"]: sc for sc in _plan2["scenes"]}
+assert [sl["instruction"] for sl in _by[made2]["slots"]] == _rec_sents, \
+    "추천 문장이 만든 scene 에 안 들어갔다"
+assert set(_by) <= {SID0, made1, made2} | {
+    sc["scene_id"] for sc in plan_before_14["scenes"]}, \
+    f"파일 없는 scene 이 계획에 생겼다: {sorted(_by)}"
+assert win.scene_composer.pending_sentences() == [], "등록한 문장이 남아 있다"
 made = sorted(p.name for p in root.glob("scene_*.hdf5"))
 assert made == sorted([scene_filename(SID0), scene_filename(made1),
                        scene_filename(made2)]), made

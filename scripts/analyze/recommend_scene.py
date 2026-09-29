@@ -36,10 +36,10 @@ from mstack.scene.skill_stats import (  # noqa: E402
     rank_instructions,
 )
 from mstack.scene.scene_format import (  # noqa: E402
+    DRAFT_SCENE_ID,
     SceneMetadata,
     describe_scene,
     iter_scene_files,
-    next_scene_id,
     read_scene_metadata,
 )
 
@@ -375,9 +375,10 @@ def main() -> None:
             existing.append(read_scene_metadata(p))
         except Exception as e:  # noqa: BLE001 -- 잠긴 파일(수집 중)은 건너뛴다
             print(f"[경고] {p.name} 읽기 실패 ({type(e).__name__}) -- 제외")
-    sid = next_scene_id(args.root)
+    # 추천은 아직 scene 이 아니다 -- ID 는 GUI 가 파일을 만들 때 붙는다.
+    sid = DRAFT_SCENE_ID
     counts = collected_skill_counts(args.root)
-    print(f"기존 scene {len(existing)}개 기준, 다음 ID {sid}")
+    print(f"기존 scene {len(existing)}개 기준")
     print(f"스킬별 누적 수집 (적은 순): {format_skill_counts(counts)}\n")
     recs = recommend_detailed(existing, props, k=args.k, seed=args.seed,
                               scene_id=sid, min_objects=args.min_objects)

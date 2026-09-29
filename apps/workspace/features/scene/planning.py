@@ -433,7 +433,7 @@ class ScenePlanningOps:
                 "{r} 에 scene 파일이 없습니다 — 첫 scene 은 '새 Scene 구성...' 으로 "
                 "사람이 정해야 합니다.").format(r=root)
         # **가장 최근 = 파일 수정 시각**이다. 예전에는 파일명 번호가 곧
-        # 순서라 max(번호) 였는데, scene ID 가 불투명해지면서(S7QK3M2A)
+        # 순서라 max(번호) 였는데, scene ID 가 불투명해지면서(S7QK3M2AB)
         # 이름에 순서가 없어졌다 -- 그대로 두면 사전순 끝이 "최근"으로
         # 뽑힌다. mtime 을 쓰는 이유는 metadata 의 created 와 달리 파일을
         # 열지 않아도 되기 때문이다: 수집 중인 파일은 잠겨 있을 수 있고,

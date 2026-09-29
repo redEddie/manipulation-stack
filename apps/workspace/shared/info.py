@@ -315,8 +315,13 @@ def scene_fields(md, counts: dict | None = None) -> list:
         p = inv.get(oid)
         return f"{oid}({p.category}/{p.color})" if p else oid
 
+    from mstack.scene.scene_format import DRAFT_SCENE_ID
+
     fields = [
-        (tr("Scene"), md.scene_id),
+        # A scene still being composed has no ID yet -- it is drawn when the
+        # file is created. Showing the stand-in would read as a real one.
+        (tr("Scene"), tr("(새 Scene — ID 는 만들 때 정해집니다)")
+         if md.scene_id == DRAFT_SCENE_ID else md.scene_id),
         (tr("스테이션"), md.station or tr("(미기록)")),
         (tr("스키마"), md.dataset_version),
         (tr("만든 때"), md.created or tr("(미기록)")),

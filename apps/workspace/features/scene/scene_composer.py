@@ -38,10 +38,10 @@ from mstack.data.dataset_schema import SCHEMA_VERSION
 from mstack.gui.i18n import tr
 from mstack.scene.props import load_props, props_by_id
 from mstack.scene.scene_format import (
+    DRAFT_SCENE_ID,
     SceneMetadata,
     iter_scene_files,
     read_scene_metadata,
-    scene_filename,
 )
 from mstack.scene.scene_rules import check, object_count_range
 
@@ -52,22 +52,30 @@ class SceneComposer(QWidget):
     동작 버튼은 우측 패널이 갖는다. 이 위젯은 구성이 바뀔 때마다
     ``changed`` 를 쏘고, 패널은 그때 버튼의 상태를 다시 묻는다."""
 
-    #: 체크·배치·설명·scene 번호 중 하나라도 바뀌었다.
+    #: 체크·배치·설명·추천 문장 중 하나라도 바뀌었다.
     changed = pyqtSignal()
 
-    def __init__(self, parent=None, scene_id: str = "S000",
+    def __init__(self, parent=None,
                  data_root: "Path | None" = None,
                  plan_path: "Path | None" = None,
                  station_name: str = "",
                  schema_version: str = SCHEMA_VERSION) -> None:
         super().__init__(parent)
-        self._scene_id = scene_id
+        # **scene ID 를 들고 있지 않다.** ID 는 [✚ 새 Scene 만들기] 가 파일을
+        # 만드는 순간 한 번 뽑힌다 (scene.ops.on_compose_done). 구성 중에
+        # 뽑아 두면 창을 열 때마다·새로고침할 때마다 다른 난수가 생기고, 그중
+        # 하나로 등록한 추천 문장이 파일 없는 scene 에 붙었다 (2026-09-28).
         self._data_root = data_root
         self._plan_path = plan_path
         self._station_name = station_name
         self._schema_version = schema_version
         self._placements: dict = {}
         self.metadata = None  # accept 시 SceneMetadata
+        # 추천에서 채택한 문장 -- 만들 때 그 scene 의 ID 로 등록된다. 어떤
+        # 물체 조합에서 나온 문장인지 함께 둔다: 조합이 바뀌면 문장이 없는
+        # 물체를 가리킬 수 있어 등록하지 않는다 (배치는 문장과 무관하다).
+        self._pending_sentences: list[str] = []
+        self._pending_objects: frozenset = frozenset()
 
         layout = QVBoxLayout(self)
         self.title_label = QLabel("")
@@ -127,18 +135,19 @@ class SceneComposer(QWidget):
 
         self._refresh()
 
-    def set_context(self, scene_id: str, data_root: "Path | None",
+    def set_context(self, data_root: "Path | None",
                     plan_path: "Path | None", station_name: str,
                     schema_version: str) -> None:
-        """탭은 한 번 만들어 계속 쓴다 -- 다음 scene 번호와 데이터셋 경로는
-        열 때마다 달라지므로 여기서 갈아 끼운다."""
-        self._scene_id = scene_id
+        """탭은 한 번 만들어 계속 쓴다 -- 데이터셋 경로는 열 때마다 달라질
+        수 있으므로 여기서 갈아 끼운다."""
+        if data_root != self._data_root:
+            # 다른 데이터셋의 추천 문장을 이쪽 scene 에 넣지 않는다.
+            self._drop_pending()
         self._data_root = data_root
         self._plan_path = plan_path
         self._station_name = station_name
         self._schema_version = schema_version
-        self.title_label.setText(
-            tr("새 Scene {sid} 구성").format(sid=scene_id))
+        self.title_label.setText(tr("새 Scene 구성"))
         self._refresh()
 
     def build_valid(self):
@@ -165,7 +174,24 @@ class SceneComposer(QWidget):
             self.prop_list.item(i).setCheckState(Qt.CheckState.Unchecked)
         self.prop_list.blockSignals(False)
         self._placements = {}
+        self._drop_pending()
         self._refresh()
+
+    def _drop_pending(self) -> None:
+        self._pending_sentences = []
+        self._pending_objects = frozenset()
+
+    def pending_sentences(self) -> list:
+        """만들 때 등록될 추천 문장. 조합이 추천 때와 다르면 빈 목록."""
+        if frozenset(self._checked_ids()) != self._pending_objects:
+            return []
+        return list(self._pending_sentences)
+
+    def take_pending_sentences(self) -> list:
+        """만드는 쪽이 부른다 -- 등록할 문장을 넘기고 비운다 (한 번만 쓴다)."""
+        out = self.pending_sentences()
+        self._drop_pending()
+        return out
 
     def checked_count(self) -> int:
         """체크한 물체 수 -- 우측 패널의 [전체 해제] 가 이걸로 산다."""
@@ -189,13 +215,15 @@ class SceneComposer(QWidget):
 
     def _open_recommend(self, objects: "list | None") -> None:
         existing, skipped = self._existing_scenes()
-        dlg = RecommendDialog(self, existing, props_by_id(), self._scene_id,
+        dlg = RecommendDialog(self, existing, props_by_id(), DRAFT_SCENE_ID,
                               plan_path=self._plan_path,
                               data_root=self._data_root, objects=objects)
         if skipped:
             dlg.setWindowTitle(dlg.windowTitle()
                                + tr(" (읽지 못한 파일 {n}개 제외)").format(n=skipped))
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.picked is not None:
+            self._pending_sentences = list(dlg.picked_sentences)
+            self._pending_objects = frozenset(dlg.picked.objects)
             self._apply_recommendation(dlg.picked)
 
     def open_recommend_scene(self) -> None:
@@ -230,7 +258,7 @@ class SceneComposer(QWidget):
 
     def _build(self) -> SceneMetadata:
         return SceneMetadata(
-            scene_id=self._scene_id,
+            scene_id=DRAFT_SCENE_ID,       # 진짜 ID 는 만들 때 붙는다
             objects=self._checked_ids(),
             layout={"grid": [3, 3],
                     "placements": {o: {"zone": z}
@@ -281,11 +309,6 @@ class SceneComposer(QWidget):
     # ``changed`` 를 받을 때마다 아래 둘을 물어 상태를 갈아 끼운다. 규칙은
     # 하나다: 못 누르면 왜 못 누르는지를 툴팁이 말한다 (숨기지 않는다).
 
-    @property
-    def scene_id(self) -> str:
-        """지금 짜고 있는 scene 번호 -- 버튼 라벨에 들어간다."""
-        return self._scene_id
-
     def create_button_state(self) -> tuple:
         """[만들기] 의 (누를 수 있나, 툴팁).
 
@@ -304,11 +327,10 @@ class SceneComposer(QWidget):
         except ValueError as e:
             return False, str(e)
         return True, tr(
-            "지금 짠 배치를 {f} 로 저장합니다 (에피소드 0개).\n"
-            "번호는 자동으로 붙습니다 -- 고를 것이 아닙니다.\n"
+            "지금 짠 배치를 새 scene_<ID>.hdf5 로 저장합니다 (에피소드 0개).\n"
+            "ID 는 누르는 순간 자동으로 정해집니다 -- 고를 것이 아닙니다.\n"
             "여러 개를 미리 만들어 두고 나중에 골라 찍을 수 있습니다.\n"
-            "잘못 만들었으면 Dataset 의 [파일 삭제] 로 지웁니다."
-        ).format(f=scene_filename(self._scene_id))
+            "잘못 만들었으면 Dataset 의 [파일 삭제] 로 지웁니다.")
 
     def save_state_text(self) -> str:
         """"지금 짠 것이 저장됐나" 에 대한 한 줄.
@@ -323,8 +345,15 @@ class SceneComposer(QWidget):
         if not ok:
             return tr("아직 저장되지 않았습니다 — 규칙을 만족해야 만들 수 "
                       "있습니다 (아래 규칙 경고를 보세요).")
-        return tr("아직 저장되지 않았습니다 — 누르면 {f} 가 됩니다.").format(
-            f=scene_filename(self._scene_id))
+        text = tr("아직 저장되지 않았습니다 — 누르면 새 scene_<ID>.hdf5 가 "
+                  "됩니다.")
+        n = len(self.pending_sentences())
+        if n:
+            text += tr(" 추천 문장 {n}개가 그 scene 에 함께 등록됩니다.").format(n=n)
+        elif self._pending_sentences:
+            text += tr(" 물체 구성이 추천 때와 달라져 추천 문장 {n}개는 등록하지 "
+                       "않습니다.").format(n=len(self._pending_sentences))
+        return text
 
     def layout_button_state(self) -> tuple:
         """[Recommend layout...] 의 (누를 수 있나, 툴팁)."""

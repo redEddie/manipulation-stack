@@ -131,7 +131,7 @@ from mstack.config.quality import (  # noqa: F401  (여기서 재수출한다)
 
 # ------------------------------------------------------------------- ID 규칙
 #
-# scene ID 는 **불투명**하다 -- ``S7QK3M2A`` 처럼 순서도 뜻도 없는 값이다.
+# scene ID 는 **불투명**하다 -- ``S7QK3M2AB`` 처럼 순서도 뜻도 없는 값이다.
 # 예전에는 ``S000`` 부터 세는 번호였고, 번호에는 두 가지가 딸려 온다:
 #
 # * 중간을 지우면 "다시 채워야 할 것 같은" 구멍이 남는다. 2026-09-17 에
@@ -167,6 +167,13 @@ INSTRUCTION_ID_RE = re.compile(r"^I(\d{3,})$")
 SCENE_FILE_RE = re.compile(
     rf"^scene_(?:[{SCENE_ID_ALPHABET}]{{{SCENE_ID_LEN}}}|\d{{3,}})\.hdf5$")
 EPISODE_GROUP_RE = re.compile(r"^episode_(\d{3,})$")
+#: Stand-in ID for a scene that is still being composed. A scene gets its real
+#: ID once, when its file is created (``new_scene_id`` in on_compose_done);
+#: before that the composer and the recommender still need a well-formed
+#: SceneMetadata to validate and preview. This value is never written to a
+#: file or a plan, ``new_scene_id`` never returns it, and it is not all digits
+#: so it cannot be read as a legacy number (S000 is a real scene in old data).
+DRAFT_SCENE_ID = "S" + SCENE_ID_ALPHABET[-1] * SCENE_ID_LEN
 
 
 def scene_filename(scene_id: str) -> str:
@@ -174,7 +181,7 @@ def scene_filename(scene_id: str) -> str:
     if not m:
         raise ValueError(
             f"잘못된 scene ID: {scene_id!r} "
-            f"(S + {SCENE_ID_ALPHABET} 에서 {SCENE_ID_LEN}글자, 예: 'S7QK3M2A')")
+            f"(S + {SCENE_ID_ALPHABET} 에서 {SCENE_ID_LEN}글자, 예: 'S7QK3M2AB')")
     if SCENE_ID_LEGACY_RE.match(scene_id):
         # 번호 시절 파일명은 0 을 채운 3자리였다 -- S24 와 S024 가 같은
         # 파일을 가리켰으므로 그 규칙을 유지한다.
@@ -209,7 +216,7 @@ def new_scene_id(root: Path | None = None) -> str:
     while True:
         sid = "S" + "".join(secrets.choice(SCENE_ID_ALPHABET)
                             for _ in range(SCENE_ID_LEN))
-        if scene_filename(sid) not in taken:
+        if sid != DRAFT_SCENE_ID and scene_filename(sid) not in taken:
             return sid
 
 
@@ -221,7 +228,7 @@ _ORDINAL_CACHE: dict = {}
 def scene_ordinals(root: Path) -> dict:
     """``{scene_id: 1,2,3...}`` -- **만든 순서**. 화면에서만 쓴다.
 
-    scene ID 가 불투명해지면서(``S7QK3M2A``) 사람이 "몇 번째 scene" 을 말할
+    scene ID 가 불투명해지면서(``S7QK3M2AB``) 사람이 "몇 번째 scene" 을 말할
     방법이 없어졌다. 그 자리를 이 번호가 메운다.
 
     **어디에도 저장하지 않는다.** 저장하는 순간 두 번째 식별자가 되고, 앞의
@@ -266,12 +273,6 @@ def scene_label(scene_id: str, ordinals: "dict | None" = None) -> str:
     """
     n = (ordinals or {}).get(scene_id)
     return f"#{n}" if n else str(scene_id)
-
-
-def next_scene_id(root: Path) -> str:
-    """옛 이름. ``new_scene_id`` 를 부른다 -- "다음" 이라는 말이 순서를
-    풍기지만 더 이상 순서가 없다. 부르는 곳을 옮긴 뒤 지운다."""
-    return new_scene_id(root)
 
 
 def episode_uid(scene_id: str, instruction_id: str, episode_idx: int) -> str:
@@ -527,7 +528,7 @@ class SceneWriter:
 
     새 scene::
 
-        meta = SceneMetadata(scene_id=next_scene_id(root), objects=[...], layout={...})
+        meta = SceneMetadata(scene_id=new_scene_id(root), objects=[...], layout={...})
         w = SceneWriter(root, metadata=meta)
 
     기존 scene 이어찍기::

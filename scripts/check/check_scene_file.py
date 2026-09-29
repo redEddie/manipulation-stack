@@ -56,7 +56,7 @@ from mstack.scene.scene_format import (  # noqa: E402
     describe_scene,
     empty_zones,
     list_scene_episodes,
-    next_scene_id,
+    new_scene_id,
     read_reference_image,
     read_scene_metadata,
     scene_filename,
@@ -432,7 +432,7 @@ def selftest(keep: Path | None) -> None:
     assert read_reference_image(path) is not None
     # 새 ID 는 난수다 -- "다음 번호가 뭐냐"가 아니라 "새 ID 가 규격에 맞고
     # 기존 파일과 겹치지 않는가"가 단정할 성질이다.
-    nid = next_scene_id(root)
+    nid = new_scene_id(root)
     assert SCENE_ID_OPAQUE_RE.match(nid) and nid != sid \
         and not (root / scene_filename(nid)).exists(), nid
     md_back = read_scene_metadata(path)
