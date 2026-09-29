@@ -86,6 +86,8 @@ from mstack.data.dataset_schema import (
     META_PAYLOAD_MASS,
     META_GRIPPER,
     META_GRIPPER_MAX_WIDTH,
+    META_GRIPPER_MAX_WIDTH_SOURCE,
+    META_GRIPPER_PARTS,
     META_PROVENANCE_SOURCE,
     META_PYLIBFRANKA_VERSION,
     META_RESET_POSE,
@@ -327,6 +329,11 @@ class SceneMetadata:
     #: 없으면 그 값을 미터로 되돌릴 수 없다 (dataset_schema.META_GRIPPER).
     gripper: Optional[str] = None
     gripper_max_width: Optional[float] = None
+    #: "measured" (homed at Connect) or "station" (table fallback).
+    gripper_max_width_source: Optional[str] = None
+    #: {"mount": "white", "finger": "black", "pad": "black"} -- what the
+    #: wrist camera sees (dataset_schema.META_GRIPPER_PARTS).
+    gripper_parts: Optional[dict] = None
 
     def validate(self, known_prop_ids: Optional[set[str]] = None) -> None:
         """구조가 틀린 metadata 로 파일을 만드는 것을 생성 시점에 막는다.
@@ -417,6 +424,9 @@ def _read_metadata(meta: h5py.Group) -> SceneMetadata:
         gripper=_opt_str(meta, META_GRIPPER),
         gripper_max_width=(float(meta.attrs[META_GRIPPER_MAX_WIDTH])
                            if META_GRIPPER_MAX_WIDTH in meta.attrs else None),
+        gripper_max_width_source=_opt_str(meta, META_GRIPPER_MAX_WIDTH_SOURCE),
+        gripper_parts=(json.loads(meta.attrs[META_GRIPPER_PARTS])
+                       if META_GRIPPER_PARTS in meta.attrs else None),
     )
 
 
@@ -556,6 +566,7 @@ class SceneWriter:
         session_reset: Optional[dict] = None,
         session_provenance: Optional[dict] = None,
         metadata_pending: bool = False,
+        session_gripper: Optional[dict] = None,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -565,6 +576,9 @@ class SceneWriter:
         self._buffer = LiberoEpisodeBuffer(self.schema, self.crop_params)
         #: 이어찍기에서 버전 도장을 어떻게 했는지 -- 상류가 로그로 보여준다.
         self.version_note = ""
+        #: This session's gripper: {"name", "max_width", "parts", "source"},
+        #: from the hand homed at Connect. None when built without a robot.
+        self._session_gripper = dict(session_gripper) if session_gripper else None
 
         if resume:
             if metadata is not None:
@@ -587,6 +601,7 @@ class SceneWriter:
                 )
             self._resume_version(session_version, session_payload,
                                  session_reset, session_provenance)
+            self._resume_gripper()
         else:
             if metadata is None:
                 raise ValueError("새 scene 에는 metadata 가 필요하다")
@@ -678,6 +693,12 @@ class SceneWriter:
             if metadata.gripper_max_width:
                 self._meta.attrs[META_GRIPPER_MAX_WIDTH] = float(
                     metadata.gripper_max_width)
+            if metadata.gripper_max_width_source:
+                self._meta.attrs[META_GRIPPER_MAX_WIDTH_SOURCE] = str(
+                    metadata.gripper_max_width_source)
+            if metadata.gripper_parts:
+                self._meta.attrs[META_GRIPPER_PARTS] = json.dumps(
+                    dict(sorted(metadata.gripper_parts.items())))
             self._meta.attrs["next_episode_idx"] = 0
 
         if "next_episode_idx" not in self._meta.attrs:
@@ -814,6 +835,57 @@ class SceneWriter:
             "그대로 녹화하면 파일이 갖지 않은 필드를 가졌다고 주장하게 되어 "
             "시작하지 않습니다.")
 
+    #: How far the measured stroke may differ from the one already in a file
+    #: before episodes would mix two scales. A finger swap moved it 5.45 mm
+    #: (80 -> 74.55); re-homing the same fingers moves it far less.
+    GRIPPER_WIDTH_TOL = 0.002
+
+    def _resume_gripper(self) -> None:
+        """Reconcile the file's gripper with the one homed this session.
+
+        * No episodes yet (e.g. a scene made in the composer, which only knew
+          the station fallback): write this session's measured values.
+        * Episodes already recorded: gripper, parts and stroke must match.
+          Every episode's normalised gripper column is read against the one
+          ``gripper_max_width`` in the file, and the parts are what the wrist
+          camera saw -- a different hand means a different file.
+        """
+        g = self._session_gripper
+        if not g or not g.get("max_width"):
+            return
+        attrs = self._meta.attrs
+        parts = dict(g.get("parts") or {})
+        source = str(g.get("source") or "measured")
+        if not self._episode_names():
+            attrs[META_GRIPPER] = str(g["name"])
+            attrs[META_GRIPPER_MAX_WIDTH] = float(g["max_width"])
+            attrs[META_GRIPPER_MAX_WIDTH_SOURCE] = source
+            if parts:
+                attrs[META_GRIPPER_PARTS] = json.dumps(dict(sorted(parts.items())))
+            elif META_GRIPPER_PARTS in attrs:
+                del attrs[META_GRIPPER_PARTS]
+            self.metadata.gripper = str(g["name"])
+            self.metadata.gripper_max_width = float(g["max_width"])
+            self.metadata.gripper_max_width_source = source
+            self.metadata.gripper_parts = parts or None
+            self._file.flush()
+            return
+        problems = []
+        if self.metadata.gripper and self.metadata.gripper != g["name"]:
+            problems.append(f"그리퍼 {self.metadata.gripper} -> {g['name']}")
+        if (self.metadata.gripper_parts or {}) != parts:
+            problems.append(f"부품 {self.metadata.gripper_parts or {}} -> {parts}")
+        fw = self.metadata.gripper_max_width
+        if fw and abs(float(fw) - float(g["max_width"])) > self.GRIPPER_WIDTH_TOL:
+            problems.append(f"최대 벌림 {float(fw) * 1000:.2f} mm -> "
+                            f"{float(g['max_width']) * 1000:.2f} mm")
+        if problems:
+            raise ValueError(
+                "이 scene 의 에피소드는 다른 그리퍼로 찍혔습니다 ("
+                + "; ".join(problems) + "). 그리퍼 열은 파일에 적힌 최대 벌림으로 "
+                "정규화되므로 한 파일에 섞을 수 없습니다. 스테이션(그리퍼 설정)을 "
+                "확인하거나 새 scene 으로 시작하세요.")
+
     def _episode_names(self) -> list:
         """이 파일의 에피소드 그룹 이름들."""
         return [n for n in self._file if EPISODE_GROUP_RE.match(n)]
@@ -845,14 +917,20 @@ class SceneWriter:
                 [float(x) for x in reset["qpos"]])
         # 그리퍼는 station 설정에서 언제나 풀린다 -- 로봇도 세션 값도 필요
         # 없다. 그래서 이어찍기에서 2.0.0 으로 올리는 것이 막히지 않는다.
-        try:
-            from mstack.config.station import load_station
+        # 이번 세션이 homing 으로 잰 값이 있으면 그것이 우선이다.
+        g = self._session_gripper
+        if g and g.get("name") and g.get("max_width"):
+            known[META_GRIPPER] = str(g["name"])
+            known[META_GRIPPER_MAX_WIDTH] = float(g["max_width"])
+        else:
+            try:
+                from mstack.config.station import load_station
 
-            r = load_station().robot
-            known[META_GRIPPER] = str(r.gripper)
-            known[META_GRIPPER_MAX_WIDTH] = float(r.gripper_max_width)
-        except Exception:  # noqa: BLE001 -- 못 읽으면 그 버전으로 못 올라간다
-            pass
+                r = load_station().robot
+                known[META_GRIPPER] = str(r.gripper)
+                known[META_GRIPPER_MAX_WIDTH] = float(r.gripper_max_width)
+            except Exception:  # noqa: BLE001 -- 못 읽으면 그 버전으로 못 올라간다
+                pass
         if provenance:
             # 이 세션이 그 자리에서 읽은 값이므로 ``live`` 다 -- Doctor 가
             # 나중에 채울 때 쓰는 ``backfilled <날짜>`` 와 구분된다.

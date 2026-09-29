@@ -72,7 +72,13 @@ class CameraSpec:
     fps: int = 30
 
 
-#: 알려진 그리퍼 -> (최대 벌림 m, 사람이 읽는 이름).
+#: 알려진 그리퍼 -> (기본 최대 벌림 m, 사람이 읽는 이름).
+#:
+#: The width here is only a **fallback**. At every recording Connect the hand
+#: is homed and its measured stroke is what gets used and written to the file
+#: (FrankaFR3Robot.init_gripper) -- UMI fingers measured 74.55 mm, not 80.
+#: This value is used when there is no robot yet (a scene created in the
+#: composer) and is replaced by the measured one at the first Connect.
 #:
 #: **기록된 그리퍼 열은 0~1 정규화값이다** (실측: obs/gripper_states 가
 #: 0.0026~0.9624). 그 값을 미터로 되돌리려면 이 표가 필요하고, 그래서
@@ -80,13 +86,17 @@ class CameraSpec:
 #: 다른 폭을 뜻하게 된다. 부하 모델·리셋 자세와 같은 부류의 값이다.
 GRIPPERS = {
     "franka_hand": (0.08, "Franka Hand"),
-    # Franka Hand 에 UMI식 핑거(TPU)만 얹은 조합. 구동은 FCI 그대로라
-    # 폭/명령 경로가 바뀌지 않고, 달라지는 것은 손목 시야의 외형뿐 --
-    # 그래서 기록용 항목이다. 색이 바뀌면 키를 바꿔 찍는다 (데이터가
-    # 색별로 구분돼야 wrist 관측의 도메인 시프트를 잡을 수 있다).
-    "franka_hand_umi_yellow": (0.08, "Franka Hand + UMI finger (yellow)"),
-    "franka_hand_umi_black": (0.08, "Franka Hand + UMI finger (black)"),
+    # Franka Hand with UMI-style fingers. Still driven over FCI. What the
+    # parts look like is not in the key -- it is ``gripper_parts`` (below),
+    # because one colour per key could not say "white mount, black finger,
+    # black pad", and the wrist camera sees all three.
+    "franka_hand_umi": (0.08, "Franka Hand + UMI finger"),
 }
+
+#: The parts ``gripper_parts`` may name. Each value is a free colour/material
+#: word, lower case ("white", "black"). Unknown part names are dropped with a
+#: warning rather than failing, like an unknown gripper key.
+GRIPPER_PART_NAMES = ("mount", "finger", "pad")
 
 
 @dataclass(frozen=True)
@@ -96,6 +106,10 @@ class RobotSpec:
     reset_pose: str = "libero"
     #: 달려 있는 그리퍼. GRIPPERS 의 키여야 한다.
     gripper: str = "franka_hand"
+    #: Visible parts of the gripper -> colour, e.g. {"mount": "white",
+    #: "finger": "black", "pad": "black"}. Recorded with every file so the
+    #: wrist view's appearance can be told apart. Empty for the stock hand.
+    gripper_parts: tuple = ()
 
     @property
     def gripper_max_width(self) -> float:
@@ -105,6 +119,30 @@ class RobotSpec:
     @property
     def gripper_label(self) -> str:
         return GRIPPERS.get(self.gripper, (0.0, self.gripper))[1]
+
+    @property
+    def gripper_parts_dict(self) -> dict:
+        return dict(self.gripper_parts)
+
+
+def _gripper_parts_from(robot: dict, fallback: tuple) -> tuple:
+    """``robot.gripper_parts`` as sorted ``(part, colour)`` pairs (hashable,
+    so RobotSpec stays frozen). Unknown parts are warned about and dropped."""
+    raw = robot.get("gripper_parts")
+    if raw is None:
+        return fallback
+    if not isinstance(raw, dict):
+        _warn_once(f"[station] robot.gripper_parts 는 매핑이어야 합니다: {raw!r}")
+        return fallback
+    out = []
+    for part, colour in raw.items():
+        part = str(part).strip().lower()
+        if part not in GRIPPER_PART_NAMES:
+            _warn_once(f"[station] robot.gripper_parts 에 모르는 부품 {part!r} "
+                       f"(아는 것: {', '.join(GRIPPER_PART_NAMES)}). 뺍니다.")
+            continue
+        out.append((part, str(colour).strip().lower()))
+    return tuple(sorted(out))
 
 
 def _gripper_from(robot: dict, fallback: str) -> str:
@@ -294,6 +332,7 @@ def _parse(raw: dict, path: Path) -> StationConfig:
             ip=str(robot.get("ip", base.robot.ip)),
             reset_pose=str(robot.get("reset_pose", base.robot.reset_pose)),
             gripper=_gripper_from(robot, base.robot.gripper),
+            gripper_parts=_gripper_parts_from(robot, base.robot.gripper_parts),
         ),
         node=NodeSpec(
             host=str(node.get("host", base.node.host)),
@@ -492,8 +531,13 @@ def save_station(cfg: StationConfig) -> Path:
     data = {
         "name": cfg.name,
         "description": cfg.description,
+        # gripper 를 빼먹으면 마법사가 저장한 스테이션은 franka_hand 로
+        # 되돌아간다 -- 다시 읽을 때 기본값이 채워지기 때문이다.
         "robot": {"kind": cfg.robot.kind, "ip": cfg.robot.ip,
-                  "reset_pose": cfg.robot.reset_pose},
+                  "reset_pose": cfg.robot.reset_pose,
+                  "gripper": cfg.robot.gripper,
+                  **({"gripper_parts": cfg.robot.gripper_parts_dict}
+                     if cfg.robot.gripper_parts else {})},
         "node": {"host": cfg.node.host, "port": int(cfg.node.port),
                  "python": cfg.node.python},
         "leader": ({"port": cfg.leader.port} if cfg.leader.port else {}),

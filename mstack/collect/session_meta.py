@@ -87,7 +87,8 @@ def gripper_from_station() -> dict:
         from mstack.config.station import load_station
 
         r = load_station().robot
-        return {"name": r.gripper, "max_width": r.gripper_max_width}
+        return {"name": r.gripper, "max_width": r.gripper_max_width,
+                "parts": r.gripper_parts_dict, "source": "station"}
     except Exception:  # noqa: BLE001 -- 못 읽으면 그 버전을 안 찍을 뿐이다
         return {}
 
@@ -109,6 +110,8 @@ def apply_to_metadata(meta, payload: Optional[dict], reset: Optional[dict],
     if gripper:
         meta.gripper = gripper["name"]
         meta.gripper_max_width = float(gripper["max_width"])
+        meta.gripper_max_width_source = gripper.get("source") or None
+        meta.gripper_parts = dict(gripper.get("parts") or {}) or None
     prov = prov or {}
     meta.collector_commit = prov.get("collector_commit") or None
     meta.pylibfranka_version = prov.get("pylibfranka") or None

@@ -20,12 +20,10 @@ robot:
   # knu-eng7.local.yaml (git 미추적) 에 있다. Franka 출고 기본값은
   # 172.16.0.2 이고, 바꾸지 않았다면 그대로 적으면 된다.
   ip: ""
-  # 달려 있는 그리퍼. 기록된 그리퍼 열은 0~1 정규화값이라, 이 이름이
-  # 없으면 그 값을 미터로 되돌릴 수 없다 (mstack/config/station.py 의
-  # GRIPPERS 가 최대 벌림을 안다). 아는 값: franka_hand,
-  # franka_hand_umi_yellow / franka_hand_umi_black (Franka Hand 에 UMI식
-  # 핑거만 얹은 조합 -- 구동은 FCI 그대로라 기록용 구분일 뿐이다. 손목 칼라가
-  # 바뀌면 그에 맞춰 이 키를 바꿔 찍는다).
+  # 달려 있는 그리퍼 (mstack/config/station.py 의 GRIPPERS). 아는 값:
+  # franka_hand, franka_hand_umi (UMI식 핑거 -- 부품 색은 gripper_parts 로,
+  # configs/stations/umi-finger.yaml 참고). 최대 벌림은 여기서 정하지 않는다:
+  # 녹화 Connect 마다 손을 homing 해 잰 값을 파일에 적는다.
   gripper: franka_hand
 
   reset_pose: libero      # mstack/robots/franka_fr3.py FR3_RESET_POSES

@@ -67,6 +67,10 @@ from __future__ import annotations
 import numpy as np
 
 FPS = 20.0
+#: Stock Franka Hand stroke. Only the default: the files this repairs are the
+#: legacy *_demo.hdf5 recorded with stock fingers, which carry no stroke of
+#: their own. Scene files record theirs (metadata gripper_max_width) and a
+#: caller with one passes it as ``max_width_mm``.
 MAX_WIDTH_MM = 80.0
 
 # 실측 램프 두 개에 맞춘 값. 지연은 명령 프레임 기준이고 소수 프레임을 허용한다
@@ -85,7 +89,8 @@ def _transitions(gripper_cmd: np.ndarray) -> list[tuple[int, bool]]:
     return [(int(i) + 1, bool(gripper_cmd[int(i) + 1] > 0.5)) for i in idx]
 
 
-def synth_gripper_states(actions: np.ndarray, measured: np.ndarray) -> np.ndarray:
+def synth_gripper_states(actions: np.ndarray, measured: np.ndarray,
+                         max_width_mm: float = MAX_WIDTH_MM) -> np.ndarray:
     """Returns a rebuilt `obs/gripper_states` column (normalised 0=open..1=closed).
 
     `measured` is only read for the two things the old recording *did* get
@@ -93,7 +98,7 @@ def synth_gripper_states(actions: np.ndarray, measured: np.ndarray) -> np.ndarra
     frozen stretch between them is discarded and replaced.
     """
     n = len(measured)
-    w = (1.0 - np.asarray(measured, dtype=float)) * MAX_WIDTH_MM      # mm
+    w = (1.0 - np.asarray(measured, dtype=float)) * max_width_mm      # mm
     # 그리퍼는 어느 액션 규약에서든 마지막 열이다(libero_format 참고). 열 번호를
     # 박아두면 action_include_gripper 를 끈 파일에서 팔 관절을 그리퍼로 읽는다.
     a = np.asarray(actions, dtype=float)
@@ -103,7 +108,7 @@ def synth_gripper_states(actions: np.ndarray, measured: np.ndarray) -> np.ndarra
 
     # 시작 폭: 첫 명령 전 구간의 중앙값. 그 구간은 명령이 없어 얼어붙을 일이 없다.
     first = trans[0][0]
-    w_open = float(np.median(w[:first])) if first > 0 else MAX_WIDTH_MM
+    w_open = float(np.median(w[:first])) if first > 0 else max_width_mm
 
     # 각 구간의 도착 폭. 닫기는 접촉 지점(기록된 값), 열기는 언제나 완전 개방.
     targets: list[float] = []
@@ -134,4 +139,4 @@ def synth_gripper_states(actions: np.ndarray, measured: np.ndarray) -> np.ndarra
                       else min(target, cur + moved))
         cur = out[end - 1] if end > frame else cur
 
-    return np.clip(1.0 - out / MAX_WIDTH_MM, 0.0, 1.0).astype(np.float32)
+    return np.clip(1.0 - out / max_width_mm, 0.0, 1.0).astype(np.float32)

@@ -130,6 +130,19 @@ def _station_gripper_width() -> float:
 # 있고, 기록된 0~1 열을 미터로 되돌리는 것이 이 값이라 파일에도 적힌다.
 MAX_GRIPPER_WIDTH = _station_gripper_width()
 
+
+def _usable_max_width(gs, fallback: float) -> float:
+    """The hand's reported stroke, or ``fallback`` if it is not believable.
+
+    ``max_width`` comes from the last homing; before any homing it can be 0.
+    Anything under 1 cm or over 11 cm is not a Franka Hand stroke.
+    """
+    try:
+        w = float(gs.max_width)
+    except Exception:  # noqa: BLE001
+        return fallback
+    return w if 0.01 <= w <= 0.11 else fallback
+
 # Normalized leader-trigger value (0=open .. 1=closed) at which the binary
 # gripper closes.  The GELLO leader's trigger spring (JointLimitWall) starts its
 # exponential squeeze resistance at this same value, so the moment resistance is
@@ -436,14 +449,29 @@ class FrankaFR3Robot(Robot):
         self._gripper = None
         self._gripper_target = 0.0     # normalized 1=closed, 0=open (GELLO convention)
         self._gripper_state_width = MAX_GRIPPER_WIDTH
+        # **The hand's own stroke, not the station table's.** The normalised
+        # column is 1 - width / this, and "open" moves to it. The hand reports
+        # it as max_width, measured at its last homing: with UMI fingers it
+        # read 74.55 mm (2026-09-29) against the 80 mm the table assumed, so
+        # a fully open hand recorded 0.07 instead of 0 and "open" asked for a
+        # width the fingers cannot reach. The table value is only the
+        # fallback for when the hand gives no usable number.
+        self._gripper_width_max = MAX_GRIPPER_WIDTH
+        # The command thread's belief about the hand, shared so init_gripper
+        # can reset it after homing leaves the fingers open.
+        self._gripper_closed = False
+        # Serialises hand commands: homing must not overlap a grasp/move.
+        self._gripper_cmd_lock = threading.Lock()
         if use_gripper:
             self._gripper = pf.Gripper(robot_ip)
             if home_gripper:
                 print("[FR3] homing gripper (this moves the fingers)...")
                 self._gripper.homing()
             gs = self._gripper.read_once()
+            self._gripper_width_max = _usable_max_width(gs, MAX_GRIPPER_WIDTH)
             self._gripper_state_width = float(gs.width)
-            self._gripper_target = 1.0 - gs.width / MAX_GRIPPER_WIDTH
+            self._gripper_target = 1.0 - gs.width / self._gripper_width_max
+            self._gripper_closed = self._gripper_target > 0.5
 
         # Background threads.
         self._control_thread: Optional[threading.Thread] = None
@@ -485,7 +513,7 @@ class FrankaFR3Robot(Robot):
     def get_joint_state(self) -> np.ndarray:
         with self._lock:
             q = self._q.copy()
-            gripper_norm = 1.0 - self._gripper_state_width / MAX_GRIPPER_WIDTH
+            gripper_norm = 1.0 - self._gripper_state_width / self._gripper_width_max
         if self._use_gripper:
             return np.append(q, gripper_norm)
         return q
@@ -498,6 +526,33 @@ class FrankaFR3Robot(Robot):
             self._desired_q = q_des.copy()
             if self._use_gripper and len(joint_state) >= 8:
                 self._gripper_target = float(np.clip(joint_state[7], 0.0, 1.0))
+
+    def init_gripper(self) -> dict:
+        """Home the hand and return its measured stroke. **Moves the fingers.**
+
+        Called at the start of every recording session (the worker's Connect),
+        so each file records the stroke of the fingers actually mounted --
+        the fingers are swapped between sessions (UMI vs stock), and homing
+        is what makes the hand re-measure. Returns ``{"max_width", "width"}``
+        in metres, or ``{}`` when there is no hand.
+        """
+        if self._gripper is None:
+            return {}
+        with self._gripper_cmd_lock:
+            print("[FR3] homing gripper (this moves the fingers)...", flush=True)
+            self._gripper.homing()
+            gs = self._gripper.read_once()
+            width_max = _usable_max_width(gs, MAX_GRIPPER_WIDTH)
+            with self._lock:
+                self._gripper_width_max = width_max
+                self._gripper_state_width = float(gs.width)
+                # homing ends open; the command thread must believe so too,
+                # or its next "open" edge is skipped and a "close" is missed.
+                self._gripper_target = 0.0
+            self._gripper_closed = False
+        print(f"[FR3] gripper stroke {width_max * 1000:.2f} mm "
+              f"(width {float(gs.width) * 1000:.2f} mm)", flush=True)
+        return {"max_width": width_max, "width": float(gs.width)}
 
     def hold(self) -> None:
         """지금 있는 자리에 선다. 상위 층의 급정거가 쓰는 원시 동작.
@@ -542,7 +597,7 @@ class FrankaFR3Robot(Robot):
             dq = self._dq.copy()
             pose = self._ee_pose.copy()
             state_time = self._state_time
-            gripper_norm = 1.0 - self._gripper_state_width / MAX_GRIPPER_WIDTH
+            gripper_norm = 1.0 - self._gripper_state_width / self._gripper_width_max
             ft = {k: v.copy() for k, v in self._ft.items()}
         if self._use_gripper:
             pos = np.append(q, gripper_norm)
@@ -930,25 +985,28 @@ class FrankaFR3Robot(Robot):
         grasp_force = 40.0  # N holding force
         eps = 0.08         # m; success window must span the full stroke
 
-        with self._lock:
-            closed = self._gripper_target > 0.5  # match the hand's startup state
         while not self._stop.is_set():
             with self._lock:
                 target = self._gripper_target
+                width_max = self._gripper_width_max
+            closed = self._gripper_closed
             try:
-                if not closed and target >= close_at:
-                    ok = self._gripper.grasp(
-                        0.0, speed, grasp_force,
-                        epsilon_inner=eps, epsilon_outer=eps,
-                    )
-                    closed = True
-                    if not ok:
-                        # Unreachable with a full-stroke window; if it fires,
-                        # the epsilons no longer cover the stroke.
-                        print("[FR3] gripper grasp reported failure")
-                elif closed and target <= open_at:
-                    self._gripper.move(MAX_GRIPPER_WIDTH, speed)
-                    closed = False
+                # 한 번에 한 명령 -- init_gripper 의 homing 과 겹치지 않는다.
+                with self._gripper_cmd_lock:
+                    closed = self._gripper_closed   # homing 이 바꿨을 수 있다
+                    if not closed and target >= close_at:
+                        ok = self._gripper.grasp(
+                            0.0, speed, grasp_force,
+                            epsilon_inner=eps, epsilon_outer=eps,
+                        )
+                        self._gripper_closed = True
+                        if not ok:
+                            # Unreachable with a full-stroke window; if it fires,
+                            # the epsilons no longer cover the stroke.
+                            print("[FR3] gripper grasp reported failure")
+                    elif closed and target <= open_at:
+                        self._gripper.move(width_max, speed)
+                        self._gripper_closed = False
             except Exception as e:  # noqa: BLE001
                 print(f"[FR3] gripper {'grasp' if not closed else 'move'} failed: {e}")
             self._stop.wait(0.05)

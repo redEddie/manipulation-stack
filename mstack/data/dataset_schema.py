@@ -319,6 +319,14 @@ META_PROVENANCE_SOURCE = "provenance_source"
 #: 부류다: 팔 밖의 물리 조건이라 관측이 아니라 파일 메타에 한 번 적는다.
 META_GRIPPER = "gripper"
 META_GRIPPER_MAX_WIDTH = "gripper_max_width"
+#: Where ``gripper_max_width`` came from: ``"measured"`` (the hand was homed
+#: at Connect and reported its stroke) or ``"station"`` (the table's fallback,
+#: written when the file was created without a robot). Optional.
+META_GRIPPER_MAX_WIDTH_SOURCE = "gripper_max_width_source"
+#: Visible gripper parts -> colour, JSON (e.g. {"finger": "black", "mount":
+#: "white", "pad": "black"}). What the wrist camera sees; the gripper key
+#: alone cannot say it. Optional -- absent for the stock hand.
+META_GRIPPER_PARTS = "gripper_parts"
 
 #: 버전이 **요구하는 것은 하나뿐**이다: 이 값들이 어디서 왔는지.
 #:

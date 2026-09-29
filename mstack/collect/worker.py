@@ -1945,12 +1945,47 @@ class CollectionWorker(QThread):
             f"(무게중심 {[round(c, 4) for c in info.get('com') or []]})")
         return info
 
+    def _init_gripper(self) -> dict:
+        """Home the hand and return this session's gripper for the file.
+
+        ``{"name", "max_width", "parts", "source": "measured"}``: the name and
+        parts come from the station, the stroke from the hand itself. It is
+        re-measured every recording session because the fingers get swapped
+        (UMI fingers: 74.55 mm, stock table value: 80 mm), and a file whose
+        stroke is wrong scales every gripper value in it wrongly.
+
+        Raises when the hand cannot be homed -- a recording that would write
+        a guessed stroke is not started.
+        """
+        from mstack.collect.session_meta import gripper_from_station
+
+        station = gripper_from_station()
+        client = getattr(self._robot, "_client", None)
+        if client is None or not hasattr(client, "init_gripper"):
+            # Stub robots (tests, no-hardware runs) have no hand to home.
+            return station
+        info = client.init_gripper()
+        if not info or not info.get("max_width"):
+            # A robot without a hand: nothing to scale, keep the station entry.
+            self.log_message.emit("[그리퍼] 이 로봇에는 손이 없습니다 -- 설정값을 적습니다.")
+            return station
+        g = {"name": station.get("name"), "parts": station.get("parts") or {},
+             "max_width": float(info["max_width"]), "source": "measured"}
+        parts = " · ".join(f"{k} {v}" for k, v in sorted(g["parts"].items()))
+        self.log_message.emit(
+            f"[그리퍼] {g['name']} 초기화 -- 최대 벌림 {g['max_width'] * 1000:.2f} mm"
+            + (f" ({parts})" if parts else ""))
+        return g
+
     # ------------------------------------------------------------------- run
     def run(self) -> None:  # noqa: C901 - state machine, kept in one place on purpose
         self._phase_session = time.strftime("%Y%m%dT%H%M%S")
         try:
             self._set_state("connecting")
             self._connect()
+            # 녹화 세션이면 손을 초기화하고 그 자리에서 잰 최대 벌림을 쓴다.
+            # 연습 모드는 파일이 없으니 손을 움직일 이유가 없다.
+            gripper = None if self.cfg.no_dataset else self._init_gripper()
             if self.cfg.no_dataset:
                 self._writer = NullTaskWriter(schema=self.cfg.schema)
             elif self.cfg.scene_mode:
@@ -1975,7 +2010,8 @@ class CollectionWorker(QThread):
                 if self.cfg.scene_metadata is not None and not self.cfg.scene_resume:
                     from mstack.collect.session_meta import apply_to_metadata
 
-                    apply_to_metadata(self.cfg.scene_metadata, payload, reset, prov)
+                    apply_to_metadata(self.cfg.scene_metadata, payload, reset, prov,
+                                      gripper=gripper)
 
                 self._writer = SceneWriter(
                     root=self.cfg.data_root,
@@ -1990,6 +2026,7 @@ class CollectionWorker(QThread):
                     session_payload=payload,
                     session_reset=reset,
                     session_provenance=prov,
+                    session_gripper=gripper,
                 )
                 if getattr(self._writer, "version_note", ""):
                     self.log_message.emit(f"[스키마] {self._writer.version_note}")

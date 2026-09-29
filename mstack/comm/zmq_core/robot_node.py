@@ -73,6 +73,11 @@ class ZMQServerRobot:
                         # 못 주는 로봇이면 빈 dict (상류가 기록을 생략한다).
                         fn = getattr(self._robot, "versions", None)
                         result = fn() if fn is not None else {}
+                    elif method == "init_gripper":
+                        # Homes the hand (moves the fingers) and returns its
+                        # measured stroke. {} from a robot without a hand.
+                        fn = getattr(self._robot, "init_gripper", None)
+                        result = fn() if fn is not None else {}
                     elif method == "payload":
                         # 정적 값이라 obs 에 싣지 않는다. 이 로봇이 못 주면
                         # 빈 dict -- 상류가 그걸 보고 기록을 생략한다.
@@ -222,6 +227,27 @@ class ZMQClientRobot(Robot):
             return result
         except zmq.Again:
             raise RuntimeError("ZMQ timeout - robot may be disconnected")
+
+    def init_gripper(self, timeout_ms: int = 20000) -> dict:
+        """Home the hand on the node and return ``{"max_width", "width"}`` (m).
+
+        Homing is a full close-and-open stroke, several seconds -- far past
+        this socket's usual wait, so the timeout is raised for this one call.
+        Raises on timeout or a node-side error: the caller decides whether a
+        session may start without a measured stroke.
+        """
+        old = self._socket.getsockopt(zmq.RCVTIMEO)
+        self._socket.setsockopt(zmq.RCVTIMEO, int(timeout_ms))
+        try:
+            self._socket.send(pickle.dumps({"method": "init_gripper"}))
+            result = pickle.loads(self._socket.recv())
+        except zmq.Again:
+            raise RuntimeError("ZMQ timeout - gripper homing did not finish")
+        finally:
+            self._socket.setsockopt(zmq.RCVTIMEO, old)
+        if isinstance(result, dict) and "error" in result:
+            raise RuntimeError(result["error"])
+        return result or {}
 
     def close(self) -> None:
         """Close the ZMQ socket and context."""
