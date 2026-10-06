@@ -1,7 +1,8 @@
 # 정책 클라이언트 (`apps/fr3_policy_client.py`)
 
-학습된 VLA 체크포인트를 FR3 위에서 실행한다. GPU 머신의 정책 서버에 관측을
-보내고 액션 청크를 받아 20 Hz 로 팔에 흘린다. 이 컴퓨터에서 도는 무거운 연산은
+학습된 VLA 체크포인트를 FR3 위에서 실행한다. GPU 머신의 정책 서버
+([`apps/policy_server.py`](policy-server.md))에 관측을 보내고 액션 청크를 받아
+체크포인트가 학습된 주기(`/info` 의 `fps`, fr3-tabletop 은 20 Hz)로 팔에 흘린다. 이 컴퓨터에서 도는 무거운 연산은
 EE 체크포인트용 해석적 IK(~4 ms)뿐이다.
 
 수집기와 **같은 전처리 함수**(`mstack.data.crop.resize_rgb`)를 쓴다. 학습 데이터를
@@ -19,18 +20,28 @@ EE 체크포인트용 해석적 IK(~4 ms)뿐이다.
 
 셋 다 비어 있으면 시작할 때 무엇을 채워야 하는지 알려주고 멈춘다.
 
-## 프로토콜 (HTTP POST JSON)
+## 프로토콜 (HTTP JSON)
 
+The server side and the full protocol are in [policy-server.md](policy-server.md);
+the wire format is [`mstack/comm/policy_protocol.py`](../mstack/comm/policy_protocol.py).
+
+- `GET /info` — **asked first, before the robot is connected.** The checkpoint's
+  control rate (`fps`), image size, cameras, action type and chunk length. The
+  client runs at that rate and sends that size; a camera or state length it
+  cannot provide stops it before any motion. A legacy server without `/info`
+  (404/405/501) gets the old defaults: 20 Hz, 256², 10-step chunks.
 - `POST /reset {"instruction": str}` — 에피소드 시작 시 1회 (텍스트 인코딩 + 상태 초기화)
-- `POST /predict {observation}` → `{"actions": [[dim] × 10]}`
+- `POST /predict {observation}` → `{"actions": [[dim] × chunk_size]}`
   - `dim` 은 체크포인트 종류에 따라 7 (EE-delta) 또는 8 (절대 관절각)
   - `observation.state`: `[8]` — 관절 7 rad + 그리퍼 0..1 (`get_observation()` 그대로)
   - `observation.images.agent` / `.wrist`:
-    `{"base64", "shape":[256,256,3], "dtype":"uint8"}`
-    — **수집과 동일한 `resize_rgb`(정사각 크롭 → 256², INTER_AREA)를 클라이언트에서
-    적용한 뒤** raw base64. 이 전처리를 생략하면 안 된다.
+    `{"base64", "shape":[S,S,3], "dtype":"uint8"}`, `S = /info image_size`
+    — **수집과 동일한 `resize_rgb`(정사각 크롭 → S², INTER_AREA)를 클라이언트에서
+    적용한 뒤** raw base64. 이 전처리를 생략하면 안 된다. fr3-tabletop LeRobot
+    checkpoints are 224² (the dataset was written with `resize_rgb(size=224)`);
+    mamba-embeddingvla checkpoints are 256².
 
-요청당 약 0.4 MB이며, `/predict` 는 백그라운드 스레드에서 돈다. IK 는 제어
+요청당 약 0.15–0.4 MB이며, `/predict` 는 백그라운드 스레드에서 돈다. IK 는 제어
 스레드에 남는다 — 매 틱 최신 측정 관절각에 앵커를 다시 잡아야 추종 지연이
 누적되지 않기 때문이다(학습 라벨이 프레임별 측정 pose 기준의 EE-delta 라 그렇다).
 
@@ -75,6 +86,12 @@ p99 0.395 rad 라, 예전 값 0.15 로는 프레임의 20%가 잘려 지연 버�
 쏘고, 도착한 청크에서 이미 시각이 지난 앞쪽 K개는 버린다. 그대로 쏘면 후퇴가
 되기 때문이다. 재학습은 필요 없었다. `--lead-ticks 0` 으로 예전 동작을 재현할 수
 있다.
+
+The lead budget is K / fps. The 2-tick default fits the mamba policy (~35 ms
+inference); a LeRobot VLA can take several hundred ms per chunk. `--dry-run`
+prints the worst round-trip and the K it needs, and the client warns at start-up
+when the first `/predict` exceeds the budget. Long chunks (SmolVLA/π0: 50) leave
+room for a large K.
 
 ## 명령(commanded) 스트림
 

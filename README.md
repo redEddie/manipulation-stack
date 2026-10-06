@@ -31,7 +31,7 @@ crop parameters, reset poses and camera clients are shared for the same reason.
 | **Collection** | A PyQt6 workspace that drives leader + robot + cameras and writes LIBERO-format HDF5, one scene at a time |
 | **Scenes** | A scene format with props, an instruction grammar, placement rules and a diversity recommender — so a dataset is planned rather than accumulated |
 | **Datasets** | Schema selection (action space, gripper encoding, observation fields), repacking, curation, quality vocabulary, LeRobot conversion, Hugging Face Hub upload |
-| **Deployment** | A policy client that streams observations to a GPU inference server and executes action chunks at 20 Hz — see [docs/policy-client.md](docs/policy-client.md) |
+| **Deployment** | A policy server for LeRobot (SmolVLA, π0, π0-FAST, GR00T) and mamba-embeddingvla checkpoints, and a client that streams observations to it and executes action chunks at the checkpoint's own rate — see [docs/policy-server.md](docs/policy-server.md) and [docs/policy-client.md](docs/policy-client.md) |
 
 ## Layout is the dependency graph
 
@@ -140,7 +140,9 @@ python scripts/launch/launch_nodes.py --robot fr3
 
 The workspace can start and stop that node for you.
 
-**Run a trained policy.** See [docs/policy-client.md](docs/policy-client.md).
+**Run a trained policy.** Start `apps/policy_server.py` on the GPU machine
+([docs/policy-server.md](docs/policy-server.md)), then `apps/fr3_policy_client.py` here
+([docs/policy-client.md](docs/policy-client.md)).
 
 ## Verification
 
@@ -162,7 +164,9 @@ and torque-protection reset.
   (1 kHz / 20 Hz / 30 fps), state machines, data lineage
 - [`docs/dataset-schema.md`](docs/dataset-schema.md) — what is stored and why
 - [`docs/curation-metrics.md`](docs/curation-metrics.md) — episode quality vocabulary
-- [`docs/policy-client.md`](docs/policy-client.md) — inference protocol, safety clamps,
+- [`docs/policy-server.md`](docs/policy-server.md) — layers, protocol (`/info`), running a
+  checkpoint, checks before the robot
+- [`docs/policy-client.md`](docs/policy-client.md) — client timing, safety clamps,
   commanded-action derivation
 - [`patches/README.md`](patches/README.md) — the pylibfranka GIL-release patches
 - [`CLAUDE.md`](CLAUDE.md) — working notes and invariants for contributors

@@ -1,14 +1,20 @@
 """FR3 policy client — runs on the FR3 controller computer (lerobot-venv).
 
-Streams observations to the GPU policy server (mamba-embeddingvla
-real_deploy/fr3_policy_server.py) and executes absolute joint-angle actions on
-the robot. The only heavy compute here is IK (analytic, ~4 ms) for EE ckpts.
+Streams observations to the GPU policy server (apps/policy_server.py, or a
+legacy mamba-embeddingvla real_deploy/fr3_policy_server.py) and executes
+absolute joint-angle actions on the robot. The only heavy compute here is IK
+(analytic, ~4 ms) for EE ckpts.
 
-Data path per replan cycle (default 0.40 s = 8 executed steps @ 20 Hz):
+What the checkpoint expects -- control rate, image size, chunk length, action
+type -- comes from the server's GET /info (mstack/comm/policy_protocol.py), not
+from constants here. A legacy server without /info gets LEGACY_INFO (20 Hz,
+256^2, 10-step chunks), which is what it was built for.
+
+Data path per replan cycle (e.g. 0.40 s = 8 executed steps @ 20 Hz):
   FR3ZMQRobot.get_observation()             joints 7 rad + gripper 0..1, 2x 640x480 RGB
-    -> resize_rgb (libero_format)           square-crop 480^2 -> 256^2, crop_params 적용
-    -> base64 JSON POST /predict            ~0.4 MB/request, on a background thread
-    <- {"actions": [[dim] x 10]}            dim=7 EE-delta (ee ckpt) or 8 joint (joint ckpt)
+    -> resize_rgb (libero_format)           square-crop -> info.image_size^2, crop_params 적용
+    -> base64 JSON POST /predict            ~0.15-0.4 MB/request, on a background thread
+    <- {"actions": [[dim] x chunk]}         dim=7 EE-delta (ee ckpt) or 8 joint (joint ckpt)
   then every control tick (main thread, no network):
     q_meas = get_observation()              latest measured joints
     -> raw_to_joint (fr3_kinematics)        ee: re-anchor delta to q_meas + IK -> joint8
@@ -44,7 +50,6 @@ waypoint ckpt (chunk anchored at the observation pose, not per-step):
 from __future__ import annotations
 
 import argparse
-import base64
 import os
 import sys
 import time
@@ -65,6 +70,14 @@ from mstack.robots.fr3_kinematics import (  # noqa: E402  (mamba real_deploy cop
     fk,
 )
 
+from mstack.comm.policy_protocol import (  # noqa: E402
+    EE_DELTA,
+    LEGACY_INFO,
+    STATE_KEY,
+    PolicyInfo,
+    encode_image,
+    image_key,
+)
 from mstack.config.station import load_station
 
 # 로봇/카메라/주파수는 스테이션 설정에서 온다 -- 수집 GUI 와 같은 파일을 읽으므로
@@ -90,10 +103,9 @@ WRIST_CAMERA_SERIAL = STATION.camera("wrist").serial
 # 자주 더해 6 rad/s 로 달리면서 상한 600틱이 5초에서 0.83초로 줄어 수렴 전에
 # 예외로 죽는다.
 #
-# 그래서 여기는 **정책 쪽 사실**이고, 바꾸려면 그 정책을 어느 주기로
-# 학습했는지를 보고 바꾼다.
-FPS = 20                                   # int -- K*1000//FPS 표시가 정수로 남는다
-EXEC_HORIZON = 10                          # 청크 중 쓸 최대 개수 (10=full, 서버 청크와 동일)
+# 그래서 여기는 **정책 쪽 사실**이다. The rate now comes from the server's
+# GET /info (the training dataset's fps), so a 15 Hz or 30 Hz checkpoint runs at
+# its own rate without editing this file. There is no FPS constant any more.
 # 청크 경계 정지를 없애는 겹치기 실행. 정책은 "인덱스 i = 관측시각 + i·dt"로 학습돼
 # 있으므로, 그 약속을 벽시계와 맞추기만 하면 된다 — 재학습 불필요한 클라이언트 장부 정리다.
 #   청크 끝 K틱 전에 관측을 떠서 백그라운드 추론 → 도착한 청크의 앞 K개는 버리고 K번째부터 실행
@@ -116,7 +128,6 @@ DEFAULT_INSTRUCTION = "pick up the white cup and place it inside the large yello
 # 속도로 두는 것과 같은 이유 -- mstack/config/station.py 의 ControlSpec).
 HOME_SPEED_RAD_S = 1.0
 HOME_TIMEOUT_S = 30.0                      # 램프가 이 안에 수렴하지 않으면 중단
-RAMP_STEP = HOME_SPEED_RAD_S / FPS         # rad/tick
 # 안전 클램프: 스텝당 "명령 목표 - 측정 위치" 최대 괴리.
 # 이건 속도 제한이 아니다 — 실제 속도/가속/저크 제한은 로봇 노드의 레퍼런스 필터
 # (v_max 1.0 rad/s, a_max 4.0 rad/s^2, 1 kHz)가 하고, 이 값과 무관하게 항상 건다.
@@ -129,10 +140,30 @@ GRIPPER_OPEN = 0.0
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _b64(img: np.ndarray) -> dict:
-    img = np.ascontiguousarray(img, dtype=np.uint8)
-    return {"base64": base64.b64encode(img.tobytes()).decode(),
-            "shape": list(img.shape), "dtype": "uint8"}
+CLIENT_CAMERAS = ("agent", "wrist")        # roles this client can capture
+
+
+def fetch_info(url: str) -> PolicyInfo | None:
+    """GET /info. None means a legacy server: use LEGACY_INFO, and read the action
+    type from the first chunk (7 = EE-delta, 8 = joint-absolute).
+
+    Refuses -- before the robot is touched -- a checkpoint this client cannot
+    feed: a camera it does not have, or a state vector of another length."""
+    r = requests.get(f"{url}/info", timeout=60)
+    # The mamba real_deploy server has no do_GET at all, so http.server answers 501.
+    if r.status_code in (404, 405, 501):
+        print(f"[client] {url} has no /info (legacy server): assuming {LEGACY_INFO}")
+        return None
+    r.raise_for_status()
+    info = PolicyInfo.from_dict(r.json())
+    unknown = set(info.cameras) - set(CLIENT_CAMERAS)
+    if unknown:
+        raise SystemExit(f"checkpoint wants cameras {sorted(unknown)}; this client has {CLIENT_CAMERAS}")
+    if info.state_dim != 8:
+        raise SystemExit(f"checkpoint wants a {info.state_dim}-dim state; this client sends 8")
+    print(f"[client] policy {info.policy}: {info.fps} Hz, {info.image_size}^2 {info.cameras}, "
+          f"{info.action_type}[{info.action_dim}] x {info.chunk_size}")
+    return info
 
 
 def raw_to_joint(d: np.ndarray, q_meas: np.ndarray, ee_mode: bool) -> np.ndarray:
@@ -146,31 +177,36 @@ def raw_to_joint(d: np.ndarray, q_meas: np.ndarray, ee_mode: bool) -> np.ndarray
 def dry_run(url: str, instruction: str, n: int = 5) -> None:
     """Server round-trip test with synthetic obs — robot/cameras NOT required.
 
-    Exercises the full client path: /predict then local step on each chunk row."""
+    Exercises the full client path: /info, /predict, then local step on each chunk row.
+    For a check against recorded episodes, use scripts/check/check_policy_server.py."""
+    info = fetch_info(url)
+    size = info.image_size if info else LEGACY_INFO["image_size"]
+    cams = info.cameras if info else LEGACY_INFO["cameras"]
     rng = np.random.default_rng(0)
-    img = rng.integers(0, 255, (256, 256, 3), dtype=np.uint8)
+    img = rng.integers(0, 255, (size, size, 3), dtype=np.uint8)
     state = np.array([0.0, -0.161, 0.0, -2.445, 0.0, 2.227, 0.785, 0.0])  # libero reset
     print(f"[dry-run] POST {url}/reset ... (서버가 없으면 여기서 최대 60초 대기)")
     r = requests.post(f"{url}/reset", json={"instruction": instruction}, timeout=60)
     r.raise_for_status()
     print(f"[dry-run] /reset ok: {r.json()}")
+    fps = info.fps if info else LEGACY_INFO["fps"]
+    rtt = []
     for i in range(n):
-        payload = {
-            "observation.state": state.tolist(),
-            "observation.images.agent": _b64(img),
-            "observation.images.wrist": _b64(img),
-        }
+        payload = {STATE_KEY: state.tolist(), **{image_key(c): encode_image(img) for c in cams}}
         t0 = time.perf_counter()
         r = requests.post(f"{url}/predict", json=payload, timeout=60)
         r.raise_for_status()
         ms = (time.perf_counter() - t0) * 1000
+        rtt.append(ms)
         chunk = np.asarray(r.json()["actions"], dtype=float)  # [K, dim]
         ee_mode = chunk.shape[1] == 7
         a0 = raw_to_joint(chunk[0], state, ee_mode)  # local step, q_meas = reset pose
         mode = "EE-delta+local-step" if ee_mode else "joint-absolute"
         print(f"[dry-run] /predict #{i}: {chunk.shape[0]}x{chunk.shape[1]} ({mode}), "
               f"round-trip {ms:.1f} ms | step->joints(rad)={np.round(a0[:7], 3)} grip={a0[7]:.2f}")
-    print("[dry-run] OK — comm path + local step verified.")
+    need = int(np.ceil(max(rtt) * fps / 1000))
+    print(f"[dry-run] OK — comm path + local step verified. Worst round-trip {max(rtt):.0f} ms "
+          f"needs --lead-ticks >= {need} at {fps} Hz (default {CHUNK_LEAD}).")
 
 
 def main() -> None:
@@ -182,8 +218,9 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true",
                     help="server comm test with synthetic obs (no robot needed)")
     ap.add_argument("--max-seconds", type=float, default=30.0)
-    ap.add_argument("--exec-horizon", type=int, default=EXEC_HORIZON,
-                    help="청크 중 쓸 최대 개수 (긴 청크를 더 자주 재계획하고 싶을 때만 줄인다)")
+    ap.add_argument("--exec-horizon", type=int, default=None,
+                    help="청크 중 쓸 최대 개수. Default: the server's chunk_size from /info "
+                         "(긴 청크를 더 자주 재계획하고 싶을 때만 줄인다)")
     ap.add_argument("--lead-ticks", type=int, default=CHUNK_LEAD, metavar="K",
                     help="청크 끝 K틱 전에 미리 추론하고 도착 청크의 앞 K개를 버린다 "
                          "(0=예전 순차 동작, 경계 정지 발생)")
@@ -202,12 +239,22 @@ def main() -> None:
 
     # 첫 출력까지 조용한 구간(카메라/로봇/서버 연결)이 길다 — 시작 즉시 설정을 보여준다.
     print(f"[client] server {args.server} | instruction {args.instruction!r}")
-    print(f"[client] exec-horizon {args.exec_horizon}, lead-ticks {args.lead_ticks}, "
+    print(f"[client] exec-horizon {args.exec_horizon or 'auto (from /info)'}, lead-ticks {args.lead_ticks}, "
           f"max-seconds {args.max_seconds}" + (" (dry-run)" if args.dry_run else ""))
 
     if args.dry_run:
         dry_run(args.server, args.instruction)
         return
+
+    # Everything rate- and shape-dependent below comes from the checkpoint, asked
+    # for before the robot is connected so a mismatch never moves the arm.
+    info = fetch_info(args.server)
+    fps = info.fps if info else LEGACY_INFO["fps"]
+    image_size = info.image_size if info else LEGACY_INFO["image_size"]
+    exec_horizon = args.exec_horizon or (info.chunk_size if info else LEGACY_INFO["chunk_size"])
+    cameras = info.cameras if info else LEGACY_INFO["cameras"]
+    ramp_step = HOME_SPEED_RAD_S / fps   # rad/tick
+    print(f"[client] running at {fps} Hz, sending {image_size}^2, exec-horizon {exec_horizon}")
 
     from lerobot.cameras.realsense import RealSenseCameraConfig
 
@@ -227,7 +274,7 @@ def main() -> None:
 
     def _crop_resize(img, role: str):
         p = crop[role]
-        return resize_rgb(img, zoom=p["zoom"], x_shift=p["x"], y_shift=p["y"])
+        return resize_rgb(img, size=image_size, zoom=p["zoom"], x_shift=p["x"], y_shift=p["y"])
 
     print(f"[client] connecting robot(ZMQ {HOSTNAME}:{ROBOT_PORT}) + RealSense "
           f"agent={AGENT_CAMERA_SERIAL} wrist={WRIST_CAMERA_SERIAL} ... "
@@ -268,9 +315,8 @@ def main() -> None:
         in-place 쓰기가 아니다) 참조를 그대로 넘겨도 프레임이 찢어지지 않는다.
         """
         payload = {
-            "observation.state": [float(obs[k]) for k in JOINT_KEYS],
-            "observation.images.agent": _b64(_crop_resize(obs["agent"], "agent")),
-            "observation.images.wrist": _b64(_crop_resize(obs["wrist"], "wrist")),
+            STATE_KEY: [float(obs[k]) for k in JOINT_KEYS],
+            **{image_key(c): encode_image(_crop_resize(obs[c], c)) for c in cameras},
         }
         if args.proprio:
             q_cur = np.array([obs[k] for k in JOINT_KEYS[:7]], dtype=float)
@@ -299,14 +345,14 @@ def main() -> None:
     try:
         # ── 홈 복귀 램프 (수집기 _ramp_to와 동일 상수) ──
         print(f"[client] ramping to reset pose '{RESET_POSE}' ...")
-        for _ in range(int(HOME_TIMEOUT_S * FPS)):
+        for _ in range(int(HOME_TIMEOUT_S * fps)):
             obs = robot.get_observation()
             q = joints(obs)
             d = reset_q - q
             if np.abs(d).max() < 0.02:
                 break
-            command(q + np.clip(d, -RAMP_STEP, RAMP_STEP), GRIPPER_OPEN)
-            time.sleep(1.0 / FPS)
+            command(q + np.clip(d, -ramp_step, ramp_step), GRIPPER_OPEN)
+            time.sleep(1.0 / fps)
         else:
             raise RuntimeError("reset ramp did not converge")
         print("[client] at reset pose.")
@@ -320,7 +366,7 @@ def main() -> None:
         r.raise_for_status()
         print(f"[client] /reset ok: {r.json()['instruction']!r}")
 
-        dt = 1.0 / FPS
+        dt = 1.0 / fps
         K = max(0, args.lead_ticks)
         pending = None      # 진행 중인 백그라운드 추론 (Future)
         t_obs = 0.0         # pending을 만든 관측을 뜬 시각 — 청크 인덱스 0의 기준 시각
@@ -330,21 +376,29 @@ def main() -> None:
         # 팔이 홈 자세에서 정지 중이라 이 한 번의 정지는 무해하다.
         chunk = predict(robot.get_observation())
         ee_mode = chunk.shape[1] == 7   # 7=EE-delta(클라 재앵커+IK), 8=joint(passthrough)
+        if info and not args.waypoint and ee_mode != (info.action_type == EE_DELTA):
+            raise RuntimeError(f"/info says {info.action_type}[{info.action_dim}] but the chunk "
+                               f"has {chunk.shape[1]} columns -- refusing to guess")
         idx = 0
         n_replans = 1
-        if len(chunk) < args.exec_horizon:
+        if K > 0 and predict_ms[-1] > K * 1000 / fps:
+            # The bootstrap call includes connection setup, so this is pessimistic;
+            # but a lead shorter than inference stalls the arm at every chunk boundary.
+            print(f"[client] 주의: /predict {predict_ms[-1]:.0f} ms > lead budget {K*1000//fps} ms "
+                  f"-- consider --lead-ticks {int(np.ceil(predict_ms[-1] * fps / 1000))}")
+        if len(chunk) < exec_horizon:
             # 서버 청크가 요청보다 짧으면 슬라이스가 조용히 잘린다 -- 실제 재계획
             # 주기가 의도와 달라지므로 한 번은 눈에 보이게 알린다.
             print(f"[client] 주의: 서버 청크 {len(chunk)}개 < exec-horizon "
-                  f"{args.exec_horizon} — 실제로 쓰는 건 {len(chunk)}개")
+                  f"{exec_horizon} — 실제로 쓰는 건 {len(chunk)}개")
         print(f"[client] chunk {chunk.shape} mode={'ee' if ee_mode else 'joint'}, "
-              f"lead {K}틱(추론 예산 {K*1000//FPS} ms), "
-              f"재계획 {(min(len(chunk), args.exec_horizon) - K) / FPS:.2f}s")
+              f"lead {K}틱(추론 예산 {K*1000//fps} ms), "
+              f"재계획 {(min(len(chunk), exec_horizon) - K) / fps:.2f}s")
 
         deadline = time.monotonic() + args.max_seconds
         t_next = time.monotonic()
         while time.monotonic() < deadline:
-            horizon = min(len(chunk), args.exec_horizon)
+            horizon = min(len(chunk), exec_horizon)
 
             # (1) 청크 소진 → 교체. 관측시각으로부터 실제로 흐른 틱 수만큼 앞을 버린다.
             #     nominal이면 skip == K지만, 추론이 예산을 넘겼으면 그만큼 더 버린다 —
@@ -359,7 +413,7 @@ def main() -> None:
                     chunk = pending.result()
                     pending = None
                 n_replans += 1
-                horizon = min(len(chunk), args.exec_horizon)
+                horizon = min(len(chunk), exec_horizon)
                 skip = round((time.monotonic() - t_obs) / dt)
                 if skip >= horizon:
                     print(f"[client] 경고: 추론({predict_ms[-1]:.0f} ms)이 청크 길이를 넘겼다 "
@@ -399,7 +453,7 @@ def main() -> None:
         if predict_ms:
             p50, p95 = np.percentile(predict_ms, [50, 95])
             print(f"[client] /predict {p50:.0f} / p95 {p95:.0f} / max {max(predict_ms):.0f} ms "
-                  f"(예산 {K*1000//FPS} ms)")
+                  f"(예산 {K*1000//fps} ms)")
     except KeyboardInterrupt:
         print("\n[client] interrupted.")
     finally:
