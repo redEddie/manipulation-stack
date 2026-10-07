@@ -101,7 +101,8 @@ def encode_image(img: np.ndarray) -> dict:
 
 def decode_image(v: dict) -> np.ndarray:
     buf = base64.b64decode(v["base64"])
-    return np.frombuffer(buf, dtype=v["dtype"]).reshape(v["shape"])
+    # copy: frombuffer is read-only, and torch.from_numpy warns about that on every request
+    return np.frombuffer(buf, dtype=v["dtype"]).reshape(v["shape"]).copy()
 
 
 def decode_observation(raw: dict) -> dict:

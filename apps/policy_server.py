@@ -359,24 +359,60 @@ class PolicyServer:
     """Backend-agnostic endpoints. Single-threaded on purpose: one GPU, one robot,
     and requests must not interleave with /reset."""
 
-    def __init__(self, backend):
+    def __init__(self, backend, dump: str | None = None):
         self.backend = backend
         self.info = backend.info()
         self.info.validate()
         self._chunk: np.ndarray | None = None   # cached for /step
         self._idx = 0
         self.predict_ms: list[float] = []
+        self._episode_ms: list[float] = []
+        # --dump: what the policy actually saw, one folder per /reset. The first
+        # thing to compare with training frames when the robot behaves badly.
+        self._dump_root = Path(dump) if dump else None
+        self._dump_dir: Path | None = None
+
+    def reset(self, req: dict) -> dict:
+        if self._episode_ms:
+            print(f"[server] episode done: {len(self._episode_ms)} /predict, median "
+                  f"{np.median(self._episode_ms):.0f} ms, max {max(self._episode_ms):.0f} ms", flush=True)
+        self._episode_ms = []
+        instruction = self.backend.reset(req.get("instruction"))
+        self._chunk = None
+        print(f"[server] /reset: {instruction!r}", flush=True)
+        if self._dump_root:
+            self._dump_dir = self._dump_root / time.strftime("%Y%m%d_%H%M%S")
+            self._dump_dir.mkdir(parents=True, exist_ok=True)
+            (self._dump_dir / "instruction.txt").write_text(instruction + "\n")
+        return {"status": "ok", "instruction": instruction}
 
     def predict(self, req: dict) -> dict:
+        obs = decode_observation(req)
         t0 = time.perf_counter()
-        chunk = np.asarray(self.backend.predict(decode_observation(req)), dtype=float)
-        self.predict_ms.append((time.perf_counter() - t0) * 1000)
+        chunk = np.asarray(self.backend.predict(obs), dtype=float)
+        ms = (time.perf_counter() - t0) * 1000
+        self.predict_ms.append(ms)
+        self._episode_ms.append(ms)
         if len(self.predict_ms) % 50 == 1:
             p50 = float(np.median(self.predict_ms[-50:]))
             print(f"[server] /predict #{len(self.predict_ms)}: chunk {chunk.shape}, "
-                  f"{self.predict_ms[-1]:.0f} ms (median {p50:.0f})", flush=True)
+                  f"{ms:.0f} ms (median {p50:.0f})", flush=True)
+        if self._dump_dir:
+            self._dump(obs, chunk, ms)
         self._chunk, self._idx = chunk, 0
         return {"actions": chunk.tolist()}
+
+    def _dump(self, obs: dict, chunk: np.ndarray, ms: float) -> None:
+        from PIL import Image
+
+        n = len(self._episode_ms) - 1
+        for key, v in obs.items():
+            if key.startswith(IMAGE_KEY_PREFIX) and isinstance(v, np.ndarray):
+                Image.fromarray(v).save(self._dump_dir / f"{n:04d}_{key[len(IMAGE_KEY_PREFIX):]}.png")
+        rec = {"i": n, "t": time.time(), "ms": round(ms, 1), "state": obs.get(STATE_KEY),
+               "chunk": chunk.round(5).tolist()}
+        with open(self._dump_dir / "requests.jsonl", "a") as f:
+            f.write(json.dumps(rec) + "\n")
 
     def step(self, req: dict) -> dict:
         """One absolute joint action from the cached chunk, re-anchored to the given
@@ -422,8 +458,7 @@ class PolicyServer:
                 try:
                     req = json.loads(self.rfile.read(n) if n else b"{}")
                     if self.path == "/reset":
-                        resp = {"status": "ok", "instruction": srv.backend.reset(req.get("instruction"))}
-                        srv._chunk = None
+                        resp = srv.reset(req)
                     elif self.path == "/predict":
                         resp = srv.predict(req)
                     elif self.path == "/step":
@@ -462,6 +497,9 @@ def main() -> None:
     common.add_argument("--host", default="0.0.0.0")
     common.add_argument("--port", type=int, default=8080)
     common.add_argument("--device", default="cuda")
+    common.add_argument("--dump", default=None, metavar="DIR",
+                        help="save every request (images, state, returned chunk) under DIR, one "
+                             "folder per /reset -- to compare what the robot sent with training frames")
 
     lr = sub.add_parser("lerobot", parents=[common], help="LeRobot pretrained_model directory")
     lr.add_argument("--n-action-steps", type=int, default=None,
@@ -494,7 +532,7 @@ def main() -> None:
     t0 = time.perf_counter()
     backend.warmup()
     print(f"[server] ready ({time.perf_counter() - t0:.1f} s warmup)", flush=True)
-    PolicyServer(backend).run(args.host, args.port)
+    PolicyServer(backend, dump=args.dump).run(args.host, args.port)
 
 
 if __name__ == "__main__":
