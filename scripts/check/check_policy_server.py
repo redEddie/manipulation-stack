@@ -56,6 +56,11 @@ def main() -> int:
     ap.add_argument("--episodes", type=int, nargs="*", default=[])
     ap.add_argument("--manifest", help="JSON with an 'episode_indices' list")
     ap.add_argument("--limit", type=int, default=5)
+    ap.add_argument("--parity", action="store_true",
+                    help="also run the checkpoint locally, on the dataset sample exactly as offline "
+                         "evaluation does, and require the server's chunk to match it (server must be "
+                         "started with --seed; same machine, it loads /info's checkpoint path)")
+    ap.add_argument("--parity-tol", type=float, default=1e-3, help="max |server - offline| allowed")
     args = ap.parse_args()
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -98,14 +103,27 @@ def main() -> int:
     lo, hi = np.asarray(stats["min"]), np.asarray(stats["max"])
     margin = 0.1 * (hi - lo)
 
-    errs, per_dim, ms = [], [], []
+    offline = None
+    if args.parity:
+        seed = info.extra.get("seed")
+        if seed is None:
+            print("   --parity needs the server started with --seed")
+            return 1
+        offline = _OfflinePolicy(info.checkpoint, int(seed))
+
+    errs, per_dim, ms, parity = [], [], [], []
     print(f"3. {len(episodes)} episodes from {repo}")
     for ep in episodes:
         row = first_row[ep]
         sample = ds[row]
         obs = {STATE_KEY: sample[STATE_KEY].tolist()}
         for cam in info.cameras:
-            img = (sample[image_key(cam)].permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)
+            x = sample[image_key(cam)]
+            img = (x.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)
+            # The wire carries uint8; that is lossless only if the decoded frame was uint8/255.
+            lost = float((x.permute(1, 2, 0).numpy() - img / 255.0).__abs__().max())
+            if lost > 1e-6:
+                print(f"   ep {ep}: {cam} frame is not uint8/255 (max {lost:.2e}) -- uint8 wire is lossy here")
             obs[image_key(cam)] = encode_image(img)
         requests.post(f"{args.server}/reset", json={"instruction": sample["task"]}, timeout=30).raise_for_status()
         t0 = time.perf_counter()
@@ -116,6 +134,11 @@ def main() -> int:
             ok = False
             continue
         pred = np.asarray(r.json()["actions"], dtype=float)
+        if offline is not None:
+            ref = offline.predict(sample)[: len(pred)]
+            d = float(np.abs(pred - ref).max())
+            parity.append(d)
+            ok &= d <= args.parity_tol
         n = min(len(pred), ds.meta.episodes["length"][ep])
         gt = np.stack([np.asarray(cols["action"][row + i]) for i in range(n)])
         pred = pred[:n]
@@ -130,8 +153,43 @@ def main() -> int:
         print(f"   mean chunk L2 {np.mean(errs):.3f}; per-dim |err| {np.round(np.mean(per_dim, 0), 3).tolist()}")
         print(f"   round-trip median {np.median(ms):.0f} ms (budget at {info.fps} Hz with lead 2: "
               f"{2000 // info.fps} ms)")
+    if parity:
+        worst = max(parity)
+        print(f"4. parity with offline evaluation (seed {info.extra['seed']}): max |server - offline| "
+              f"{worst:.2e} over {len(parity)} chunks -- "
+              f"{'identical path, OK' if worst <= args.parity_tol else 'DIFFERENT'}")
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+class _OfflinePolicy:
+    """The checkpoint run the way offline evaluation runs it
+    (lerobot experiments/subset_bias/eval_action_following.py): dataset sample ->
+    unsqueeze -> task string -> preprocessor -> predict_action_chunk -> postprocessor."""
+
+    def __init__(self, ckpt: str, seed: int):
+        import torch
+        from lerobot.configs.policies import PreTrainedConfig
+        from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+
+        self.torch, self.seed = torch, seed
+        cfg = PreTrainedConfig.from_pretrained(ckpt)
+        cfg.pretrained_path = ckpt
+        cfg.device = "cuda"
+        self.policy = get_policy_class(cfg.type).from_pretrained(ckpt).to("cuda").eval()
+        self.pre, self.post = make_pre_post_processors(
+            policy_cfg=cfg, pretrained_path=ckpt,
+            preprocessor_overrides={"device_processor": {"device": "cuda"}})
+
+    def predict(self, sample: dict) -> np.ndarray:
+        torch = self.torch
+        batch = {k: v.unsqueeze(0).to("cuda") for k, v in sample.items() if isinstance(v, torch.Tensor)}
+        batch["task"] = sample["task"]
+        self.policy.reset()
+        torch.manual_seed(self.seed)
+        with torch.inference_mode():
+            out = self.post(self.policy.predict_action_chunk(self.pre(batch)))
+        return out.squeeze(0).float().cpu().numpy()
 
 
 if __name__ == "__main__":

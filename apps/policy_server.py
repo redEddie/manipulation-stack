@@ -69,7 +69,7 @@ class LeRobotBackend:
     """
 
     def __init__(self, ckpt: str, device: str = "cuda", n_action_steps: int | None = None,
-                 fill_from_state: list[str] | None = None):
+                 fill_from_state: list[str] | None = None, seed: int | None = None):
         import torch
         from lerobot.configs.policies import PreTrainedConfig
         from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
@@ -78,6 +78,7 @@ class LeRobotBackend:
         self._torch = torch
         self.ckpt = Path(ckpt)
         self.device = device
+        self.seed = seed
         train_cfg = json.loads((self.ckpt / "train_config.json").read_text())
 
         cfg = PreTrainedConfig.from_pretrained(self.ckpt)
@@ -110,19 +111,21 @@ class LeRobotBackend:
         self.instruction: str | None = None
 
     def _check_inputs(self, rename_map: dict) -> None:
-        """Every non-image input the policy needs must be something the client sends.
+        """Find declared non-image inputs the client does not send.
 
         Images the policy declares but the dataset never had (smolvla_base's camera3,
-        pi0's right_wrist) are padded by the policy itself. A missing *state-like*
-        input is different: a GR00T trained on this dataset without an explicit
-        input list also conditions on observation.commanded_state -- the GELLO leader
-        command, which does not exist when no one is teleoperating.
+        pi0's right_wrist) are padded by the policy itself. State-like inputs are
+        different. Training with --policy.type=<x> declares *every* dataset feature,
+        so observation.commanded_state -- the GELLO leader command, which does not
+        exist when no one is teleoperating -- shows up in input_features. Whether the
+        model actually reads it is the question; SmolVLA/pi0/pi0-FAST/GR00T read only
+        observation.state. warmup() settles it by running the model without them.
         """
         from lerobot.configs.types import FeatureType
 
         inverse = {v: k for k, v in rename_map.items()}
         sent = {STATE_KEY, *self.meta.camera_keys}
-        missing = []
+        self.unsent: list[str] = []
         for name, ft in self.cfg.input_features.items():
             src = inverse.get(name, name)
             if src in sent or ft.type is FeatureType.VISUAL:
@@ -131,12 +134,8 @@ class LeRobotBackend:
                 print(f"[server] WARNING: {src} is fed the measured state (--fill-from-state); "
                       f"training saw a different signal there", flush=True)
                 continue
-            missing.append(src)
-        if missing:
-            raise SystemExit(
-                f"checkpoint needs inputs the client does not send: {missing}. Retrain without "
-                f"them, or pass --fill-from-state {' '.join(missing)} to feed the measured joint "
-                f"state in their place (an approximation -- say so in any result).")
+            self.unsent.append(src)
+        self.unused_inputs: list[str] = []
 
     def info(self) -> PolicyInfo:
         return PolicyInfo(
@@ -144,7 +143,8 @@ class LeRobotBackend:
             image_size=self.image_size, cameras=self.cameras, state_dim=self.state_dim,
             action_type=JOINT_ABSOLUTE, action_dim=self.action_dim, chunk_size=self.n_action_steps,
             extra={"dataset": self.meta.repo_id, "model_chunk_size": self.cfg.chunk_size,
-                   "fill_from_state": self.fill_from_state})
+                   "fill_from_state": self.fill_from_state, "unused_inputs": self.unused_inputs,
+                   "seed": self.seed})
 
     def reset(self, instruction: str | None) -> str:
         if instruction:
@@ -174,16 +174,26 @@ class LeRobotBackend:
                     f"{key} is {img.dtype}{list(img.shape)}; this checkpoint was trained on uint8 "
                     f"[{self.image_size}, {self.image_size}, 3] -- resize on the client with the "
                     f"same resize_rgb the dataset was written with (GET /info gives the size)")
-            t = torch.from_numpy(np.ascontiguousarray(img)).to(self.device)
-            batch[key] = t.permute(2, 0, 1).float().div_(255.0)[None]
+            # Divide on the CPU, as LeRobotDataset does: CUDA divides by a scalar via its
+            # reciprocal, which moves ~27% of pixels by 1 ulp, and the flow-matching
+            # integration turns that into chunk differences of up to ~1e-2 rad.
+            t = torch.from_numpy(np.ascontiguousarray(img)).permute(2, 0, 1).float().div(255.0)
+            batch[key] = t[None].to(self.device)
         batch["task"] = self.instruction
+        if self.seed is not None:
+            torch.manual_seed(self.seed)   # same flow-matching noise every call (debug parity)
         with torch.inference_mode():
             chunk = self.post(self.policy.predict_action_chunk(self.pre(batch)))
         chunk = chunk.squeeze(0).float().cpu().numpy()
         return chunk[: self.n_action_steps]
 
     def warmup(self) -> None:
-        """One throwaway inference so the first real request does not pay for CUDA init."""
+        """One throwaway inference so the first real request does not pay for CUDA init.
+
+        It is also the test for declared-but-unsent inputs: the request carries only
+        what the client will send, so if the model needs anything else, it fails here,
+        before any robot is connected.
+        """
         s = self.image_size
         obs = {STATE_KEY: np.zeros(self.state_dim, np.float32),
                **{IMAGE_KEY_PREFIX + c: np.zeros((s, s, 3), np.uint8) for c in self.cameras}}
@@ -191,9 +201,22 @@ class LeRobotBackend:
         try:
             self.policy.reset()
             self.predict(obs)
+        except Exception as e:
+            if self.unsent:
+                raise SystemExit(
+                    f"checkpoint declares inputs the client does not send: {self.unsent}, and "
+                    f"inference without them fails ({type(e).__name__}: {e}). Retrain without "
+                    f"them, or pass --fill-from-state {' '.join(self.unsent)} to feed the "
+                    f"measured joint state in their place (an approximation -- say so in any "
+                    f"result).") from e
+            raise
         finally:
             self.instruction = prev
             self.policy.reset()
+        if self.unsent:
+            self.unused_inputs = list(self.unsent)
+            print(f"[server] declared but not read by the model (inference runs without them): "
+                  f"{self.unused_inputs}", flush=True)
 
 
 # ───────────────────────────── mamba backend ─────────────────────────────
@@ -445,6 +468,9 @@ def main() -> None:
                     help="actions returned per /predict (default: the checkpoint's n_action_steps)")
     lr.add_argument("--fill-from-state", nargs="+", default=[], metavar="KEY",
                     help="feed the measured state into these inputs (e.g. observation.commanded_state)")
+    lr.add_argument("--seed", type=int, default=None,
+                    help="reseed before every /predict so flow-matching noise repeats -- for checking "
+                         "the server against offline evaluation, not for the robot")
 
     mb = sub.add_parser("mamba", parents=[common], help="mamba-embeddingvla .pt checkpoint")
     mb.add_argument("--mamba-root", required=True, help="mamba-embeddingvla checkout")
@@ -457,7 +483,7 @@ def main() -> None:
 
     args = ap.parse_args()
     if args.backend == "lerobot":
-        backend = LeRobotBackend(args.ckpt, args.device, args.n_action_steps, args.fill_from_state)
+        backend = LeRobotBackend(args.ckpt, args.device, args.n_action_steps, args.fill_from_state, args.seed)
     else:
         if args.tf32:
             import torch
