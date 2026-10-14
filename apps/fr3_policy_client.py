@@ -171,7 +171,27 @@ def raw_to_joint(d: np.ndarray, q_meas: np.ndarray, ee_mode: bool) -> np.ndarray
 
     ee: re-anchor the EE-delta to the LATEST measured pose + IK. joint: passthrough.
     Identical to the server's step(); the difference is q_meas is fresh here."""
-    return ee_step_to_joint(d, q_meas[:7]) if ee_mode else np.asarray(d, dtype=float)
+    d = np.asarray(d, dtype=float)
+    q = np.asarray(q_meas, dtype=float)[:7]
+    if d.shape != (7 if ee_mode else 8,) or q.shape != (7,):
+        raise ValueError(f"invalid action/pose shape: {d.shape}, {q.shape}")
+    if not np.isfinite(d).all() or not np.isfinite(q).all():
+        raise ValueError("action and measured pose must be finite")
+    action = ee_step_to_joint(d, q) if ee_mode else d
+    if np.asarray(action).shape != (8,) or not np.isfinite(action).all():
+        raise ValueError("joint action must have shape (8,) and be finite")
+    return action
+
+
+def _read_chunk(response: dict, info: PolicyInfo | None) -> np.ndarray:
+    """Reject malformed predictions before indexing, IK or robot commands."""
+    chunk = np.asarray(response["actions"], dtype=float)
+    dims = (info.action_dim,) if info else (7, 8)
+    if chunk.ndim != 2 or chunk.shape[0] == 0 or chunk.shape[1] not in dims:
+        raise ValueError(f"action chunk must have shape (K, {dims}), K > 0; got {chunk.shape}")
+    if not np.isfinite(chunk).all():
+        raise ValueError("action chunk must be finite")
+    return chunk
 
 
 def dry_run(url: str, instruction: str, n: int = 5) -> None:
@@ -198,7 +218,7 @@ def dry_run(url: str, instruction: str, n: int = 5) -> None:
         r.raise_for_status()
         ms = (time.perf_counter() - t0) * 1000
         rtt.append(ms)
-        chunk = np.asarray(r.json()["actions"], dtype=float)  # [K, dim]
+        chunk = _read_chunk(r.json(), info)  # [K, dim]
         ee_mode = chunk.shape[1] == 7
         a0 = raw_to_joint(chunk[0], state, ee_mode)  # local step, q_meas = reset pose
         mode = "EE-delta+local-step" if ee_mode else "joint-absolute"
@@ -298,6 +318,8 @@ def main() -> None:
         return np.array([obs[k] for k in JOINT_KEYS[:7]])
 
     def command(q7: np.ndarray, grip: float) -> None:
+        if np.asarray(q7).shape != (7,) or not np.isfinite(q7).all() or not np.isfinite(grip):
+            raise ValueError("robot command must contain seven finite joints and a finite gripper")
         robot.send_action(dict(zip(JOINT_KEYS, np.append(q7, grip).tolist())))
 
     session = requests.Session()   # keep-alive — 매 요청 TCP 핸드셰이크 제거
@@ -328,7 +350,7 @@ def main() -> None:
         r = session.post(f"{args.server}/predict", json=payload, timeout=60)
         r.raise_for_status()
         predict_ms.append((time.perf_counter() - t0) * 1000)
-        chunk = np.asarray(r.json()["actions"], dtype=float)  # [K, dim] raw
+        chunk = _read_chunk(r.json(), info)  # [K, dim] raw
         if args.waypoint and chunk.shape[1] == 7:
             # waypoint 규약: 청크 전체가 **이 관측의 pose** 를 기준으로 표현돼
             # 있다. 앵커가 스텝마다 움직이지 않으므로 여기(워커 스레드)서 한 번만
@@ -410,7 +432,9 @@ def main() -> None:
                 else:
                     if not pending.done():
                         n_late += 1                 # 예산 초과 — 여기서 경계 정지가 난다
-                    chunk = pending.result()
+                    # Do not let a slow/failed HTTP worker keep the control loop
+                    # waiting beyond its requested run time before it can hold.
+                    chunk = pending.result(timeout=max(0.0, deadline - time.monotonic()))
                     pending = None
                 n_replans += 1
                 horizon = min(len(chunk), exec_horizon)
@@ -457,9 +481,18 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n[client] interrupted.")
     finally:
-        pool.shutdown(wait=True, cancel_futures=True)
-        robot.disconnect()
-        print("[client] disconnected.")
+        # Stopping commands alone leaves the node chasing its last target. Hold
+        # before waiting for in-flight HTTP work, including on network failures.
+        try:
+            robot.hold()
+        except Exception as e:
+            print(f"[client] WARNING: hold failed: {type(e).__name__}: {e}", flush=True)
+        try:
+            pool.shutdown(wait=True, cancel_futures=True)
+        finally:
+            session.close()
+            robot.disconnect()
+            print("[client] disconnected.")
 
 
 if __name__ == "__main__":

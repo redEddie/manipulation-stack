@@ -50,6 +50,8 @@ from mstack.comm.policy_protocol import (  # noqa: E402
     decode_observation,
 )
 
+REQUEST_TIMEOUT_S = 60.0  # Idle HTTP sockets must not monopolize this single-threaded server.
+
 
 class RequestError(Exception):
     """A malformed or incompatible request -- answered with HTTP 400, not 500."""
@@ -161,6 +163,8 @@ class LeRobotBackend:
         state = np.asarray(obs.get(STATE_KEY, []), dtype=np.float32)
         if state.shape != (self.state_dim,):
             raise RequestError(f"{STATE_KEY} must have {self.state_dim} values, got {state.shape}")
+        if not np.isfinite(state).all():
+            raise RequestError(f"{STATE_KEY} must be finite")
         batch = {STATE_KEY: torch.from_numpy(state)[None].to(self.device)}
         for key in self.fill_from_state:
             batch[key] = batch[STATE_KEY]
@@ -387,9 +391,16 @@ class PolicyServer:
         return {"status": "ok", "instruction": instruction}
 
     def predict(self, req: dict) -> dict:
+        # A failed replan must not leave /step serving the previous prediction.
+        self._chunk = None
         obs = decode_observation(req)
         t0 = time.perf_counter()
         chunk = np.asarray(self.backend.predict(obs), dtype=float)
+        if chunk.ndim != 2 or chunk.shape[0] == 0 or chunk.shape[1] != self.info.action_dim:
+            raise ValueError(f"backend action chunk must have shape (K, {self.info.action_dim}), "
+                             f"K > 0; got {chunk.shape}")
+        if not np.isfinite(chunk).all():
+            raise ValueError("backend action chunk must be finite")
         ms = (time.perf_counter() - t0) * 1000
         self.predict_ms.append(ms)
         self._episode_ms.append(ms)
@@ -439,6 +450,8 @@ class PolicyServer:
         srv = self
 
         class Handler(BaseHTTPRequestHandler):
+            timeout = REQUEST_TIMEOUT_S
+
             def _send(self, code: int, body: dict) -> None:
                 data = json.dumps(body).encode()
                 self.send_response(code)
