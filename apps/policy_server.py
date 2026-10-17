@@ -43,6 +43,8 @@ import numpy as np  # noqa: E402
 
 from mstack.comm.policy_protocol import (  # noqa: E402
     EE_DELTA,
+    EE_RELATIVE_WAYPOINT,
+    ActionSpec,
     IMAGE_KEY_PREFIX,
     JOINT_ABSOLUTE,
     STATE_KEY,
@@ -143,7 +145,8 @@ class LeRobotBackend:
         return PolicyInfo(
             policy=self.cfg.type, checkpoint=str(self.ckpt), fps=int(self.meta.fps),
             image_size=self.image_size, cameras=self.cameras, state_dim=self.state_dim,
-            action_type=JOINT_ABSOLUTE, action_dim=self.action_dim, chunk_size=self.n_action_steps,
+            action_type=JOINT_ABSOLUTE if self.cfg.type == "smolvla" else "unspecified",
+            action_dim=self.action_dim, chunk_size=self.n_action_steps,
             extra={"dataset": self.meta.repo_id, "model_chunk_size": self.cfg.chunk_size,
                    "fill_from_state": self.fill_from_state, "unused_inputs": self.unused_inputs,
                    "seed": self.seed})
@@ -272,9 +275,8 @@ class MambaBackend:
         self.model.eval()
         assert self.model.action_scaler.fitted, "action_scaler not fitted in ckpt!"
         self.action_dim = self.model.action_emb.weight.shape[1]
-        # 7-dim = EE-frame delta policy; the client re-anchors to the measured pose + IK.
         print(f"[server] action_dim={self.action_dim} gripper_dims={self.model.gripper_dims} "
-              f"chunk={self.chunk_size} mode={'EE-delta' if self.action_dim == 7 else 'joint-absolute'}")
+              f"chunk={self.chunk_size}; postprocessed action meaning requires ActionSpec")
 
         self.text_encoder, self.tokenizer = load_gemma(device)
         self.text_encoder.eval()
@@ -297,7 +299,7 @@ class MambaBackend:
         return PolicyInfo(
             policy="mamba-vlajepa", checkpoint=str(self.ckpt), fps=self.fps, image_size=256,
             cameras=["agent", "wrist"], state_dim=8,
-            action_type=EE_DELTA if self.action_dim == 7 else JOINT_ABSOLUTE,
+            action_type="unspecified",
             action_dim=int(self.action_dim), chunk_size=int(self.chunk_size),
             extra={"n_inference_steps": self.n_inference_steps})
 
@@ -363,9 +365,16 @@ class PolicyServer:
     """Backend-agnostic endpoints. Single-threaded on purpose: one GPU, one robot,
     and requests must not interleave with /reset."""
 
-    def __init__(self, backend, dump: str | None = None):
+    def __init__(self, backend, dump: str | None = None, action_spec: ActionSpec | None = None):
         self.backend = backend
         self.info = backend.info()
+        if action_spec is None and self.info.policy.lower() == "smolvla":
+            action_spec = ActionSpec(JOINT_ABSOLUTE, 1.0 / self.info.fps)
+        if action_spec is not None:
+            if action_spec.action_dim != self.info.action_dim:
+                raise ValueError("ActionSpec dimension disagrees with model output")
+            self.info.action_type = action_spec.kind
+            self.info.action_spec = action_spec.to_dict()
         self.info.validate()
         self._chunk: np.ndarray | None = None   # cached for /step
         self._idx = 0
@@ -388,6 +397,7 @@ class PolicyServer:
             self._dump_dir = self._dump_root / time.strftime("%Y%m%d_%H%M%S")
             self._dump_dir.mkdir(parents=True, exist_ok=True)
             (self._dump_dir / "instruction.txt").write_text(instruction + "\n")
+            (self._dump_dir / "policy_info.json").write_text(json.dumps(self.info.to_dict(), indent=2))
         return {"status": "ok", "instruction": instruction}
 
     def predict(self, req: dict) -> dict:
@@ -411,7 +421,10 @@ class PolicyServer:
         if self._dump_dir:
             self._dump(obs, chunk, ms)
         self._chunk, self._idx = chunk, 0
-        return {"actions": chunk.tolist()}
+        out = {"actions": chunk.tolist()}
+        if "control_context" in req:
+            out["control_context"] = req["control_context"]
+        return out
 
     def _dump(self, obs: dict, chunk: np.ndarray, ms: float) -> None:
         from PIL import Image
@@ -421,13 +434,15 @@ class PolicyServer:
             if key.startswith(IMAGE_KEY_PREFIX) and isinstance(v, np.ndarray):
                 Image.fromarray(v).save(self._dump_dir / f"{n:04d}_{key[len(IMAGE_KEY_PREFIX):]}.png")
         rec = {"i": n, "t": time.time(), "ms": round(ms, 1), "state": obs.get(STATE_KEY),
-               "chunk": chunk.round(5).tolist()}
+               "chunk": chunk.round(5).tolist(), "control_context": obs.get("control_context")}
         with open(self._dump_dir / "requests.jsonl", "a") as f:
             f.write(json.dumps(rec) + "\n")
 
     def step(self, req: dict) -> dict:
         """One absolute joint action from the cached chunk, re-anchored to the given
         measured state in EE mode. The client normally does this locally."""
+        if self.info.action_type == EE_RELATIVE_WAYPOINT:
+            raise RequestError("EE relative waypoints require /predict and the ActionSpec QP client")
         if self._chunk is None:
             raise RequestError("/step before /predict")
         d = self._chunk[min(self._idx, len(self._chunk) - 1)]
@@ -439,6 +454,8 @@ class PolicyServer:
 
     def infer(self, req: dict) -> dict:
         """Legacy combined path (policy + fixed-anchor whole-chunk IK). Prefer /predict."""
+        if self.info.action_type == EE_RELATIVE_WAYPOINT:
+            raise RequestError("/infer cannot execute EE waypoints; use /predict with the QP client")
         out = self.predict(req)
         if self.info.action_type == EE_DELTA:
             from mstack.robots.fr3_kinematics import ee_chunk_to_joint_chunk
@@ -510,6 +527,7 @@ def main() -> None:
     common.add_argument("--host", default="0.0.0.0")
     common.add_argument("--port", type=int, default=8080)
     common.add_argument("--device", default="cuda")
+    common.add_argument("--action-spec", type=Path, help="postprocessed-action manifest; otherwise read checkpoint action_spec.json")
     common.add_argument("--dump", default=None, metavar="DIR",
                         help="save every request (images, state, returned chunk) under DIR, one "
                              "folder per /reset -- to compare what the robot sent with training frames")
@@ -542,10 +560,25 @@ def main() -> None:
             torch.backends.cudnn.allow_tf32 = True
         backend = MambaBackend(args.ckpt, args.mamba_root, args.device, args.n_inference_steps,
                                args.instruction, args.cuda_graph, args.fps, args.debug_dump)
+    info = backend.info()
+    manifest = args.action_spec
+    if manifest is None:
+        checkpoint = Path(args.ckpt)
+        candidate = (checkpoint if checkpoint.is_dir() else checkpoint.parent) / "action_spec.json"
+        if candidate.exists():
+            manifest = candidate
+    if manifest is not None:
+        action_spec = ActionSpec.from_dict(json.loads(manifest.read_text()))
+    elif info.policy.lower() == "smolvla":
+        action_spec = ActionSpec(JOINT_ABSOLUTE, 1.0/info.fps)
+    else:
+        ap.error("this model needs --action-spec (or checkpoint action_spec.json); "
+                 "EE waypoint units/anchor must not be guessed from the model name or action dimension")
+    server = PolicyServer(backend, dump=args.dump, action_spec=action_spec)
     t0 = time.perf_counter()
     backend.warmup()
     print(f"[server] ready ({time.perf_counter() - t0:.1f} s warmup)", flush=True)
-    PolicyServer(backend, dump=args.dump).run(args.host, args.port)
+    server.run(args.host, args.port)
 
 
 if __name__ == "__main__":

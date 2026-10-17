@@ -158,9 +158,19 @@ class FR3ZMQRobot(Robot):
         pass
 
     def get_observation(self) -> dict[str, Any]:
+        return self._get_observation(with_policy_state=False)
+
+    def get_policy_observation(self) -> dict[str, Any]:
+        return self._get_observation(with_policy_state=True)
+
+    def _get_observation(self, *, with_policy_state: bool) -> dict[str, Any]:
         obs = self._client.get_observations()
         pos = np.asarray(obs[ROBOT_JOINT_POSITIONS], dtype=float)  # 7 rad + gripper 0..1
         out: dict[str, Any] = dict(zip(JOINT_KEYS, pos.tolist()))
+        # Private metadata is consumed by the QP deployment client only. Training
+        # observations continue to use their declared joint/camera feature keys.
+        if with_policy_state and "policy_state" in obs:
+            out["_policy_state"] = obs["policy_state"]
         for cam_key, cam in self.cameras.items():
             out[cam_key] = cam.read_latest()
         return out
@@ -177,6 +187,18 @@ class FR3ZMQRobot(Robot):
         reach past this wrapper for the ZMQ client.
         """
         self._client.hold()
+
+    def enable_policy(self, action_spec):
+        return self._client.enable_policy(action_spec)
+
+    def submit_policy_chunk(self, **kwargs):
+        return self._client.submit_policy_chunk(**kwargs)
+
+    def policy_status(self, epoch):
+        return self._client.policy_status(epoch)
+
+    def disable_policy(self, epoch):
+        return self._client.disable_policy(epoch)
 
     def disconnect(self) -> None:
         for cam in self.cameras.values():

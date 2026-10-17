@@ -59,6 +59,7 @@ never fired on one. Never add a layer here without saying what it misses.
 | Layer | Where | Catches | Does NOT catch |
 |---|---|---|---|
 | Collision reflex (100/40 N·m, 100 N) | `robots/franka_fr3.py` | impacts, abnormal wrist load | anything below threshold; deliberate contact is meant to pass |
+| Policy QP + common servo | `robots/policy_control/` ([design](docs/policy-qp.md)) | continuous commanded q/v/a/jerk bounds, finite stopping plan, stale/late policy results | geometric collisions, wrong goals, torque/contact limits, actual robot tracking or hard RT scheduling |
 | Reference filter (v 1.5 / a 6 / jerk 3000) | `robots/franka_fr3.py` | commands the arm cannot execute | *where* the command goes — it will faithfully chase a wrong pose at v_max |
 | Leader joint-limit wall | `robots/joint_limit_wall.py` | leader poses the follower cannot reach; cable wind-up | anything inside the follower's range |
 | Leader-drop guard (pitch L2 > 2.1 rad/s over 100 ms) | `collect/leader_guard.py` → `hold()` | a released or runaway leader during recording | roll-only motion (gravity exerts no moment there); the VLA path, which has no leader |

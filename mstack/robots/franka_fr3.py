@@ -359,6 +359,9 @@ class FrankaFR3Robot(Robot):
         self._kp = float(filter_wn) ** 2
         self._kd = 2.0 * float(filter_wn)
         self._dt = 1e-3  # FCI control period (1 kHz)
+        self._policy_runtime = None
+        self._acc_cmd = np.zeros(7)
+        self._state_monotonic = time.monotonic()
 
         rt = pf.RealtimeConfig.kEnforce if enforce_rt else pf.RealtimeConfig.kIgnore
         print(f"[FR3] connecting to {robot_ip} (realtime={'enforce' if enforce_rt else 'ignore'})")
@@ -522,10 +525,95 @@ class FrankaFR3Robot(Robot):
         joint_state = np.asarray(joint_state, dtype=float)
         q_des = joint_state[:7]
 
+        if joint_state.shape not in ((7,), (8,)) or not np.isfinite(joint_state).all():
+            raise ValueError("joint command must have seven or eight finite values")
         with self._lock:
+            if self._policy_runtime is not None:
+                raise RuntimeError("QP policy owns the arm; hold and disable it before joint commands")
             self._desired_q = q_des.copy()
             if self._use_gripper and len(joint_state) >= 8:
                 self._gripper_target = float(np.clip(joint_state[7], 0.0, 1.0))
+
+    def enable_policy(self, action_spec: dict) -> dict:
+        """Enter QP mode at rest. Dependency/solver startup happens before ownership changes."""
+        from mstack.comm.policy_protocol import ActionSpec, EE_RELATIVE_WAYPOINT
+        from mstack.robots.policy_control.runtime import PolicyRuntime
+        from mstack.robots.policy_control.servo import CommonServo
+        from mstack.robots.policy_control.trajectory import Settings
+
+        spec = ActionSpec.from_dict(action_spec)
+        if self._read_only or self._control_error is not None:
+            raise RuntimeError("QP requires a live writable robot node")
+
+        def check_rest():
+            if self._policy_runtime is not None:
+                raise RuntimeError("policy session already active")
+            if (np.max(abs(self._qd_cmd)) > 1e-6 or np.max(abs(self._acc_cmd)) > 1e-4
+                    or np.max(abs(self._desired_q-self._q_cmd)) > 1e-5):
+                raise RuntimeError("QP entry requires the existing controller to settle at rest")
+            if np.max(abs(self._q-self._q_cmd)) > .05:
+                raise RuntimeError("QP entry measured-command gap exceeds 0.05 rad")
+            if time.monotonic()-self._state_monotonic > .1:
+                raise RuntimeError("robot state is stale")
+
+        with self._lock:
+            check_rest()
+            q = self._q_cmd.copy()
+            grip = self._gripper_target if self._use_gripper else 0.
+            measured_q, measured_pose = self._q.copy(), self._ee_pose.copy()
+        if spec.kind == EE_RELATIVE_WAYPOINT:
+            from mstack.robots.fr3_kinematics import fk, _rot_to_axis_angle
+            model_pose = fk(measured_q)
+            actual_pose = measured_pose.reshape(4, 4, order="F")
+            if (np.linalg.norm(model_pose[:3, 3]-actual_pose[:3, 3]) > .01
+                    or np.linalg.norm(_rot_to_axis_angle(model_pose[:3, :3].T @ actual_pose[:3, :3])) > .05):
+                raise RuntimeError("calibrated EE frame disagrees with libfranka; recalibrate before EE QP")
+        settings = Settings(velocity=min(self._v_max, 1.5), acceleration=min(self._a_max, 6.),
+                            jerk=min(self._j_max, 3000.))
+        runtime = PolicyRuntime(spec, q, grip, settings)
+        try:
+            with self._lock:
+                check_rest()
+                # Read again after spawned-worker startup; never initialize from
+                # an old measured pose or reset the moving command state.
+                runtime.servo = CommonServo(self._q_cmd.copy(), runtime.epoch, settings, grip)
+                self._policy_runtime = runtime
+            runtime.start()
+        except Exception:
+            runtime.close()
+            with self._lock:
+                if self._policy_runtime is runtime:
+                    self._policy_runtime = None
+            raise
+        return {"epoch": runtime.epoch, "action_spec": spec.to_dict()}
+
+    def submit_policy_chunk(self, **kwargs) -> dict:
+        runtime = self._policy_runtime
+        if runtime is None:
+            raise RuntimeError("QP policy is not enabled")
+        return {"accepted": runtime.submit(**kwargs)}
+
+    def policy_status(self, epoch: str) -> dict:
+        runtime = self._policy_runtime
+        if runtime is None:
+            raise RuntimeError("QP policy is not enabled")
+        if self._control_error is not None:
+            runtime.hold("robot control loop failed")
+            raise RuntimeError(self._control_error)
+        return runtime.status(epoch)
+
+    def disable_policy(self, epoch: str) -> dict:
+        runtime = self._policy_runtime
+        if runtime is None:
+            return {"disabled": True}
+        status = runtime.status(epoch)
+        if not status["held"] or not status["stopped"]:
+            raise RuntimeError("hold the QP session and wait for terminal rest before disabling")
+        with self._lock:
+            self._desired_q = self._q_cmd.copy()
+            self._policy_runtime = None
+        runtime.close()
+        return {"disabled": True}
 
     def init_gripper(self) -> dict:
         """Home the hand and return its measured stroke. **Moves the fingers.**
@@ -555,7 +643,10 @@ class FrankaFR3Robot(Robot):
         return {"max_width": width_max, "width": float(gs.width)}
 
     def hold(self) -> None:
-        """지금 있는 자리에 선다. 상위 층의 급정거가 쓰는 원시 동작.
+        """Request a bounded stop; this is not an emergency-stop primitive.
+
+        QP mode latches hold and finishes the active validated stopping plan.
+        The legacy filter behavior below applies only outside QP ownership.
 
         설정점을 **필터의 현재 출력**으로 래치한다. 갈 곳이 없어진 필터가
         자기 저크·가속 한계 안에서 스스로 감속한다 -- v_max/a_max 로 약
@@ -578,6 +669,10 @@ class FrankaFR3Robot(Robot):
         멈춘 상태를 래치하지 않는다 -- 다음 ``command_joint_state`` 가 오면
         그대로 이어진다. 다시 태울 조건(게이트 재진입)은 부르는 쪽의 몫이다.
         """
+        runtime = self._policy_runtime
+        if runtime is not None:
+            runtime.hold()
+            return
         with self._lock:
             self._desired_q = self._q_cmd.copy()
 
@@ -597,6 +692,9 @@ class FrankaFR3Robot(Robot):
             dq = self._dq.copy()
             pose = self._ee_pose.copy()
             state_time = self._state_time
+            policy_state = {"node_time": self._state_monotonic, "q": q.copy(),
+                            "commanded_q": self._q_cmd.copy(), "commanded_v": self._qd_cmd.copy(),
+                            "commanded_a": self._acc_cmd.copy()}
             gripper_norm = 1.0 - self._gripper_state_width / self._gripper_width_max
             ft = {k: v.copy() for k, v in self._ft.items()}
         if self._use_gripper:
@@ -610,6 +708,7 @@ class FrankaFR3Robot(Robot):
             ROBOT_EE_POS_QUAT: self._pose_to_pos_quat(pose),
             ROBOT_GRIPPER_POSITION: np.array(gripper_norm),
             ROBOT_STATE_TIME: float(state_time),
+            "policy_state": policy_state,
         }
         # 포스·토크: 필드를 노출하는 pylibfranka 빌드에서만 키가 존재한다.
         # 소비자(mstack.collect.worker._get_obs)는 .get() 으로 읽으므로 키 부재는
@@ -748,6 +847,7 @@ class FrankaFR3Robot(Robot):
                 t_wall = time.time()
                 with self._lock:
                     self._state_time = t_wall
+                    self._state_monotonic = time.monotonic()
                     self._q = np.asarray(st.q, dtype=float)
                     self._dq = np.asarray(st.dq, dtype=float)
                     self._ee_pose = np.asarray(st.O_T_EE, dtype=float)
@@ -828,6 +928,7 @@ class FrankaFR3Robot(Robot):
                 with self._lock:
                     target = self._desired_q.copy()
                     self._state_time = t_wall
+                    self._state_monotonic = t_now
                     self._q = np.asarray(state.q, dtype=float)
                     self._dq = np.asarray(state.dq, dtype=float)
                     self._ee_pose = np.asarray(state.O_T_EE, dtype=float)
@@ -839,57 +940,67 @@ class FrankaFR3Robot(Robot):
                 # 틱에서 맞물려야 나중에 맞대 볼 수 있다.
                 raw_pub.send(state, target, q_cmd)
 
-                # Critically-damped second-order reference filter, saturated in
-                # jerk, acceleration and velocity -> smooth, bounded command.
-                #
-                # The jerk clamp is what keeps the robot from tripping
-                # joint_motion_generator_acceleration_discontinuity: the leader
-                # setpoint is a noisy 100 Hz staircase, so an unclamped acc
-                # flips between +/-a_max on adjacent ticks, which is a jerk of
-                # 2*a_max/dt -- far past franka::kMaxJointJerk.
-                err = target - q_cmd
-                acc_target = np.clip(
-                    self._kp * err - self._kd * qd_cmd, -self._a_max, self._a_max
-                )
-                # 속도 상한에 닿기 전에 가속을 미리 줄인다. 없으면 v_max 에
-                # 닿는 순간 가속이 한 틱에 꺾여 저크가 로봇 한계를 넘는다.
-                #
-                # 연속시간 공식 sqrt(2 j gap) 은 **두 가지를 빠뜨린다** (2026-09-10
-                # 실측으로 확인). 조작자가 일부러 크게 움직여 반사를 유도한
-                # 로그에서 저크 5105 rad/s^3 이 나왔고 (로봇 한계 5000), 원인이
-                # 이것이었다:
-                #
-                # 1. **이산 보정.** 가속을 a 에서 0 으로 저크 j 로 내리는 데
-                #    a/(j dt) 틱이 걸리고, 그동안 속도가 a^2/(2j) 가 아니라
-                #    a^2/(2j) + a dt/2 만큼 는다.
-                # 2. **당해 틱 소비.** 지금 틱에도 가속 a 가 속도를 a dt 만큼
-                #    올린다. 그 몫을 gap 에서 먼저 빼야 한다.
-                #
-                # 둘을 넣어 a^2/(2j) + a dt/2 <= gap - |a_prev| dt 를 a 에 대해
-                # 풀면 아래 식이다. 실측 재생: 5105 -> 3000 (초과 0틱), 가속
-                # 상한 6.0 은 그대로라 성능 손실이 없다. 스파이크가 없던 창은
-                # 그대로 3000 이다.
-                #
-                # 옛 식이 늦게 걸린 이유: gap < a_max^2/(2j) = 0.006 rad/s 에서만
-                # 개입하는데, 6 rad/s^2 로 달려오면 그 구간이 한 틱뿐이고 저크
-                # 클램프는 한 틱에 j dt = 3 밖에 못 바꾼다.
-                lag = np.abs(acc_prev) * dt
-                gap_up = np.maximum(self._v_max - qd_cmd - lag, 0.0)
-                gap_dn = np.maximum(self._v_max + qd_cmd - lag, 0.0)
-                jdt = self._j_max * dt
-                acc_up = (-jdt + np.sqrt(jdt * jdt + 8.0 * self._j_max * gap_up)) / 2.0
-                acc_dn = (-jdt + np.sqrt(jdt * jdt + 8.0 * self._j_max * gap_dn)) / 2.0
-                acc_target = np.clip(acc_target, -acc_dn, acc_up)
-                dacc_max = self._j_max * dt
-                acc = np.clip(acc_target, acc_prev - dacc_max, acc_prev + dacc_max)
+                runtime = self._policy_runtime
+                if runtime is not None:
+                    # The QP already constrains this exact polynomial. Do not
+                    # cascade the legacy filter or clip its output a second time.
+                    command_state, grip = runtime.step(self._q, t_now)
+                    q_cmd, qd_cmd, acc_prev = command_state
+                    if self._use_gripper:
+                        with self._lock:
+                            self._gripper_target = grip
+                else:
+                    # Critically-damped second-order reference filter, saturated in
+                    # jerk, acceleration and velocity -> smooth, bounded command.
+                    #
+                    # The jerk clamp is what keeps the robot from tripping
+                    # joint_motion_generator_acceleration_discontinuity: the leader
+                    # setpoint is a noisy 100 Hz staircase, so an unclamped acc
+                    # flips between +/-a_max on adjacent ticks, which is a jerk of
+                    # 2*a_max/dt -- far past franka::kMaxJointJerk.
+                    err = target - q_cmd
+                    acc_target = np.clip(
+                        self._kp * err - self._kd * qd_cmd, -self._a_max, self._a_max
+                    )
+                    # 속도 상한에 닿기 전에 가속을 미리 줄인다. 없으면 v_max 에
+                    # 닿는 순간 가속이 한 틱에 꺾여 저크가 로봇 한계를 넘는다.
+                    #
+                    # 연속시간 공식 sqrt(2 j gap) 은 **두 가지를 빠뜨린다** (2026-09-10
+                    # 실측으로 확인). 조작자가 일부러 크게 움직여 반사를 유도한
+                    # 로그에서 저크 5105 rad/s^3 이 나왔고 (로봇 한계 5000), 원인이
+                    # 이것이었다:
+                    #
+                    # 1. **이산 보정.** 가속을 a 에서 0 으로 저크 j 로 내리는 데
+                    #    a/(j dt) 틱이 걸리고, 그동안 속도가 a^2/(2j) 가 아니라
+                    #    a^2/(2j) + a dt/2 만큼 는다.
+                    # 2. **당해 틱 소비.** 지금 틱에도 가속 a 가 속도를 a dt 만큼
+                    #    올린다. 그 몫을 gap 에서 먼저 빼야 한다.
+                    #
+                    # 둘을 넣어 a^2/(2j) + a dt/2 <= gap - |a_prev| dt 를 a 에 대해
+                    # 풀면 아래 식이다. 실측 재생: 5105 -> 3000 (초과 0틱), 가속
+                    # 상한 6.0 은 그대로라 성능 손실이 없다. 스파이크가 없던 창은
+                    # 그대로 3000 이다.
+                    #
+                    # 옛 식이 늦게 걸린 이유: gap < a_max^2/(2j) = 0.006 rad/s 에서만
+                    # 개입하는데, 6 rad/s^2 로 달려오면 그 구간이 한 틱뿐이고 저크
+                    # 클램프는 한 틱에 j dt = 3 밖에 못 바꾼다.
+                    lag = np.abs(acc_prev) * dt
+                    gap_up = np.maximum(self._v_max - qd_cmd - lag, 0.0)
+                    gap_dn = np.maximum(self._v_max + qd_cmd - lag, 0.0)
+                    jdt = self._j_max * dt
+                    acc_up = (-jdt + np.sqrt(jdt * jdt + 8.0 * self._j_max * gap_up)) / 2.0
+                    acc_dn = (-jdt + np.sqrt(jdt * jdt + 8.0 * self._j_max * gap_dn)) / 2.0
+                    acc_target = np.clip(acc_target, -acc_dn, acc_up)
+                    dacc_max = self._j_max * dt
+                    acc = np.clip(acc_target, acc_prev - dacc_max, acc_prev + dacc_max)
 
-                qd_new = np.clip(qd_cmd + acc * dt, -self._v_max, self._v_max)
-                # Feed back the acceleration that actually survived the velocity
-                # clamp; using the pre-clamp value would let acc_prev drift away
-                # from reality and spike the moment the clamp releases.
-                acc_prev = (qd_new - qd_cmd) / dt
-                qd_cmd = qd_new
-                q_cmd = q_cmd + qd_cmd * dt
+                    qd_new = np.clip(qd_cmd + acc * dt, -self._v_max, self._v_max)
+                    # Feed back the acceleration that actually survived the velocity
+                    # clamp; using the pre-clamp value would let acc_prev drift away
+                    # from reality and spike the moment the clamp releases.
+                    acc_prev = (qd_new - qd_cmd) / dt
+                    qd_cmd = qd_new
+                    q_cmd = q_cmd + qd_cmd * dt
 
                 cmd = pf.JointPositions(list(q_cmd))
                 if self._stop.is_set():
@@ -899,6 +1010,7 @@ class FrankaFR3Robot(Robot):
                 with self._lock:
                     self._q_cmd = q_cmd.copy()
                     self._qd_cmd = qd_cmd.copy()
+                    self._acc_cmd = acc_prev.copy()
         except Exception as e:  # noqa: BLE001
             # 이 줄이 반사의 이름을 가진 원본이다 (libfranka 의 abort 메시지:
             # "Move command aborted: motion aborted by reflex! [...]").
@@ -1018,6 +1130,17 @@ class FrankaFR3Robot(Robot):
             return self._success_rate
 
     def stop(self) -> None:
+        runtime = getattr(self, "_policy_runtime", None)
+        if runtime is not None:
+            runtime.hold("node stopping")
+            deadline = time.monotonic()+.4
+            while self._control_error is None and not self._stop.is_set() and time.monotonic() < deadline:
+                with runtime.lock:
+                    stopped = runtime.servo.stopped
+                if stopped:
+                    break
+                time.sleep(.002)
+            runtime.close()
         self._stop.set()
         if self._control_thread is not None:
             self._control_thread.join(timeout=1.0)

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "kind": "ee_relative_waypoint",
+  "action_dt": 0.05,
+  "reference_frame": "observation_ee",
+  "rotation": "rotvec",
+  "position_scale": 1.0,
+  "rotation_scale": 1.0,
+  "gripper_encoding": "zero_one"
+}

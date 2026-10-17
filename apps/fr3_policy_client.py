@@ -2,8 +2,9 @@
 
 Streams observations to the GPU policy server (apps/policy_server.py, or a
 legacy mamba-embeddingvla real_deploy/fr3_policy_server.py) and executes
-absolute joint-angle actions on the robot. The only heavy compute here is IK
-(analytic, ~4 ms) for EE ckpts.
+absolute joint-angle actions on the robot. By default, model-specific ActionSpec
+chunks go to the node-local QP/common servo. See docs/policy-qp.md. The legacy
+flow described below is available explicitly with --controller filter.
 
 What the checkpoint expects -- control rate, image size, chunk length, action
 type -- comes from the server's GET /info (mstack/comm/policy_protocol.py), not
@@ -44,7 +45,7 @@ Real run:
   python apps/fr3_policy_client.py [--instruction "..."] [--max-seconds 30]
 
 waypoint ckpt (chunk anchored at the observation pose, not per-step):
-  python apps/fr3_policy_client.py --waypoint
+  python apps/fr3_policy_client.py --controller filter --waypoint
 """
 
 from __future__ import annotations
@@ -67,10 +68,10 @@ from mstack.robots.fr3_kinematics import (  # noqa: E402  (mamba real_deploy cop
     compute_proprio_single,
     ee_chunk_to_joint_chunk,
     ee_step_to_joint,
-    fk,
 )
 
 from mstack.comm.policy_protocol import (  # noqa: E402
+    ActionSpec, EE_RELATIVE_WAYPOINT,
     EE_DELTA,
     LEGACY_INFO,
     STATE_KEY,
@@ -235,6 +236,11 @@ def main() -> None:
                     help="정책 서버 주소. 생략하면 MSTACK_POLICY_SERVER, 그 다음 "
                          "스테이션 파일의 policy.url 을 쓴다.")
     ap.add_argument("--instruction", default=DEFAULT_INSTRUCTION)
+    ap.add_argument("--controller", choices=("qp", "filter"), default="qp",
+                    help="node-local ActionSpec QP (default), or legacy filter deployment")
+    ap.add_argument("--action-spec", help="explicit ActionSpec JSON override for a legacy server")
+    ap.add_argument("--inference-hz", type=float, default=30.,
+                    help="maximum HTTP request rate; does not change the fixed action grid")
     ap.add_argument("--dry-run", action="store_true",
                     help="server comm test with synthetic obs (no robot needed)")
     ap.add_argument("--max-seconds", type=float, default=30.0)
@@ -250,6 +256,12 @@ def main() -> None:
     ap.add_argument("--proprio", action="store_true",
                     help="UMI proprioception을 계산해 /predict에 첨부 (use_eef_proprio 모델).")
     args = ap.parse_args()
+    if args.controller == "qp" and args.waypoint:
+        ap.error("--waypoint is legacy IK; QP gets waypoint meaning/scales from ActionSpec")
+    if args.exec_horizon is not None and args.exec_horizon <= 0:
+        ap.error("--exec-horizon must be positive")
+    if not np.isfinite(args.max_seconds) or args.max_seconds <= 0:
+        ap.error("--max-seconds must be finite and positive")
     if not args.server:
         ap.error(
             "정책 서버 주소가 없다. 다음 중 하나로 준다:\n"
@@ -269,6 +281,23 @@ def main() -> None:
     # Everything rate- and shape-dependent below comes from the checkpoint, asked
     # for before the robot is connected so a mismatch never moves the arm.
     info = fetch_info(args.server)
+    action_spec = None
+    if args.controller == "qp":
+        if args.action_spec:
+            import json
+            from pathlib import Path
+            action_spec = ActionSpec.from_dict(json.loads(Path(args.action_spec).read_text()))
+        elif info is not None and info.action_spec is not None:
+            action_spec = ActionSpec.from_dict(info.action_spec)
+        else:
+            ap.error("QP requires /info.action_spec or --action-spec; action meaning is never inferred from dimension")
+        if info is not None and (action_spec.action_dim != info.action_dim
+                                 or not np.isclose(action_spec.action_dt, 1./info.fps)):
+            ap.error("ActionSpec disagrees with server action dimension/training rate")
+        if info is not None and info.action_spec is not None and action_spec != ActionSpec.from_dict(info.action_spec):
+            ap.error("client ActionSpec cannot override a server's explicit ActionSpec")
+    elif info is not None and info.action_type == EE_RELATIVE_WAYPOINT:
+        ap.error("EE relative waypoint ActionSpec requires --controller qp")
     fps = info.fps if info else LEGACY_INFO["fps"]
     image_size = info.image_size if info else LEGACY_INFO["image_size"]
     exec_horizon = args.exec_horizon or (info.chunk_size if info else LEGACY_INFO["chunk_size"])
@@ -340,17 +369,22 @@ def main() -> None:
             STATE_KEY: [float(obs[k]) for k in JOINT_KEYS],
             **{image_key(c): encode_image(_crop_resize(obs[c], c)) for c in cameras},
         }
+        if "_control_context" in obs:
+            payload["control_context"] = obs["_control_context"]
         if args.proprio:
             q_cur = np.array([obs[k] for k in JOINT_KEYS[:7]], dtype=float)
             grip_cur = float(obs[JOINT_KEYS[7]])
-            q_prev, grip_prev = q_hist[-2] if len(q_hist) >= 2 else (q_cur, grip_cur)
+            q_prev, grip_prev = obs.get("_proprio_previous", q_hist[-2] if len(q_hist) >= 2 else (q_cur, grip_cur))
             payload["proprio"] = compute_proprio_single(
                 q_cur, q_prev, start_q, grip_cur, grip_prev).tolist()
         t0 = time.perf_counter()
         r = session.post(f"{args.server}/predict", json=payload, timeout=60)
         r.raise_for_status()
         predict_ms.append((time.perf_counter() - t0) * 1000)
-        chunk = _read_chunk(r.json(), info)  # [K, dim] raw
+        response = r.json()
+        if "control_context" in response and response["control_context"] != payload.get("control_context"):
+            raise ValueError("inference response context does not match the captured observation")
+        chunk = _read_chunk(response, info)  # [K, dim] raw
         if args.waypoint and chunk.shape[1] == 7:
             # waypoint 규약: 청크 전체가 **이 관측의 pose** 를 기준으로 표현돼
             # 있다. 앵커가 스텝마다 움직이지 않으므로 여기(워커 스레드)서 한 번만
@@ -387,6 +421,13 @@ def main() -> None:
                           json={"instruction": args.instruction}, timeout=60)
         r.raise_for_status()
         print(f"[client] /reset ok: {r.json()['instruction']!r}")
+
+        if args.controller == "qp":
+            from mstack.agents.policy_chunk_client import run_chunks
+            report = run_chunks(robot, action_spec, predict, pool, args.max_seconds,
+                                args.inference_hz, args.exec_horizon)
+            print(f"[client] QP session: {report}")
+            return
 
         dt = 1.0 / fps
         K = max(0, args.lead_ticks)

@@ -1,0 +1,9 @@
+# Install in the robot-node environment; no GPU/model packages are needed.
+# Tested on CPython 3.12, Linux x86_64. Pin the URDF ABI required by pin 3.8.
+# Do not upgrade the production robot environment before its own qualification.
+numpy>=2.2,<2.4
+scipy>=1.14,<1.19
+piqp==0.6.4
+pin==3.8.0
+cmeel-urdfdom==4.0.1
+cmeel-tinyxml2==10.0.0

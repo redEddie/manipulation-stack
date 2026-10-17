@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "kind": "joint_absolute",
+  "action_dt": 0.05,
+  "reference_frame": "joint",
+  "rotation": "none",
+  "gripper_encoding": "zero_one"
+}

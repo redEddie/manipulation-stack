@@ -1,3 +1,8 @@
+> Dev deployment now defaults to ActionSpec QP control. See [policy-qp.md](policy-qp.md)
+> for model manifests, the shared servo, dependency installation and offline replay.
+> SmolVLA keeps absolute joint targets; EE waypoints require an explicit manifest.
+> The legacy execution described below requires `--controller filter`.
+
 # Policy server (`apps/policy_server.py`)
 
 Serves one trained checkpoint over HTTP on the GPU machine. The FR3 controller

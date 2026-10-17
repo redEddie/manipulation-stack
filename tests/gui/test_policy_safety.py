@@ -237,7 +237,7 @@ def simulated_client(monkeypatch):
 
     monkeypatch.setattr(client, "ThreadPoolExecutor", Pool)
     monkeypatch.setattr(sys, "argv", ["fr3_policy_client", "--server", "http://unused",
-                                      "--max-seconds", "0.04"])
+                                      "--controller", "filter", "--max-seconds", "0.04"])
     return robot, session, events, commands, q
 
 

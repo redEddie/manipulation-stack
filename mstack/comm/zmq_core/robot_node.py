@@ -58,6 +58,8 @@ class ZMQServerRobot:
                         result = self._robot.get_joint_state()
                     elif method == "command_joint_state":
                         result = self._robot.command_joint_state(**args)
+                    elif method in ("enable_policy", "submit_policy_chunk", "policy_status", "disable_policy"):
+                        result = getattr(self._robot, method)(**args)
                     elif method == "hold":
                         # 급정거. 어떤 로봇이든 있어야 하는 동작이라
                         # core.robot.Robot 에 기본 구현(무동작)이 있지만,
@@ -195,6 +197,33 @@ class ZMQClientRobot(Robot):
             return result
         except zmq.Again:
             raise RuntimeError("ZMQ timeout - robot may be disconnected")
+
+    def _policy_request(self, method, **args):
+        try:
+            self._socket.send(pickle.dumps({"method": method, "args": args}))
+            result = pickle.loads(self._socket.recv())
+        except zmq.Again as exc:
+            raise RuntimeError(f"ZMQ timeout during {method}") from exc
+        if isinstance(result, dict) and "error" in result:
+            raise RuntimeError(result["error"])
+        return result
+
+    def enable_policy(self, action_spec):
+        old = self._socket.getsockopt(zmq.RCVTIMEO)
+        self._socket.setsockopt(zmq.RCVTIMEO, 20000)  # spawned numerical worker startup
+        try:
+            return self._policy_request("enable_policy", action_spec=action_spec)
+        finally:
+            self._socket.setsockopt(zmq.RCVTIMEO, old)
+
+    def submit_policy_chunk(self, **kwargs):
+        return self._policy_request("submit_policy_chunk", **kwargs)
+
+    def policy_status(self, epoch):
+        return self._policy_request("policy_status", epoch=epoch)
+
+    def disable_policy(self, epoch):
+        return self._policy_request("disable_policy", epoch=epoch)
 
     def versions(self) -> dict:
         """이 팔을 모는 소프트웨어·펌웨어 판번호. 못 주면 빈 dict.
