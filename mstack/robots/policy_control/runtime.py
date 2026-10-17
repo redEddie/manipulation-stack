@@ -60,6 +60,9 @@ class PolicyRuntime:
         self.spec = ActionSpec.from_dict(spec) if isinstance(spec, dict) else spec
         self.spec.validate()
         self.s = settings
+        # This model belongs only to the mailbox thread, never the 1 kHz servo.
+        from mstack.robots.policy_control.kinematics import FR3Kinematics
+        self.validation_kinematics = FR3Kinematics()
         self.epoch = uuid.uuid4().hex
         self.lock = threading.Lock()
         self.servo = CommonServo(q, self.epoch, settings, gripper)
@@ -119,6 +122,8 @@ class PolicyRuntime:
             self.last_heartbeat = time.monotonic()
             return dict(epoch=self.epoch, held=self.servo.held, reason=self.servo.reason,
                         stopped=self.servo.stopped, tick=self.servo.tick,
+                        tcp_speed_limits=dict(linear_m_s=self.s.ee_linear_velocity,
+                                              angular_rad_s=self.s.ee_angular_velocity),
                         accepted=self.servo.accepted, rejected=self.servo.rejected, **self.stats)
 
     def hold(self, reason="requested"):
@@ -159,7 +164,7 @@ class PolicyRuntime:
                             self.stats["last_error"] = result["error"]
                     else:
                         plan = result["plan"]
-                        plan.validate(self.s)  # outside the servo lock
+                        plan.validate(self.s, self.validation_kinematics)  # outside the servo lock
                         with self.lock:
                             self.stats["solved"] += 1
                             self.stats["max_plan_ms"] = max(self.stats["max_plan_ms"], plan.elapsed_ms)

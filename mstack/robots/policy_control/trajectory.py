@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from mstack.config.policy_control import POLICY_EE_LINEAR_VELOCITY, POLICY_EE_ANGULAR_VELOCITY
 from mstack.robots.fr3_kinematics import FR3_Q_MIN, FR3_Q_MAX
 
 # FR3 FCI position-based velocity limits (not Panda/FER limits).
@@ -21,6 +22,8 @@ class Settings:
     velocity: float = 1.5
     acceleration: float = 6.
     jerk: float = 3000.
+    ee_linear_velocity: float = POLICY_EE_LINEAR_VELOCITY
+    ee_angular_velocity: float = POLICY_EE_ANGULAR_VELOCITY
     position_margin: float = .01
     tolerance: float = 2e-7
     tracking_error: float = .15
@@ -29,7 +32,8 @@ class Settings:
 
     def __post_init__(self):
         vals = [self.knot_dt, self.servo_dt, self.velocity, self.acceleration, self.jerk,
-                self.position_margin, self.tolerance, self.tracking_error, self.planning_period]
+                self.position_margin, self.tolerance, self.tracking_error, self.planning_period,
+                self.ee_linear_velocity, self.ee_angular_velocity]
         if (not np.isfinite(vals).all() or min(vals) <= 0 or self.horizon < 2
                 or self.servo_dt != .001 or self.velocity > 1.5 or self.acceleration > 6
                 or self.jerk > 3000 or self.activation_lead_ticks < 2):
@@ -111,7 +115,7 @@ class Plan:
         states[:, 0] = q
         return cls(states, settings.knot_dt)
 
-    def validate(self, settings):
+    def validate(self, settings, kinematics=None):
         s = settings
         x = self.states
         if (x.ndim != 3 or x.shape[1:] != (3, 7) or len(x) < 2
@@ -133,4 +137,6 @@ class Plan:
         violation = float(max(0., *violations))
         if violation > s.tolerance:
             raise ValueError(f"trajectory exceeds continuous constraints by {violation:.3g}")
+        from mstack.robots.policy_control.cartesian import validate_speed
+        validate_speed(self, s, kinematics)
         return violation

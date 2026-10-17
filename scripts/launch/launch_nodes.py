@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mstack.core.robot import PrintRobot  # noqa: E402
 from mstack.config.station import load_station  # noqa: E402
+from mstack.config.policy_control import POLICY_EE_LINEAR_VELOCITY, POLICY_EE_ANGULAR_VELOCITY  # noqa: E402
 from mstack.comm.zmq_core.robot_node import ZMQServerRobot  # noqa: E402
 
 _PR_SET_PDEATHSIG = 1
@@ -66,6 +67,9 @@ class Args:
     fr3_read_only: bool = False
     fr3_use_gripper: bool = True
     fr3_enforce_rt: bool = True
+    # Policy QP caps at the configured TCP; teleoperation keeps its own filter.
+    policy_ee_linear_velocity: float = POLICY_EE_LINEAR_VELOCITY
+    policy_ee_angular_velocity: float = POLICY_EE_ANGULAR_VELOCITY
 
 
 def launch_robot_server(args: Args):
@@ -93,6 +97,8 @@ def launch_robot_server(args: Args):
             use_gripper=args.fr3_use_gripper,
             read_only=args.fr3_read_only,
             enforce_rt=args.fr3_enforce_rt,
+            policy_ee_linear_velocity=args.policy_ee_linear_velocity,
+            policy_ee_angular_velocity=args.policy_ee_angular_velocity,
         )
     elif args.robot in ("none", "print"):
         robot = PrintRobot(8)

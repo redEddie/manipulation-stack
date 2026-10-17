@@ -78,6 +78,8 @@ from typing import Dict, Optional
 
 import numpy as np
 
+from mstack.config.policy_control import POLICY_EE_LINEAR_VELOCITY, POLICY_EE_ANGULAR_VELOCITY
+
 from mstack.comm.robot_raw import (
     DEFAULT_RAW_PORT,
     NO_RAW_BUS_ENV,
@@ -346,6 +348,8 @@ class FrankaFR3Robot(Robot):
         home_gripper: bool = False,
         collision_torque: Optional[list] = None,  # None -> FR3_COLLISION_TORQUE
         collision_force: float = 100.0,
+        policy_ee_linear_velocity: float = POLICY_EE_LINEAR_VELOCITY,
+        policy_ee_angular_velocity: float = POLICY_EE_ANGULAR_VELOCITY,
     ):
         import pylibfranka as pf
 
@@ -355,6 +359,11 @@ class FrankaFR3Robot(Robot):
         self._v_max = float(max_joint_velocity)
         self._a_max = float(max_joint_acceleration)
         self._j_max = float(max_joint_jerk)
+        self._policy_ee_linear_velocity = float(policy_ee_linear_velocity)
+        self._policy_ee_angular_velocity = float(policy_ee_angular_velocity)
+        caps = [self._policy_ee_linear_velocity, self._policy_ee_angular_velocity]
+        if not np.isfinite(caps).all() or min(caps) <= 0:
+            raise ValueError('policy TCP speed limits must be positive and finite')
         # critically damped: kd = 2*wn, kp = wn^2
         self._kp = float(filter_wn) ** 2
         self._kd = 2.0 * float(filter_wn)
@@ -536,7 +545,7 @@ class FrankaFR3Robot(Robot):
 
     def enable_policy(self, action_spec: dict) -> dict:
         """Enter QP mode at rest. Dependency/solver startup happens before ownership changes."""
-        from mstack.comm.policy_protocol import ActionSpec, EE_RELATIVE_WAYPOINT
+        from mstack.comm.policy_protocol import ActionSpec
         from mstack.robots.policy_control.runtime import PolicyRuntime
         from mstack.robots.policy_control.servo import CommonServo
         from mstack.robots.policy_control.trajectory import Settings
@@ -561,15 +570,17 @@ class FrankaFR3Robot(Robot):
             q = self._q_cmd.copy()
             grip = self._gripper_target if self._use_gripper else 0.
             measured_q, measured_pose = self._q.copy(), self._ee_pose.copy()
-        if spec.kind == EE_RELATIVE_WAYPOINT:
-            from mstack.robots.fr3_kinematics import fk, _rot_to_axis_angle
-            model_pose = fk(measured_q)
-            actual_pose = measured_pose.reshape(4, 4, order="F")
-            if (np.linalg.norm(model_pose[:3, 3]-actual_pose[:3, 3]) > .01
-                    or np.linalg.norm(_rot_to_axis_angle(model_pose[:3, :3].T @ actual_pose[:3, :3])) > .05):
-                raise RuntimeError("calibrated EE frame disagrees with libfranka; recalibrate before EE QP")
+        # Both action kinds now depend on the configured TCP for speed limits.
+        from mstack.robots.fr3_kinematics import fk, _rot_to_axis_angle
+        model_pose = fk(measured_q)
+        actual_pose = measured_pose.reshape(4, 4, order="F")
+        if (np.linalg.norm(model_pose[:3, 3]-actual_pose[:3, 3]) > .01
+                or np.linalg.norm(_rot_to_axis_angle(model_pose[:3, :3].T @ actual_pose[:3, :3])) > .05):
+            raise RuntimeError("calibrated TCP frame disagrees with libfranka; recalibrate before policy QP")
         settings = Settings(velocity=min(self._v_max, 1.5), acceleration=min(self._a_max, 6.),
-                            jerk=min(self._j_max, 3000.))
+                            jerk=min(self._j_max, 3000.),
+                            ee_linear_velocity=self._policy_ee_linear_velocity,
+                            ee_angular_velocity=self._policy_ee_angular_velocity)
         runtime = PolicyRuntime(spec, q, grip, settings)
         try:
             with self._lock:

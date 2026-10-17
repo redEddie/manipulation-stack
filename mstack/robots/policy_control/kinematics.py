@@ -28,6 +28,17 @@ class FR3Kinematics:
         pin.framesForwardKinematics(self.model, self.data, q)
         return self.data.oMf[self.frame].homogeneous.copy()
 
+    def velocity_jacobian(self, q):
+        """TCP geometric Jacobian, world-aligned at the TCP origin.
+
+        This is not the derivative of the SE(3) tracking residual: multiplying
+        by joint velocity gives physical TCP linear and angular velocity.
+        """
+        pin.computeJointJacobians(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+        return pin.getFrameJacobian(self.model, self.data, self.frame,
+                                   pin.LOCAL_WORLD_ALIGNED)
+
     def residual_jacobian(self, q, target):
         """Derivative of log(T_target^-1 T(q)), in local SE(3) coordinates."""
         pin.computeJointJacobians(self.model, self.data, q)

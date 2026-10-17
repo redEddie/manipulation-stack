@@ -13,6 +13,8 @@ from scipy import sparse
 
 from mstack.comm.policy_protocol import JOINT_ABSOLUTE, EE_RELATIVE_WAYPOINT
 from mstack.robots.policy_control.trajectory import Plan, Settings
+from mstack.robots.policy_control.cartesian import DIRECTIONS, POLYTOPE_SCALE, CartesianSpeedError
+from mstack.robots.policy_control.kinematics import FR3Kinematics
 
 
 class TrackerQP:
@@ -20,10 +22,8 @@ class TrackerQP:
         if kind not in (JOINT_ABSOLUTE, EE_RELATIVE_WAYPOINT):
             raise ValueError("unsupported QP objective")
         self.kind, self.s = kind, settings
-        self.kin = None
-        if kind == EE_RELATIVE_WAYPOINT:
-            from mstack.robots.policy_control.kinematics import FR3Kinematics
-            self.kin = FR3Kinematics()
+        # Joint-output models also need the physical TCP velocity constraints.
+        self.kin = FR3Kinematics()
         n, h = settings.horizon, settings.knot_dt
         size = n*28
         self.size = size
@@ -80,6 +80,7 @@ class TrackerQP:
         self.G = sparse.csc_matrix(full[self.variable])
         self.F = sparse.csr_matrix(np.array(frees))
         self.lo, self.hi = np.array(lower), np.array(upper)
+        self._cartesian_pattern(n, h, size)
         self.xlo = np.tile(np.r_[settings.lower, np.full(7, -settings.velocity),
                                      np.full(7, -settings.acceleration), np.full(7, -settings.jerk*h)], n)
         self.xhi = np.tile(np.r_[settings.upper, np.full(7, settings.velocity),
@@ -106,7 +107,70 @@ class TrackerQP:
                           h_l=np.full(self.G.shape[0], -1.), h_u=np.full(self.G.shape[0], 1.),
                           x_l=self.xlo, x_u=self.xhi)
 
+    def _cartesian_pattern(self, n, h, size):
+        """Fixed sparse rows for transformed quadratic velocity Bezier handles."""
+        row, col, stage, direction, joint, coefficient = [], [], [], [], [], []
+        kinds = []
+        count = 0
+        for k in range(n):
+            # An endpoint is shared with the next segment. Avoid adding its
+            # rows twice with almost identical Jacobians; nonlinear validation
+            # still certifies every whole segment, including the initial state.
+            for point in (1, 2):
+                if k == 0 and point == 1:
+                    continue
+                terms = [(k*28+7, 1.)] if point == 2 else [((k-1)*28+7, 1.)]
+                if point == 1:
+                    terms.append(((k-1)*28+14, h/2))
+                for d in range(2*len(DIRECTIONS)):
+                    kinds.append(d//len(DIRECTIONS))
+                    for offset, scale in terms:
+                        for j in range(7):
+                            row.append(count); col.append(offset+j)
+                            stage.append(k); direction.append(d); joint.append(j); coefficient.append(scale)
+                    count += 1
+        start = self.G.shape[0]
+        extra = sparse.csc_matrix((np.ones(len(row)), (row, col)), shape=(count, size))
+        self.G = sparse.vstack([self.G, extra], format='csc')
+        lookup = {(self.G.indices[p], c): p for c in range(size)
+                  for p in range(self.G.indptr[c], self.G.indptr[c+1])}
+        self.cart_entries = np.array([lookup[(start+r, c)] for r, c in zip(row, col)])
+        self.cart_indices = tuple(np.asarray(x) for x in (stage, direction, joint))
+        self.cart_coefficients = np.asarray(coefficient)
+        self.cart_kinds = np.asarray(kinds)
+
+    def _cartesian_update(self, state, nominal):
+        middle = (np.vstack([state[0], nominal[:-1]])+nominal)/2
+        jacobians = np.array([self.kin.velocity_jacobian(q) for q in middle])
+        transformed = np.concatenate([DIRECTIONS @ jacobians[:, :3],
+                                      DIRECTIONS @ jacobians[:, 3:]], axis=1)
+        self.G.data[self.cart_entries] = transformed[self.cart_indices]*self.cart_coefficients
+        # Leave headroom for changing Jacobians and the between-sample speed
+        # certificate. This factor is not itself a nonlinear safety guarantee.
+        limits = np.array([self.s.ee_linear_velocity, self.s.ee_angular_velocity])
+        return .95*POLYTOPE_SCALE*limits[self.cart_kinds]
+
     def plan(self, state, reference, nominal=None, posture=None):
+        begin = time.perf_counter()
+        solve_ms = iterations = 0
+        # A changed posture can invalidate a frozen-Jacobian speed surrogate.
+        # Allow one relinearization; reject on a second failure. The installed
+        # stopping trajectory remains untouched throughout both attempts.
+        for attempt in range(2):
+            plan = self._solve(state, reference, nominal, posture)
+            solve_ms += plan.solve_ms
+            iterations += plan.iterations
+            try:
+                plan.validate(self.s, self.kin)
+            except CartesianSpeedError:
+                if attempt:
+                    raise
+                nominal = plan.states[1:, 0]
+            else:
+                return Plan(plan.states, plan.dt, (time.perf_counter()-begin)*1000,
+                            solve_ms, iterations)
+
+    def _solve(self, state, reference, nominal=None, posture=None):
         begin = time.perf_counter()
         s, n, h = self.s, self.s.horizon, self.s.knot_dt
         state = np.asarray(state, dtype=float)
@@ -129,6 +193,7 @@ class TrackerQP:
         posture = state[0] if posture is None else np.asarray(posture)
         if nominal.shape != (n, 7) or posture.shape != (7,) or not np.isfinite(nominal).all() or not np.isfinite(posture).all():
             raise ValueError("invalid nominal trajectory/posture")
+        cart_bounds = self._cartesian_update(state, nominal)
         for k, indices in enumerate(self.q_indices):
             if self.kind == JOINT_ABSOLUTE:
                 H = 2*np.eye(7)
@@ -146,8 +211,9 @@ class TrackerQP:
         if self.kind == EE_RELATIVE_WAYPOINT:
             xlo[self.q_indices] = np.maximum(xlo[self.q_indices], nominal-.35)
             xhi[self.q_indices] = np.minimum(xhi[self.q_indices], nominal+.35)
-        self.solver.update(P=self.P, c=c, b=self.B@state.ravel(),
-                           h_l=lo[self.variable], h_u=hi[self.variable], x_l=xlo, x_u=xhi)
+        self.solver.update(P=self.P, c=c, G=self.G, b=self.B@state.ravel(),
+                           h_l=np.r_[lo[self.variable], -cart_bounds],
+                           h_u=np.r_[hi[self.variable], cart_bounds], x_l=xlo, x_u=xhi)
         solve_start = time.perf_counter()
         status = self.solver.solve()
         solve_ms = (time.perf_counter()-solve_start)*1000
@@ -173,6 +239,5 @@ class TrackerQP:
             states[k+1] = [q+h*v+h*h*ak/2+h*h*d/6, v+h*ak+h*d/2, a[k+1]]
         states[-1, 1:] = 0
         plan = Plan(states, h, solve_ms=solve_ms, iterations=self.solver.result.info.iter)
-        plan.validate(s)
         states.flags.writeable = False
         return Plan(states, h, (time.perf_counter()-begin)*1000, solve_ms, plan.iterations)

@@ -17,7 +17,7 @@ Variable chunk arrival rates and inference delays do not change the action grid.
 | Layer | Libraries / implementation | Intent |
 | --- | --- | --- |
 | Chunk Manager | NumPy, SciPy SLERP; [`reference.py`](reference.py) | Resolve absolute joint or relative EE targets, align the action timeline to the observation timestamp, and reject stale chunks. |
-| QP Tracker (~100 Hz) | Pinocchio + PIQP's C++ solver, SciPy sparse; [`qp.py`](qp.py), [`kinematics.py`](kinematics.py) | Track joint or EE targets with posture regularization and joint position, velocity, acceleration and jerk constraints. Produce a finite joint trajectory that ends at rest. |
+| QP Tracker (~100 Hz) | Pinocchio + PIQP's C++ solver, SciPy sparse; [`qp.py`](qp.py), [`kinematics.py`](kinematics.py) | Track joint or EE targets under joint position, velocity, acceleration, jerk and TCP speed limits. Produce a finite trajectory that ends at rest. |
 | Common Servo (1 kHz) | NumPy polynomial evaluation; [`servo.py`](servo.py), [`trajectory.py`](trajectory.py) | Evaluate the QP's validated trajectory and preserve position, velocity and acceleration across plan changes. Continue the installed stopping plan if a replacement is late. |
 | Robot execution (1 kHz) | pylibfranka / libfranka; [`franka_fr3.py`](../franka_fr3.py) | Send absolute `JointPositions` through the existing JointImpedance controller, read robot feedback and handle errors. |
 
@@ -26,6 +26,11 @@ does not wait for optimization. PIQP is the current solver; Ruckig is not added
 after the QP because it would alter the trajectory whose limits were checked.
 The existing Python servo loop still needs hardware timing qualification.
 Posture regularization is not a geometric self-collision guarantee.
+
+Both action types use initial TCP speed caps of **0.40 m/s** and **0.80 rad/s**.
+[`cartesian.py`](cartesian.py) checks the nonlinear TCP speed throughout each
+trajectory segment before installation. These are log-informed operating caps;
+learning-performance tuning remains separate.
 
 See the [detailed design and offline validation workflow](../../../docs/policy-qp.md)
 for constraints and failure handling, [model manifests](../../../configs/policies/)

@@ -26,6 +26,7 @@ from mstack.robots.policy_control.qp import TrackerQP
 from mstack.robots.policy_control.reference import ChunkManager
 from mstack.robots.policy_control.servo import CommonServo, state_at
 from mstack.robots.policy_control.trajectory import Settings, HW_MIN, HW_MAX, OFFSET, DECEL
+from mstack.robots.policy_control.kinematics import FR3Kinematics
 
 
 def distribution(values):
@@ -94,7 +95,11 @@ def motion_metrics(trace, s):
     jerk = np.diff(acc, axis=0)/s.servo_dt
     upper = np.maximum(0., np.sqrt(np.maximum(0, 2*DECEL*(HW_MAX-q)))-OFFSET)
     lower = -np.maximum(0., np.sqrt(np.maximum(0, 2*DECEL*(q-HW_MIN)))-OFFSET)
+    kin = FR3Kinematics()
+    twist = np.array([kin.velocity_jacobian(qi) @ vi for qi, vi in zip(q, v)])
     return dict(peak_v=float(abs(v).max()), peak_a=float(abs(a).max()),
+                peak_ee_linear_velocity=float(np.linalg.norm(twist[:, :3], axis=1).max()),
+                peak_ee_angular_velocity=float(np.linalg.norm(twist[:, 3:], axis=1).max()),
                 command_peak_v=float(abs(vel).max()), command_peak_a=float(abs(acc).max()),
                 command_peak_j=float(abs(jerk).max()), command_rms_j=float(np.sqrt(np.mean(jerk**2))),
                 min_position_margin=float(np.minimum(q-s.lower, s.upper-q).min()),
@@ -102,8 +107,8 @@ def motion_metrics(trace, s):
                 terminal_v=float(abs(v[-1]).max()), terminal_a=float(abs(a[-1]).max()))
 
 
-def run_case(case, kind=JOINT_ABSOLUTE, jitter=False):
-    s = Settings()
+def run_case(case, kind=JOINT_ABSOLUTE, jitter=False, settings=None, fixed_compute_latency=False):
+    s = settings or Settings()
     spec = (ActionSpec(kind, .05) if kind == JOINT_ABSOLUTE else
             ActionSpec(kind, .05, reference_frame='observation_ee', rotation='rotvec'))
     qp = TrackerQP(kind, s)
@@ -165,10 +170,10 @@ def run_case(case, kind=JOINT_ABSOLUTE, jitter=False):
                 nominal = np.array([state_at(servo.plans, start+(i+1)*10, .001)[0] for i in range(s.horizon)])
                 try:
                     plan = qp.plan(state, ref, nominal, q)
-                    plan.validate(s)
+                    plan.validate(s, qp.kin)
                     full_ms = (time.perf_counter()-begin)*1000
                     plan_times.append(plan.elapsed_ms); full_times.append(full_ms); solves.append(plan.solve_ms)
-                    elapsed_ticks = max(1, int(np.ceil(full_ms)))
+                    elapsed_ticks = 1 if fixed_compute_latency else max(1, int(np.ceil(full_ms)))
                     if jitter and plan_id % 17 == 0:
                         elapsed_ticks += 35  # deliberate missed planning deadline
                         delayed += 1
@@ -198,9 +203,12 @@ def run_case(case, kind=JOINT_ABSOLUTE, jitter=False):
     assert metrics['peak_v'] <= s.velocity+1e-7 and metrics['peak_a'] <= s.acceleration+1e-7, metrics
     assert metrics['command_peak_j'] <= s.jerk+1e-3, metrics
     assert metrics['max_velocity_envelope_violation'] < 1e-7, metrics
+    assert metrics['peak_ee_linear_velocity'] <= s.ee_linear_velocity+1e-7, metrics
+    assert metrics['peak_ee_angular_velocity'] <= s.ee_angular_velocity+1e-7, metrics
     assert metrics['terminal_v'] < 1e-8 and metrics['terminal_a'] < 1e-8, metrics
     report = dict(session=case['session'], request=case['request'], kind=kind,
                   synthetic_variable_arrival=jitter, input_jump=case['jump'],
+                  fixed_compute_latency=fixed_compute_latency,
                   metrics=metrics, plans=len(plan_times), failed_plans=len(errors),
                   errors=sorted(set(errors)), late_plans=late, injected_delays=delayed,
                   accepted_plans=servo.accepted, accepted_chunks=accepted_chunks, rejected_chunks=rejected_chunks,
@@ -211,6 +219,13 @@ def run_case(case, kind=JOINT_ABSOLUTE, jitter=False):
         # Compare tracking during active input, excluding the explicit stop tail.
         report['tracking_rms_rad'] = float(np.sqrt(np.mean((trace[1:stop_at, 0]-targets[:stop_at-1])**2)))
         report['legacy_tracking_rms_rad'] = float(np.sqrt(np.mean((baseline[1:stop_at, 0]-targets[:stop_at-1])**2)))
+        # A diagnostic alignment lag, not measured closed-loop robot latency.
+        active_q, active_target = trace[1:stop_at, 0], targets[:stop_at-1]
+        lags = np.arange(0, min(501, len(active_q)//2), 5)
+        common = int(lags[-1])
+        scores = [np.mean((active_q[common:] - active_target[common-lag:len(active_q)-lag])**2)
+                  for lag in lags]
+        report['best_fit_joint_lag_ms'] = int(lags[np.argmin(scores)])
     return report, dict(qp=trace, baseline=np.array(baseline), targets=np.array(targets)), full_times, plan_times
 
 
@@ -219,22 +234,26 @@ def main():
     ap.add_argument('--log-root', required=True, type=Path)
     ap.add_argument('--output', required=True, type=Path)
     ap.add_argument('--boundaries', default=12, type=int)
+    ap.add_argument('--ee-linear-velocity', type=float, default=Settings().ee_linear_velocity)
+    ap.add_argument('--ee-angular-velocity', type=float, default=Settings().ee_angular_velocity)
     args = ap.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    settings = Settings(ee_linear_velocity=args.ee_linear_velocity,
+                        ee_angular_velocity=args.ee_angular_velocity)
     cases, audit = read_cases(args.log_root, args.boundaries)
     if not cases:
         raise SystemExit('no eligible recorded joint-action boundaries')
     reports, timings, plan_timings, traces = [], [], [], None
     for i, case in enumerate(cases):
-        report, trace, full, plan = run_case(case)
+        report, trace, full, plan = run_case(case, settings=settings)
         reports.append(report); timings.extend(full); plan_timings.extend(plan)
         if i == 0:
             traces = trace
         print(f"joint {i+1}/{len(cases)} {case['session']}:{case['request']} "
               f"max={report['full_update_ms']['max']:.2f} ms failures={report['failed_plans']}", flush=True)
-    ee_report, _, _, _ = run_case(cases[0], EE_RELATIVE_WAYPOINT)
-    jitter_report, _, _, _ = run_case(cases[0], jitter=True)
-    report = dict(audit=audit, machine=platform.uname()._asdict(), settings=vars(Settings()),
+    ee_report, _, _, _ = run_case(cases[0], EE_RELATIVE_WAYPOINT, settings=settings)
+    jitter_report, _, _, _ = run_case(cases[0], jitter=True, settings=settings)
+    report = dict(audit=audit, machine=platform.uname()._asdict(), settings=vars(settings),
                   description='Production ActionSpec / sparse PIQP / common servo offline command replay',
                   limitations=['Server t-ms is only an estimated observation time; exact client timing is unavailable.',
                                'Commands are simulated, not measured robot motion or closed-loop VLA quality.',

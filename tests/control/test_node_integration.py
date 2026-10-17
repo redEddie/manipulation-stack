@@ -1,8 +1,10 @@
 """Exercise the real driver command loop with simulated libfranka IO only."""
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from mstack.comm.policy_protocol import ActionSpec, JOINT_ABSOLUTE, EE_RELATIVE_WAYPOINT, PolicyInfo
 from mstack.robots import franka_fr3
@@ -10,8 +12,41 @@ from mstack.robots.policy_control.qp import TrackerQP
 from mstack.robots.policy_control.reference import Reference
 from mstack.robots.policy_control.servo import CommonServo
 from mstack.robots.policy_control.trajectory import Settings
+from mstack.robots.fr3_kinematics import fk
 
 Q = np.array([0., -.7, 0., -2., 0., 1.4, .7])
+
+
+def test_joint_policy_checks_tcp_frame_and_passes_node_speed_caps(monkeypatch):
+    from mstack.robots.policy_control import runtime as runtime_module
+    captured = []
+
+    def create_runtime(spec, q, gripper, settings):
+        captured.append(settings)
+        return SimpleNamespace(epoch='fixture', start=lambda: None, close=lambda: None)
+
+    monkeypatch.setattr(runtime_module, 'PolicyRuntime', create_runtime)
+    driver = franka_fr3.FrankaFR3Robot.__new__(franka_fr3.FrankaFR3Robot)
+    driver._read_only = driver._use_gripper = False
+    driver._control_error = driver._policy_runtime = None
+    driver._lock = threading.Lock(); driver._stop = threading.Event()
+    driver._q = driver._q_cmd = driver._desired_q = Q.copy()
+    driver._qd_cmd = driver._acc_cmd = np.zeros(7)
+    driver._state_monotonic = time.monotonic()
+    driver._v_max, driver._a_max, driver._j_max = 1.5, 6., 3000.
+    driver._policy_ee_linear_velocity, driver._policy_ee_angular_velocity = .2, .5
+    wrong_pose = fk(Q); wrong_pose[0, 3] += .02
+    driver._ee_pose = wrong_pose.ravel(order='F')
+    spec = ActionSpec(JOINT_ABSOLUTE, .05).to_dict()
+    with pytest.raises(RuntimeError, match='TCP frame disagrees'):
+        driver.enable_policy(spec)
+    assert not captured
+    driver._ee_pose = fk(Q).ravel(order='F')
+    assert driver.enable_policy(spec)['epoch'] == 'fixture'
+    assert captured[0].ee_linear_velocity == .2
+    assert captured[0].ee_angular_velocity == .5
+    driver._policy_runtime = None
+    driver._control_thread = driver._gripper_thread = driver._gripper_read_thread = None
 
 
 def test_real_activecontrol_loop_uses_common_servo_without_filter(monkeypatch):

@@ -51,7 +51,8 @@ the explicit `--controller filter` path. It is never reinterpreted as waypoints.
    expired, future-dated or wrong-session chunks cannot replace valid input.
 3. `qp.py` runs in a spawned node-local process, nominally every 10 ms. The sparse
    PIQP C++ solver handles both objectives. Pinocchio supplies the calibrated
-   FK, SE(3) error and its Jacobian for EE tracking. Soft posture retention,
+   TCP velocity Jacobian for both action kinds, plus FK and the SE(3) error
+   Jacobian for EE tracking. Soft posture retention,
    regularization and a linearization trust region avoid Jacobian inversion and
    damp motion near singularities. Joint policies do not acquire a home-posture
    objective or lose their redundant joint target.
@@ -61,8 +62,8 @@ the explicit `--controller filter` path. It is never reinterpreted as waypoints.
    Teleoperation/collection and `--controller filter` retain that filter.
 
 QP entry requires the existing command to settle at rest, fresh measured state,
-and a measured/commanded joint gap below .05 rad. EE entry additionally checks
-that calibrated FK agrees with libfranka's configured EE frame (1 cm / .05 rad).
+and a measured/commanded joint gap below .05 rad. Both action kinds additionally
+check that calibrated FK agrees with libfranka's configured TCP frame (1 cm / .05 rad).
 The gripper's existing worker remains separate. Normal LeRobot observation
 features are unchanged; only `get_policy_observation()` exposes QP metadata.
 
@@ -81,6 +82,8 @@ acceleration change, with exact constant-jerk integration. Hard constraints:
 - |v| <= 1.5 rad/s, |a| <= 6 rad/s², |jerk| <= 3000 rad/s³ (or lower node limits).
 - Conservative piecewise-linear inner bounds on FR3 position-dependent velocity.
 - Terminal velocity and acceleration equal zero.
+- TCP linear speed norm <= .40 m/s and angular speed norm <= .80 rad/s,
+  with independent continuous nonlinear validation as described below.
 
 Cubic position and quadratic velocity Bezier control-point bounds certify each
 whole segment, not only its sampled endpoints. Acceleration endpoints and the
@@ -111,6 +114,73 @@ separate hardware qualification. There is no collision geometry, obstacle model,
 or guaranteed self-collision avoidance here. Posture retention and joint limits
 help avoid unwanted winding but do not prove the arm cannot collide with itself.
 Pinocchio is a kinematics dependency, not a collision-avoidance policy by itself.
+
+## TCP speed caps
+
+The initial defaults are **0.40 m/s** at the configured TCP origin and
+**0.80 rad/s** angular speed, for both SmolVLA joint targets and EE waypoints.
+Defaults live in `mstack/config/policy_control.py`. Node operators can set
+`--policy-ee-linear-velocity` and `--policy-ee-angular-velocity` on
+`scripts/launch/launch_nodes.py`; the active values appear in `policy_status()`
+as `tcp_speed_limits`. They apply to the QP policy path. Teleoperation and the
+explicit legacy filter retain their existing controller.
+
+The QP uses the geometric Jacobian at the TCP origin, not the SE(3) tracking-error
+Jacobian. Thirteen pairs of linear inequalities approximate each 3-D Euclidean
+speed ball from inside, with 5% headroom, around the nominal joint trajectory.
+These frozen-Jacobian rows are a planning surrogate, not the final certificate.
+
+`cartesian.validate_speed()` evaluates the actual Jacobian and bounds speed
+between evaluation times using an analytic Cartesian acceleration bound. Link
+translation lengths bound first and second derivatives of TCP position; joint
+velocity Bezier handles and acceleration endpoints bound their coefficients
+over each segment. A midpoint speed plus this acceleration bound times half the
+interval covers the whole interval. Inconclusive intervals are bisected at most
+five times; exhausted validation is a rejection, not a sampled-only acceptance.
+The planner allows one relinearization after a TCP validation failure. The node
+independently validates again outside the servo lock. Failed or late candidates
+leave the previous validated stopping plan active; there is no servo clipping.
+This introduces speed limits, not an additional EE acceleration limit.
+
+The selection used 25 retained legacy policy-server sessions, 156 requests and
+7,644 within-chunk joint transitions at a 50 ms action interval. Estimated
+within-chunk TCP speeds had p95 values of **0.409 m/s / 0.798 rad/s**. The selected
+caps exceed about 95% of those target speeds. Twelve large chunk transitions
+were replayed with four candidates:
+
+| Linear / angular cap | Mean joint tracking RMS | Median best-fit alignment lag |
+| --- | --- | --- |
+| .20 m/s / .50 rad/s | .04318 rad | 137.5 ms |
+| .30 m/s / .60 rad/s | .03903 rad | 125 ms |
+| **.40 m/s / .80 rad/s** | **.03752 rad** | **115 ms** |
+| .50 m/s / 1.00 rad/s | .03705 rad | 110 ms |
+
+The previous joint-only QP had .03689 rad mean tracking RMS on those cases.
+The selected cap increased it by about 1.7%, while reducing the reproduced TCP
+peaks from .675 m/s / 1.163 rad/s to .379 m/s / .731 rad/s. All four candidates
+had zero failed plans or limit violations. Comparisons fix computation latency
+to one tick to isolate the cap's effect; alignment lag is a diagnostic fit, not
+measured robot response time. Scheduling is exercised separately by the normal
+replay and process benchmark.
+
+With measured compute latency, the final 12-case replay produced 3,470 plans
+without failures or limit violations. Full update time (reference preparation,
+planning and validation) was 6.66 ms median, 10.55 ms p99 and 12.55 ms observed
+maximum. Thus 100 Hz remains a nominal rate, not an every-cycle guarantee.
+Synthetic variable-arrival replay also verified rejection of nine deliberately
+late plans while retaining a valid stopping trajectory.
+
+These logs contain predicted chunks and sparse observations, not dense measured
+robot motion or labelled successful demonstrations. Server timing is only an
+estimate of capture/activation timing. The defaults are provisional operating
+caps; they do not establish an optimal learning speed or contact safety.
+Reproduce the audit and candidate comparison with:
+
+```bash
+python scripts/analyze/policy_ee_speed.py \
+  --log-root /path/to/policy-server/dumps --output /path/to/speed-results \
+  --compare-boundaries 12
+```
 
 ## Why PIQP and no second trajectory generator
 
