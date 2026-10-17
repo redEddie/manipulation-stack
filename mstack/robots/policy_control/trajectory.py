@@ -25,6 +25,7 @@ class Settings:
     ee_linear_velocity: float = POLICY_EE_LINEAR_VELOCITY
     ee_angular_velocity: float = POLICY_EE_ANGULAR_VELOCITY
     position_margin: float = .01
+    solver_tolerance: float = 1e-4
     tolerance: float = 2e-7
     tracking_error: float = .15
     planning_period: float = .01
@@ -32,8 +33,8 @@ class Settings:
 
     def __post_init__(self):
         vals = [self.knot_dt, self.servo_dt, self.velocity, self.acceleration, self.jerk,
-                self.position_margin, self.tolerance, self.tracking_error, self.planning_period,
-                self.ee_linear_velocity, self.ee_angular_velocity]
+                self.position_margin, self.solver_tolerance, self.tolerance, self.tracking_error,
+                self.planning_period, self.ee_linear_velocity, self.ee_angular_velocity]
         if (not np.isfinite(vals).all() or min(vals) <= 0 or self.horizon < 2
                 or self.servo_dt != .001 or self.velocity > 1.5 or self.acceleration > 6
                 or self.jerk > 3000 or self.activation_lead_ticks < 2):

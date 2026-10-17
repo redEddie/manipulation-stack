@@ -108,6 +108,8 @@ def test_servo_rejects_stale_discontinuous_plans_and_holds_without_reset():
         state, _ = servo.step()
     assert servo.stopped
     np.testing.assert_allclose(state[1:], 0, atol=1e-12)
-    corrupt = plan.states.copy(); corrupt[10, 0, 0] += .01
-    with pytest.raises(ValueError):
-        replace(plan, states=corrupt).validate(s)
+    # Even an integration error below the solver tolerance must be rejected.
+    for delta in (1e-5, .01):
+        corrupt = plan.states.copy(); corrupt[10, 0, 0] += delta
+        with pytest.raises(ValueError):
+            replace(plan, states=corrupt).validate(s)

@@ -75,8 +75,10 @@ A new session is required to resume after a fault/hold.
 
 ## Constraints and the two clocks
 
-The default horizon is 30 x 10 ms. Decision variables are endpoint q/v/a and
-acceleration change, with exact constant-jerk integration. Hard constraints:
+The default horizon is a fixed 30 x 10 ms, independent of action-chunk length.
+The chunk is sampled onto this rolling preview; longer chunks do not add QP
+variables. Decision variables are endpoint q/v/a and acceleration change, with
+exact constant-jerk integration. Hard constraints:
 
 - Existing FR3 joint ranges, inset by .01 rad.
 - |v| <= 1.5 rad/s, |a| <= 6 rad/s², |jerk| <= 3000 rad/s³ (or lower node limits).
@@ -91,6 +93,13 @@ constant jerk complete the certificate. FR3 velocity-envelope chords lie below
 the concave square-root limit; tangents would be unsafe outer approximations.
 The returned trajectory is independently checked after solving and again before
 installation. Infeasible, inaccurate, nonfinite or late solutions are rejected.
+
+PIQP uses an absolute residual and duality-gap tolerance of `1e-4`, with relative
+termination tolerances disabled (`Settings.solver_tolerance`). This controls when
+optimization stops, not allowable joint-position tracking error. Physical
+trajectory checks retain their separate `2e-7` tolerance, terminal residual checks
+retain `1e-7`, and plan-switch continuity retains `1e-8`. A solver success does
+not bypass any of these checks.
 
 Reference time is the robot node's monotonic observation clock. Polynomial time
 is the count of successfully generated 1 ms commands. A delayed tick advances
@@ -163,12 +172,15 @@ to one tick to isolate the cap's effect; alignment lag is a diagnostic fit, not
 measured robot response time. Scheduling is exercised separately by the normal
 replay and process benchmark.
 
-With measured compute latency, the final 12-case replay produced 3,470 plans
-without failures or limit violations. Full update time (reference preparation,
-planning and validation) was 6.66 ms median, 10.55 ms p99 and 12.55 ms observed
-maximum. Thus 100 Hz remains a nominal rate, not an every-cycle guarantee.
-Synthetic variable-arrival replay also verified rejection of nine deliberately
-late plans while retaining a valid stopping trajectory.
+With solver tolerance `1e-4` and measured compute latency, replay of all 130
+eligible chunk boundaries produced 38,642 joint plans without failures or
+command-limit violations. Full update time (reference preparation, planning and
+validation) was 6.22 ms median, 9.17 ms p99 and 12.76 ms observed maximum. TCP
+peaks were .380 m/s / .742 rad/s. Another 285 synthetic EE plans and 154 synthetic
+variable-arrival plans passed; the latter rejected ten deliberately late plans
+while retaining a valid stopping trajectory. Thus 100 Hz remains a nominal
+rate, not an every-cycle guarantee. The earlier strict-tolerance timing covered
+only 12 boundaries, so these aggregate timings are not a paired speed comparison.
 
 These logs contain predicted chunks and sparse observations, not dense measured
 robot motion or labelled successful demonstrations. Server timing is only an
@@ -210,7 +222,8 @@ Offline commands (no robot is needed):
 ```bash
 python -m pytest -q tests/control tests/gui/test_policy_safety.py
 python scripts/analyze/replay_policy_qp.py \
-  --log-root /path/to/policy-server/dumps --output /path/to/replay-results
+  --log-root /path/to/policy-server/dumps --boundaries 130 \
+  --output /path/to/replay-results
 bash tests/gui/run_all.sh /path/to/dev/python
 ```
 

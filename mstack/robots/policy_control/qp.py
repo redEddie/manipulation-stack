@@ -99,8 +99,11 @@ class TrackerQP:
         self.q_entries = [[(i, j, lookup[(indices[i], indices[j])])
                            for j in range(7) for i in range(j+1)] for indices in self.q_indices]
         self.solver = piqp.SparseSolver()
-        self.solver.settings.eps_abs = 1e-9
+        # Solver stopping criteria are separate from physical trajectory checks.
+        self.solver.settings.eps_abs = settings.solver_tolerance
         self.solver.settings.eps_rel = 0.
+        self.solver.settings.eps_duality_gap_abs = settings.solver_tolerance
+        self.solver.settings.eps_duality_gap_rel = 0.
         self.solver.settings.max_iter = 60
         self.solver.settings.preconditioner_reuse_on_update = True
         self.solver.setup(self.P, np.zeros(size), A=self.A, b=np.zeros(len(A)), G=self.G,
