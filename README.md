@@ -168,6 +168,8 @@ and torque-protection reset.
   checkpoint, checks before the robot
 - [`docs/policy-client.md`](docs/policy-client.md) — client timing, safety clamps,
   commanded-action derivation
+- [Policy control layers](mstack/robots/policy_control/README.md) — libraries and
+  roles of the ActionSpec, chunk manager, QP tracker and common servo
 - [`patches/README.md`](patches/README.md) — the pylibfranka GIL-release patches
 - [`CLAUDE.md`](CLAUDE.md) — working notes and invariants for contributors
 
